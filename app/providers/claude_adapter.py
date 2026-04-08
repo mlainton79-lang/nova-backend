@@ -9,10 +9,8 @@ class ClaudeAdapter(ProviderAdapter):
     async def chat(self, message: str, history: List[HistoryMessage], system_prompt: str) -> str:
         if not ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY is not set")
-
         messages = to_claude_history(history)
         messages.append({"role": "user", "content": message})
-
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
@@ -22,7 +20,7 @@ class ClaudeAdapter(ProviderAdapter):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "claude-haiku-4-5",
+                    "model": "claude-haiku-4-5-20251001",
                     "max_tokens": 1000,
                     "system": system_prompt,
                     "messages": messages
