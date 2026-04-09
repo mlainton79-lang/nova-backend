@@ -13,7 +13,7 @@ class GeminiAdapter(ProviderAdapter):
         gemini_history = to_gemini_history(history)
         gemini_history.append({"role": "user", "parts": [{"text": message}]})
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
