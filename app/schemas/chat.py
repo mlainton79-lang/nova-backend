@@ -6,10 +6,16 @@ class HistoryMessage(BaseModel):
     content: str
 
 class ChatRequest(BaseModel):
-    provider: str
+    provider: str = "gemini"
     message: str
     history: List[HistoryMessage] = []
     context: Optional[str] = None
+    document_text: Optional[str] = None
+    document_base64: Optional[str] = None
+    document_name: Optional[str] = None
+    document_mime: Optional[str] = None
+    image_base64: Optional[str] = None
+    debug: Optional[bool] = False
 
 class ChatResponse(BaseModel):
     ok: bool
@@ -17,3 +23,12 @@ class ChatResponse(BaseModel):
     reply: str
     latency_ms: Optional[int] = None
     error: Optional[str] = None
+
+class CouncilResponse(BaseModel):
+    ok: bool
+    provider: str
+    reply: str
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    failures: Optional[dict] = None
+    debug: Optional[dict] = None

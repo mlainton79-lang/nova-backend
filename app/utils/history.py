@@ -1,15 +1,28 @@
 from typing import List
-from app.schemas.chat import HistoryMessage
 
-def to_openai_history(history: List[HistoryMessage]) -> list:
-    return [{"role": m.role, "content": m.content} for m in history[-20:]]
+def to_claude_history(history) -> list:
+    messages = []
+    for h in history:
+        role = h.role if hasattr(h, "role") else h.get("role", "user")
+        content = h.content if hasattr(h, "content") else h.get("content", "")
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": content})
+    return messages
 
-def to_gemini_history(history: List[HistoryMessage]) -> list:
-    result = []
-    for m in history[-20:]:
-        role = "model" if m.role == "assistant" else "user"
-        result.append({"role": role, "parts": [{"text": m.content}]})
-    return result
+def to_gemini_history(history) -> list:
+    messages = []
+    for h in history:
+        role = h.role if hasattr(h, "role") else h.get("role", "user")
+        content = h.content if hasattr(h, "content") else h.get("content", "")
+        gemini_role = "model" if role == "assistant" else "user"
+        messages.append({"role": gemini_role, "parts": [{"text": content}]})
+    return messages
 
-def to_claude_history(history: List[HistoryMessage]) -> list:
-    return [{"role": m.role, "content": m.content} for m in history[-20:]]
+def to_openai_history(history) -> list:
+    messages = []
+    for h in history:
+        role = h.role if hasattr(h, "role") else h.get("role", "user")
+        content = h.content if hasattr(h, "content") else h.get("content", "")
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": content})
+    return messages
