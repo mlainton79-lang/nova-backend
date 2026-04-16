@@ -3,11 +3,17 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from app.schemas.chat import ChatRequest
 from app.core.security import verify_token
-from app.prompts.tony import build_system_prompt
 from app.core.injection_filter import check_injection
 from app.core.logger import log_request
 
 router = APIRouter()
+
+def safe_system_prompt(request):
+    try:
+        from app.prompts.tony import build_system_prompt
+        return build_system_prompt(context=request.context, document_text=request.document_text, document_base64=request.document_base64, document_name=request.document_name, document_mime=request.document_mime, include_codebase=False)
+    except Exception:
+        return 'You are Tony, Matthew\'s personal AI assistant. Be direct, warm, and helpful. British English only.'
 
 async def gemini_stream(message, history, system_prompt):
     GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
@@ -50,7 +56,7 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             yield 'data: ' + json.dumps({'type':'error','text':'Blocked.'}) + chr(10) + chr(10)
             yield 'data: ' + json.dumps({'type':'done'}) + chr(10) + chr(10)
         return StreamingResponse(err(), media_type='text/event-stream')
-    sp = build_system_prompt(context=request.context, document_text=request.document_text, document_base64=request.document_base64, document_name=request.document_name, document_mime=request.document_mime, include_codebase=False)
+    sp = safe_system_prompt(request)
     start = time.time()
     async def gen():
         parts = []
