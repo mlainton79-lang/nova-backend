@@ -35,6 +35,16 @@ async def run_council(message, history, system_prompt, debug=False):
         adapters["deepseek"] = DeepSeekAdapter()
     except Exception as e:
         print(f"[COUNCIL] deepseek init failed: {e}")
+    try:
+        from app.providers.openrouter_adapter import OpenRouterAdapter
+        adapters["openrouter"] = OpenRouterAdapter()
+    except Exception as e:
+        print(f"[COUNCIL] openrouter init failed: {e}")
+    try:
+        from app.providers.xai_adapter import XAIAdapter
+        adapters["grok"] = XAIAdapter()
+    except Exception as e:
+        print(f"[COUNCIL] grok init failed: {e}")
 
     if not adapters:
         return {"ok": False, "provider": "council", "reply": "No AI providers are currently available. Please try again shortly.", "failures": {}, "latency_ms": round((time.time() - start) * 1000)}
@@ -60,7 +70,7 @@ async def run_council(message, history, system_prompt, debug=False):
         name, reply = list(successes.items())[0]
         return {"ok": True, "provider": "council", "reply": reply, "failures": failures or None, "latency_ms": round((time.time() - start) * 1000), "debug": {"deciding_brain": name, "round1": successes, "note": "Only one provider available"} if debug else None}
 
-    preferred_order = ["gemini", "claude", "openai", "deepseek", "groq", "mistral"]
+    preferred_order = ["gemini", "claude", "grok", "openai", "deepseek", "openrouter", "groq", "mistral"]
     deciding = next((p for p in preferred_order if p in successes), list(successes.keys())[0])
     others = {n: r for n, r in successes.items() if n != deciding}
     other_text = "\n".join(f"{n.upper()}: {r}" for n, r in others.items())
