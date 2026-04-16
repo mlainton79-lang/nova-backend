@@ -51,8 +51,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     injected, reason = check_injection(request.message)
     if injected:
         async def err():
-            yield f"data: {json.dumps({'type':'error','text':'Blocked.'})}\n\n"
-            yield f"data: {json.dumps({'type':'done'})}\n\n"
+            yield f"data: {json.dumps({'type':'error','text':'Blocked.'})}\'\'"
+            yield f"data: {json.dumps({'type':'done'})}\'\'"
         return StreamingResponse(err(), media_type="text/event-stream")
     sp = build_system_prompt(
         context=request.context,
