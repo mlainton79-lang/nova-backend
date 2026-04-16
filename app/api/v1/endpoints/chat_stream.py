@@ -10,12 +10,22 @@ from app.core.memory import add_memory
 
 router = APIRouter()
 
-def safe_system_prompt(request):
+def safe_system_prompt(request, search_results=""):
     try:
         from app.prompts.tony import build_system_prompt
         code_kw = ["code","function","file","class","bug","error","fix","kotlin","python","api","push","patch"]
         inc = any(k in request.message.lower() for k in code_kw)
-        return build_system_prompt(context=request.context, document_text=request.document_text, document_base64=request.document_base64, document_name=request.document_name, document_mime=request.document_mime, include_codebase=inc)
+        sp = build_system_prompt(
+            context=request.context,
+            document_text=request.document_text,
+            document_base64=request.document_base64,
+            document_name=request.document_name,
+            document_mime=request.document_mime,
+            include_codebase=inc
+        )
+        if search_results:
+            sp += f"\n\n{search_results}"
+        return sp
     except Exception:
         return "You are Tony, Matthew's personal AI assistant. Be direct, warm, and helpful. British English only."
 
@@ -51,7 +61,7 @@ async def gemini_stream(message, history, system_prompt):
 
 async def claude_stream(message, history, system_prompt, image_base64=None, image_mime="image/jpeg"):
     from app.core.config import ANTHROPIC_API_KEY
-    model = os.environ.get("ANTHROPIC_VISION_MODEL" if image_base64 else "ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    model = os.environ.get("ANTHROPIC_VISION_MODEL" if image_base64 else "ANTHROPIC_MODEL", "claude-sonnet-4-6")
     from app.utils.history import to_claude_history
     messages = to_claude_history(history)
     if image_base64:
@@ -102,8 +112,19 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             yield "data: " + json.dumps({"type": "error", "text": "Blocked."}) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}) + "\n\n"
         return StreamingResponse(err(), media_type="text/event-stream")
-    sp = safe_system_prompt(request)
+
+    # Auto search if needed
+    search_results = ""
+    try:
+        from app.core.brave_search import should_search, brave_search
+        if should_search(request.message):
+            search_results = await brave_search(request.message)
+    except Exception as e:
+        print(f"[STREAM] search failed: {e}")
+
+    sp = safe_system_prompt(request, search_results)
     start = time.time()
+
     async def gen():
         parts = []
         try:
@@ -128,4 +149,5 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
             log_request(provider=provider_key, message=request.message, reply="", latency_ms=int((time.time()-start)*1000), ok=False, error=str(e))
         yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+
     return StreamingResponse(gen(), media_type="text/event-stream")
