@@ -324,3 +324,22 @@ async def test_case_ingestion(_=Depends(verify_token)):
     except Exception as e:
         results["gmail"] = {"ok": False, "error": str(e)}
     return results
+
+
+@router.get("/cases/list-models")
+async def list_gemini_models(_=Depends(verify_token)):
+    """List available Gemini models to find correct embedding model name."""
+    import os
+    key = os.environ.get("GEMINI_API_KEY", "")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+        )
+        if resp.status_code != 200:
+            return {"error": resp.status_code, "text": resp.text[:500]}
+        models = resp.json().get("models", [])
+        embedding_models = [
+            m["name"] for m in models
+            if "embed" in m["name"].lower() or "embed" in m.get("displayName","").lower()
+        ]
+        return {"embedding_models": embedding_models, "total_models": len(models)}

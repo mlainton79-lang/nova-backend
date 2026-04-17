@@ -93,12 +93,12 @@ async def embed_text(text: str) -> Optional[List[float]]:
     """Get embedding vector from Gemini free tier. Tries multiple models."""
     if not text.strip():
         return None
-    models_to_try = ["text-embedding-004", "embedding-001"]
+    models_to_try = ["gemini-embedding-exp-03-07", "text-embedding-004", "models/embedding-001"]
     async with httpx.AsyncClient(timeout=30.0) as client:
         for model in models_to_try:
             try:
                 resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={GEMINI_API_KEY}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model.lstrip("models/")}:embedContent?key={GEMINI_API_KEY}",
                     json={"model": f"models/{model}", "content": {"parts": [{"text": text[:8000]}]}}
                 )
                 if resp.status_code == 200:
