@@ -386,3 +386,21 @@ async def search_preview(query: str, _=Depends(verify_token)):
         except Exception as e:
             results[account] = {"error": str(e)}
     return {"query": query, "total_estimate": total, "per_account": results}
+
+
+@router.post("/cases/reset-tables")
+async def reset_tables(_=Depends(verify_token)):
+    """Drop and recreate case_chunks table with correct vector dimensions."""
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS case_chunks CASCADE")
+        cur.execute("DROP TABLE IF EXISTS cases CASCADE")
+        conn.commit()
+        cur.close()
+        conn.close()
+        from app.core.rag import init_rag_tables
+        init_rag_tables()
+        return {"ok": True, "message": "Tables dropped and recreated with vector(3072)"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
