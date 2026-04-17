@@ -41,39 +41,37 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
     except Exception as e:
         print(f"[COUNCIL] search failed: {e}")
 
-    # Case RAG injection
+    # Case RAG injection — non-blocking, 3s total budget, fails silently
     case_context = ""
     try:
-        from app.core.rag import list_cases, search_case
         import asyncio as _asyncio
-        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal", "build a case",
-                   "emails about", "what did they say", "what have they said",
-                   "timeline", "evidence", "prove", "claim", "dispute"]
-        if any(k in req.message.lower() for k in case_kw):
-            all_cases = list_cases()
-            ready_cases = [c for c in all_cases if c["status"] == "ready"]
-            if ready_cases:
-                target_case = ready_cases[0]
-                for c in ready_cases:
-                    if c["name"].lower() in req.message.lower():
-                        target_case = c
+        from app.core.rag import list_cases, search_case
+        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
+                   "what did they say", "timeline", "evidence", "claim", "dispute", "ccj"]
+        msg_low = req.message.lower()
+        if any(k in msg_low for k in case_kw):
+            async def _get_case_context():
+                all_cases = list_cases()
+                ready = [c for c in all_cases if c["status"] == "ready"]
+                if not ready:
+                    return ""
+                target = ready[0]
+                for c in ready:
+                    if c["name"].lower() in msg_low:
+                        target = c
                         break
-                results = await _asyncio.wait_for(
-                    search_case(target_case["id"], req.message, top_k=5),
-                    timeout=4.0
-                )
-                if results:
-                    lines = [f"[CASE: {target_case['name']} — {target_case['total_emails']} emails. Answer ONLY from excerpts below, do not speculate.]"]
-                    for r in results:
-                        src = f"[{r['date'][:16]}] {r['sender'][:50]} — {r['subject'][:60]}"
-                        lines.append(f"SOURCE: {src}")
-                        lines.append(r["content"][:400])
-                        lines.append("---")
-                    case_context = "\n".join(lines)
-    except _asyncio.TimeoutError:
-        print("[COUNCIL] case search timed out")
-    except Exception as e:
-        print(f"[COUNCIL] case context failed: {e}")
+                results = await search_case(target["id"], req.message, top_k=5)
+                if not results:
+                    return ""
+                lines = [f"[CASE: {{target['name']}} — answer only from these excerpts]"]
+                for r in results:
+                    lines.append(f"[{{r['date'][:16]}}] {{r['sender'][:40]}} — {{r['subject'][:50]}}")
+                    lines.append(r["content"][:200])
+                    lines.append("---")
+                return "\n".join(lines)
+            case_context = await _asyncio.wait_for(_get_case_context(), timeout=3.0)
+    except Exception:
+        case_context = ""
 
     # Gmail context injection
     gmail_context = ""
