@@ -129,31 +129,33 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     case_context = ""
     try:
         from app.core.rag import list_cases, search_case
-        case_kw = ["case", "western circle", "complaint", "legal", "build a case",
+        import asyncio as _asyncio
+        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal", "build a case",
                    "emails about", "what did they say", "what have they said",
                    "timeline", "evidence", "prove", "claim", "dispute"]
         if any(k in request.message.lower() for k in case_kw):
             all_cases = list_cases()
             ready_cases = [c for c in all_cases if c["status"] == "ready"]
             if ready_cases:
-                # Find most relevant case by name mention, or use first ready case
                 target_case = ready_cases[0]
                 for c in ready_cases:
                     if c["name"].lower() in request.message.lower():
                         target_case = c
                         break
-                results = await search_case(target_case["id"], request.message, top_k=20)
+                results = await _asyncio.wait_for(
+                    search_case(target_case["id"], request.message, top_k=8),
+                    timeout=8.0
+                )
                 if results:
-                    lines = [f"[CASE: {target_case['name']} — {target_case['total_emails']} emails ingested. Answer ONLY from this data. Do NOT speculate or invent information not present in these excerpts.]"]
-                    lines.append("Most relevant excerpts for this question:")
+                    lines = [f"[CASE: {target_case['name']} — {target_case['total_emails']} emails. Answer ONLY from excerpts below, do not speculate.]"]
                     for r in results:
-                        src = f"[{r['date'][:16]}] {r['sender']} — {r['subject']}"
-                        if r.get("attachment"):
-                            src += f" (attachment: {r['attachment']})"
+                        src = f"[{r['date'][:16]}] {r['sender'][:50]} — {r['subject'][:60]}"
                         lines.append(f"SOURCE: {src}")
-                        lines.append(r["content"])
+                        lines.append(r["content"][:400])
                         lines.append("---")
                     case_context = "\n".join(lines)
+    except _asyncio.TimeoutError:
+        print("[STREAM] case search timed out")
     except Exception as e:
         print(f"[STREAM] case context failed: {e}")
 
