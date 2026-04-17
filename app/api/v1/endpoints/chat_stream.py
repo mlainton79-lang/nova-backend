@@ -145,8 +145,7 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                 results = await search_case(target_case["id"], request.message, top_k=20)
                 if results:
                     lines = [f"[CASE: {target_case['name']} — {target_case['total_emails']} emails, {target_case['total_chunks']} chunks ingested]"]
-                    lines.append("Most relevant excerpts for this question:
-")
+                    lines.append("Most relevant excerpts for this question:")
                     for r in results:
                         src = f"[{r['date'][:16]}] {r['sender']} — {r['subject']}"
                         if r.get("attachment"):
@@ -154,8 +153,7 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                         lines.append(f"SOURCE: {src}")
                         lines.append(r["content"])
                         lines.append("---")
-                    case_context = "
-".join(lines)
+                    case_context = "\n".join(lines)
     except Exception as e:
         print(f"[STREAM] case context failed: {e}")
 
