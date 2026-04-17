@@ -60,15 +60,91 @@ async def research_capability(capability_description: str) -> str:
     return "\n".join(results)
 
 
+async def call_provider(provider: str, prompt: str) -> str:
+    """Call a single AI provider for code generation."""
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        if provider == "gemini":
+            r = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+                json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                      "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}}
+            )
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+        elif provider == "groq":
+            GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+            GROQ_MODEL = os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+            r = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 4096, "temperature": 0.1}
+            )
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+
+        elif provider == "mistral":
+            MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+            MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+            r = await client.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}"},
+                json={"model": MISTRAL_MODEL, "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 4096, "temperature": 0.1}
+            )
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+
+        elif provider == "openrouter":
+            OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+            r = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                json={"model": "openrouter/auto", "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 4096, "temperature": 0.1}
+            )
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+
+    return ""
+
+
+def parse_code_response(response: str, capability_name: str) -> dict:
+    """Parse a code generation response into structured output."""
+    filename = ""
+    env_vars = []
+    code = ""
+
+    if "FILENAME:" in response:
+        filename = response.split("FILENAME:")[1].split("\n")[0].strip()
+    if not filename:
+        filename = f"app/api/v1/endpoints/{capability_name.replace(' ','_').lower()}.py"
+
+    if "ENV_VARS_NEEDED:" in response:
+        env_str = response.split("ENV_VARS_NEEDED:")[1].split("\n")[0].strip()
+        env_vars = [e.strip() for e in env_str.split(",") if e.strip() and e.strip() != "NONE"]
+
+    if "```python" in response:
+        code = response.split("```python")[1].split("```")[0].strip()
+    elif "```" in response:
+        code = response.split("```")[1].split("```")[0].strip()
+
+    return {"filename": filename, "env_vars": env_vars, "code": code, "ok": bool(filename and code)}
+
+
 async def generate_capability_code(
     capability_name: str,
     capability_description: str,
     research: str
 ) -> dict:
     """
-    Use Gemini to write the actual Python code for a new capability.
-    Returns the generated code and a proposed endpoint path.
+    Use all available brains to write the best possible code.
+    Each provider generates an implementation.
+    Gemini then synthesises the best version combining all approaches.
     """
+    module_name = capability_name.replace(" ", "_").lower()
+
     prompt = f"""You are writing a new capability for Tony, an AI assistant backend (FastAPI on Railway).
 
 CAPABILITY NEEDED: {capability_name}
@@ -77,58 +153,80 @@ DESCRIPTION: {capability_description}
 RESEARCH FINDINGS:
 {research}
 
-RULES:
-1. Write a FastAPI router file for app/api/v1/endpoints/{capability_name.replace(' ','_').lower()}.py
-2. Use only libraries already available: fastapi, httpx, psycopg2-binary, pydantic
-3. Use psycopg2 directly for any DB access (no ORM)
-4. Single user app — no user_id fields ever
-5. Auth: all endpoints use `_=Depends(verify_token)` from app.core.security
-6. Keep it simple and functional — one file, self-contained
-7. If it needs an API key, use os.environ.get() with a sensible env var name
-8. Include a test endpoint at GET /{capability_name}/test that returns a status
+STRICT RULES:
+1. Write a complete FastAPI router file for app/api/v1/endpoints/{module_name}.py
+2. Use ONLY: fastapi, httpx, psycopg2-binary, pydantic (already installed)
+3. Use psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require") for DB (no ORM)
+4. Single user app — never add user_id fields
+5. ALL endpoints must have `_=Depends(verify_token)` from app.core.security
+6. API keys via os.environ.get("KEY_NAME", "")
+7. Include GET /{module_name}/test endpoint returning status
+8. One self-contained file, no relative imports except app.core.security
 
 Respond ONLY with:
-FILENAME: app/api/v1/endpoints/{capability_name.replace(' ','_').lower()}.py
-ENV_VARS_NEEDED: comma-separated list of any new env vars needed (or NONE)
+FILENAME: app/api/v1/endpoints/{module_name}.py
+ENV_VARS_NEEDED: list any new env vars needed, or NONE
 CODE:
 ```python
-[the complete file content]
-```
-"""
+[complete file]
+```"""
+
+    # Run all available providers in parallel
+    providers = ["gemini", "groq", "mistral", "openrouter"]
+    responses = {}
+
+    async def try_provider(p):
+        try:
+            result = await call_provider(p, prompt)
+            if result:
+                responses[p] = result
+        except Exception as e:
+            print(f"[BUILDER] {p} failed: {e}")
+
+    await asyncio.gather(*[try_provider(p) for p in providers])
+
+    if not responses:
+        return {"filename": "", "env_vars": [], "code": "", "ok": False, "error": "All providers failed"}
+
+    # If only one responded, use it directly
+    if len(responses) == 1:
+        return parse_code_response(list(responses.values())[0], capability_name)
+
+    # Multiple responses — use Gemini to synthesise the best version
+    synthesis_prompt = f"""You are a senior Python engineer reviewing {len(responses)} implementations of the same capability.
+
+CAPABILITY: {capability_name}
+DESCRIPTION: {capability_description}
+
+Here are the implementations from different AI models:
+
+{"".join(f"--- {provider.upper()} IMPLEMENTATION ---\n{code[:2000]}\n\n" for provider, code in responses.items())}
+
+Synthesise the BEST possible implementation by:
+1. Taking the strongest architectural approach
+2. Using the most robust error handling
+3. Combining the best features from each
+4. Ensuring it follows all the original rules
+
+Output the final synthesised version in the same format:
+FILENAME: app/api/v1/endpoints/{module_name}.py
+ENV_VARS_NEEDED: [list or NONE]
+CODE:
+```python
+[complete synthesised file]
+```"""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.2}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        
-        # Parse response
-        filename = ""
-        env_vars = []
-        code = ""
-        
-        if "FILENAME:" in response:
-            filename = response.split("FILENAME:")[1].split("\n")[0].strip()
-        if "ENV_VARS_NEEDED:" in response:
-            env_str = response.split("ENV_VARS_NEEDED:")[1].split("\n")[0].strip()
-            env_vars = [e.strip() for e in env_str.split(",") if e.strip() != "NONE"]
-        if "```python" in response:
-            code = response.split("```python")[1].split("```")[0].strip()
-        
-        return {
-            "filename": filename,
-            "env_vars": env_vars,
-            "code": code,
-            "ok": bool(filename and code)
-        }
+        synthesised = await call_provider("gemini", synthesis_prompt)
+        result = parse_code_response(synthesised, capability_name)
+        result["providers_used"] = list(responses.keys())
+        result["synthesis"] = True
+        return result
     except Exception as e:
-        return {"filename": "", "env_vars": [], "code": "", "ok": False, "error": str(e)}
+        # Fall back to best single response
+        best = parse_code_response(list(responses.values())[0], capability_name)
+        best["providers_used"] = [list(responses.keys())[0]]
+        return best
 
 
 def validate_code(code: str) -> dict:
