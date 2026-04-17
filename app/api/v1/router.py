@@ -14,6 +14,8 @@ router.include_router(gmail.router, tags=["gmail"])
 router.include_router(cases.router, tags=["cases"])
 from app.api.v1.endpoints import capabilities
 router.include_router(capabilities.router, tags=["capabilities"])
+from app.api.v1.endpoints import agent
+router.include_router(agent.router, tags=["agent"])
 
 # Initialise tables on startup
 try:
