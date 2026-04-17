@@ -111,7 +111,7 @@ async def embed_text(text: str) -> Optional[List[float]]:
     if not text.strip():
         return None
     models_to_try = ["gemini-embedding-001", "gemini-embedding-2-preview"]
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         for model in models_to_try:
             try:
                 resp = await client.post(
@@ -179,7 +179,7 @@ async def extract_attachment_text(part: dict, token: str, account: str) -> tuple
     if not attachment_id:
         return "", filename
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
                 f"https://gmail.googleapis.com/gmail/v1/users/me/messages/placeholder/attachments/{attachment_id}",
                 headers={"Authorization": f"Bearer {token}"}

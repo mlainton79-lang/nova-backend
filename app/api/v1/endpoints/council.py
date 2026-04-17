@@ -59,8 +59,8 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
                         target_case = c
                         break
                 results = await _asyncio.wait_for(
-                    search_case(target_case["id"], req.message, top_k=8),
-                    timeout=8.0
+                    search_case(target_case["id"], req.message, top_k=5),
+                    timeout=4.0
                 )
                 if results:
                     lines = [f"[CASE: {target_case['name']} — {target_case['total_emails']} emails. Answer ONLY from excerpts below, do not speculate.]"]
