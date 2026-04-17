@@ -115,14 +115,25 @@ async def trigger_self_improvement(request: Request):
     except Exception as e:
         db_log("github_check_failed", str(e))
 
-    # Phase 5: Log completion
+    # Phase 5: Tony decides what to build and builds it autonomously
+    improvement = {}
+    try:
+        from app.core.tony_mission import run_autonomous_improvement
+        improvement = await run_autonomous_improvement()
+        db_log("autonomous_improvement", f"Built: {improvement.get('built','nothing')} — {improvement.get('reason','')}")
+    except Exception as e:
+        db_log("autonomous_improvement_failed", str(e))
+
+    # Phase 6: Log completion
     summary = {
         "status": "completed",
         "timestamp": datetime.utcnow().isoformat(),
         "files_checked": len(codebase),
         "syntax_errors": len(errors),
         "frontend_build": build_status,
-        "apk_url": apk_url
+        "apk_url": apk_url,
+        "autonomous_improvement": improvement.get("status", "skipped"),
+        "capability_built": improvement.get("built"),
     }
     db_log("loop_complete", str(summary))
     return summary
