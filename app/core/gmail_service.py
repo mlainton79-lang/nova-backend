@@ -134,7 +134,7 @@ async def list_emails(email: str, query: str = "", max_results: int = 20, label:
     async with httpx.AsyncClient(timeout=30.0) as client:
         params = {"maxResults": max_results}
         if label:
-            params["labelIds"] = label
+            params["labelIds"] = [label]
         if query:
             params["q"] = query
         resp = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers={"Authorization": f"Bearer {token}"}, params=params)
@@ -208,7 +208,7 @@ async def get_morning_summary() -> str:
     all_emails = []
     for account in accounts:
         try:
-            emails = await list_emails(account, query="is:unread newer_than:1d", max_results=20, label="INBOX")
+            emails = await list_emails(account, query="is:unread newer_than:1d", max_results=20, label="")
             all_emails.extend(emails)
         except Exception as e:
             print(f"[GMAIL] Morning summary failed for {account}: {e}")
