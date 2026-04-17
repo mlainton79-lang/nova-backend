@@ -116,6 +116,19 @@ def build_system_prompt(
     if context:
         parts.append(f"Additional context from Matthew:\n{context[:4000]}")
 
+    # Inject proactive alerts — things Tony is watching for Matthew
+    try:
+        from app.core.proactive import get_unread_alerts
+        alerts = get_unread_alerts()
+        if alerts:
+            urgent = [a for a in alerts if a["priority"] in ("urgent","high")]
+            alert_lines = [f"[TONY'S ACTIVE ALERTS — {len(alerts)} unread, {len(urgent)} urgent]"]
+            for a in alerts[:5]:
+                alert_lines.append(f"• [{a['priority'].upper()}] {a['title']}: {a['body'][:100]}")
+            parts.append("\n".join(alert_lines))
+    except Exception:
+        pass
+
     # Inject world model
     try:
         from app.core.world_model import get_world_model_summary

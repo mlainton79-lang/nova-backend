@@ -57,7 +57,7 @@ def init_capabilities_table():
             ("self_improvement_loop", "48-hour autonomous check and improve cycle", "active", "/internal/trigger-self-improvement"),
             ("vision_video", "Watch YouTube videos, study transcripts, research topics by video", "active", "/api/v1/vision/watch"),
             ("vision_image", "See and analyse images, read scanned documents", "active", "/api/v1/vision/see"),
-            ("calendar", "Google Calendar read/write", "not_built", None),
+            ("calendar", "Google Calendar read/write - today's schedule, upcoming events, create events", "active", "/api/v1/calendar/today"),
             ("facebook", "Facebook posting and reading", "not_built", None),
             ("vinted", "Vinted listing creation", "not_built", None),
             ("ebay", "eBay listing creation", "not_built", None),

@@ -157,6 +157,28 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     except Exception:
         case_context = ""
 
+    # Calendar context injection
+    calendar_context = ""
+    try:
+        cal_kw = ["calendar", "schedule", "today", "appointment", "meeting",
+                  "what have i got", "what's on", "diary", "event", "reminder"]
+        if any(k in request.message.lower() for k in cal_kw):
+            from app.core.calendar_service import get_todays_schedule, get_upcoming_events
+            from app.core.gmail_service import get_all_accounts
+            accounts = get_all_accounts()
+            cal_lines = ["[CALENDAR]"]
+            for account in accounts[:2]:
+                try:
+                    schedule = await get_todays_schedule(account)
+                    if "Nothing" not in schedule:
+                        cal_lines.append(schedule)
+                except Exception:
+                    pass
+            if len(cal_lines) > 1:
+                calendar_context = "\n".join(cal_lines)
+    except Exception as e:
+        print(f"[STREAM] calendar context failed: {e}")
+
     # Gmail context injection
     gmail_context = ""
     try:

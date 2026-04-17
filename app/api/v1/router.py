@@ -20,6 +20,10 @@ from app.api.v1.endpoints import builder
 router.include_router(builder.router, tags=["builder"])
 from app.api.v1.endpoints import vision
 router.include_router(vision.router, tags=["vision"])
+from app.api.v1.endpoints import proactive
+router.include_router(proactive.router, tags=["proactive"])
+from app.api.v1.endpoints import calendar
+router.include_router(calendar.router, tags=["calendar"])
 
 # Initialise tables on startup
 try:
@@ -32,6 +36,13 @@ try:
     print("[ROUTER] RAG tables ready")
 except Exception as e:
     print(f"[ROUTER] RAG table init failed (non-fatal): {e}")
+
+# Initialise proactive system
+try:
+    from app.core.proactive import init_proactive_tables
+    init_proactive_tables()
+except Exception as e:
+    print(f"[ROUTER] Proactive init failed: {e}")
 
 # Initialise world model
 try:
