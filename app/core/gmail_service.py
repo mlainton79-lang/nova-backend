@@ -12,8 +12,6 @@ GMAIL_REDIRECT_URI = os.environ.get("GMAIL_REDIRECT_URI", "https://web-productio
 
 SCOPES = [
     "https://mail.google.com/",
-    "https://www.googleapis.com/auth/gmail.settings.basic",
-    "https://www.googleapis.com/auth/gmail.metadata",
     "https://www.googleapis.com/auth/userinfo.email"
 ]
 
