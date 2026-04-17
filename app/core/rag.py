@@ -82,16 +82,15 @@ def init_rag_tables():
             )
         """)
         conn.commit()
-        # ivfflat index requires data to exist first — create separately, ignore if fails
+        # Use hnsw index - supports higher dimensions than ivfflat
         try:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS case_chunks_embedding_idx
-                ON case_chunks USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 50)
+                ON case_chunks USING hnsw (embedding vector_cosine_ops)
             """)
             conn.commit()
         except Exception as idx_err:
-            print(f"[RAG] Index creation skipped (will retry after data inserted): {idx_err}")
+            print(f"[RAG] Index creation skipped: {idx_err}")
             conn.rollback()
         cur.close()
         conn.close()
