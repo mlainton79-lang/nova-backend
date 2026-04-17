@@ -220,9 +220,10 @@ async def get_morning_summary() -> str:
         return "No unread emails in the last 3 days across all accounts."
     lines = [f"📧 {len(all_emails)} unread email(s) across {len(accounts)} account(s):\n"]
     for e in all_emails[:15]:
-        lines.append(f"• [{e['account']}] From: {e['from']} — {e['subject']}")
-        if e.get("snippet"):
-            lines.append(f"  {e['snippet'][:120]}")
+        sender = e.get("from", "").split("<")[0].strip() or e.get("from", "Unknown")
+        subject = e.get("subject", "(no subject)")
+        account_short = e["account"].split("@")[0]
+        lines.append(f"• [{account_short}] {sender} — {subject}")
     if errors:
         lines.append(f"\n⚠️ Errors on: {', '.join(errors)}")
     return "\n".join(lines)
