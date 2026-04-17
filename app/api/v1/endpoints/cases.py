@@ -404,3 +404,37 @@ async def reset_tables(_=Depends(verify_token)):
         return {"ok": True, "message": "Tables dropped and recreated with vector(3072)"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/cases/debug/{case_id}")
+async def debug_case(case_id: int, _=Depends(verify_token)):
+    """Check what's actually stored in case_chunks."""
+    import os
+    conn = db_conn()
+    cur = conn.cursor()
+    # Check chunk count
+    cur.execute("SELECT COUNT(*) FROM case_chunks WHERE case_id=%s", (case_id,))
+    count = cur.fetchone()[0]
+    # Check if embeddings are null
+    cur.execute("SELECT COUNT(*) FROM case_chunks WHERE case_id=%s AND embedding IS NULL", (case_id,))
+    null_embeddings = cur.fetchone()[0]
+    # Get a sample chunk
+    cur.execute("SELECT id, content, embedding IS NOT NULL as has_embedding FROM case_chunks WHERE case_id=%s LIMIT 1", (case_id,))
+    sample = cur.fetchone()
+    # Check vector dimensions if embedding exists
+    dims = None
+    if sample and sample[2]:
+        cur.execute("SELECT vector_dims(embedding) FROM case_chunks WHERE case_id=%s AND embedding IS NOT NULL LIMIT 1", (case_id,))
+        row = cur.fetchone()
+        if row:
+            dims = row[0]
+    cur.close()
+    conn.close()
+    return {
+        "case_id": case_id,
+        "total_chunks": count,
+        "null_embeddings": null_embeddings,
+        "has_embeddings": count - null_embeddings,
+        "sample_content": sample[1][:100] if sample else None,
+        "embedding_dims": dims
+    }
