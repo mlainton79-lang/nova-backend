@@ -33,6 +33,13 @@ try:
 except Exception as e:
     print(f"[ROUTER] RAG table init failed (non-fatal): {e}")
 
+# Initialise world model
+try:
+    from app.core.world_model import init_world_model_table
+    init_world_model_table()
+except Exception as e:
+    print(f"[ROUTER] World model init failed: {e}")
+
 # Initialise capabilities registry
 try:
     from app.core.capabilities import init_capabilities_table

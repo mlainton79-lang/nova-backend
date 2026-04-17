@@ -241,6 +241,14 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                     add_memory("auto", fact)
             except Exception:
                 pass
+            # Tony reflects and updates his world model
+            try:
+                from app.core.world_model import tony_reflect_and_update
+                asyncio.create_task(tony_reflect_and_update(
+                    f"Matthew: {request.message}\nTony: {full[:1000]}"
+                ))
+            except Exception:
+                pass
         except Exception as e:
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
             log_request(provider=provider_key, message=request.message, reply="", latency_ms=int((time.time()-start)*1000), ok=False, error=str(e))

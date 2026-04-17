@@ -116,6 +116,15 @@ def build_system_prompt(
     if context:
         parts.append(f"Additional context from Matthew:\n{context[:4000]}")
 
+    # Inject world model
+    try:
+        from app.core.world_model import get_world_model_summary
+        world = get_world_model_summary()
+        if world:
+            parts.append(world)
+    except Exception:
+        pass
+
     # Inject capability awareness
     try:
         from app.core.capabilities import get_capability_summary
