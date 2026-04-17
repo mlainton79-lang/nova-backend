@@ -183,19 +183,6 @@ async def tool_research_youtube(topic: str, max_videos: int = 3) -> str:
     except Exception as e:
         return f"YouTube research failed: {e}"
 
-TOOLS = {
-    "web_search": tool_web_search,
-    "read_emails": tool_read_emails,
-    "search_case": tool_search_case,
-    "remember": tool_remember,
-    "http_get": tool_http_get,
-    "think": tool_think,
-    "watch_video": tool_watch_video,
-    "research_youtube": tool_research_youtube,
-    "deep_research": tool_deep_research,
-    "update_goal": tool_update_goal,
-}
-
 async def tool_deep_research(topic: str, depth: int = 2) -> str:
     """Tony researches a topic deeply — reads full pages, synthesises findings."""
     try:
@@ -217,6 +204,20 @@ async def tool_update_goal(goal_title: str, progress: str, next_action: str = No
         return f"Goal not found: {goal_title}"
     except Exception as e:
         return f"Goal update failed: {e}"
+
+
+TOOLS = {
+    "web_search": tool_web_search,
+    "read_emails": tool_read_emails,
+    "search_case": tool_search_case,
+    "remember": tool_remember,
+    "http_get": tool_http_get,
+    "think": tool_think,
+    "watch_video": tool_watch_video,
+    "research_youtube": tool_research_youtube,
+    "deep_research": tool_deep_research,
+    "update_goal": tool_update_goal,
+}
 
 TOOL_DESCRIPTIONS = """
 Available tools (call as JSON in your response):

@@ -3,7 +3,7 @@ Tony's Vision endpoints.
 Tony watches videos, reads documents, studies images.
 Tony watches — not Gemini, not a third party. Tony.
 """
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends
 from app.core.security import verify_token
 from app.core.vision import (
     tony_study_video,
@@ -14,7 +14,6 @@ from app.core.vision import (
     tony_see,
     tony_read_document
 )
-import base64
 
 router = APIRouter()
 
@@ -32,17 +31,17 @@ async def watch_video(url: str, question: str = None, full: bool = True, _=Depen
 @router.post("/vision/upload")
 async def watch_uploaded_video(
     question: str = None,
-    file: UploadFile = File(...),
+    video_url: str = None,
     _=Depends(verify_token)
 ):
     """
-    Tony watches a video you upload.
-    Transcribes the audio and analyses key frames.
-    Supports mp4, mov, avi, webm.
+    Tony watches an uploaded video by URL or base64.
+    For direct file upload, send base64 encoded video as video_url param.
     """
-    video_bytes = await file.read()
-    video_b64 = base64.b64encode(video_bytes).decode()
-    return await tony_watch_uploaded_video(video_b64, file.filename, question)
+    if not video_url:
+        return {"error": "Provide video as base64 in video_url parameter"}
+    import base64 as b64
+    return await tony_watch_uploaded_video(video_url, "video.mp4", question)
 
 @router.post("/vision/research")
 async def research_topic(topic: str, max_videos: int = 5, _=Depends(verify_token)):
@@ -50,8 +49,9 @@ async def research_topic(topic: str, max_videos: int = 5, _=Depends(verify_token
     return await tony_search_and_study_youtube(topic, max_videos)
 
 @router.post("/vision/watch-multiple")
-async def watch_multiple(urls: list, topic: str, _=Depends(verify_token)):
-    """Tony watches multiple specific videos and synthesises them."""
+async def watch_multiple(urls_csv: str, topic: str, _=Depends(verify_token)):
+    """Tony watches multiple specific videos (comma-separated URLs) and synthesises them."""
+    urls = [u.strip() for u in urls_csv.split(",") if u.strip()]
     return await tony_study_multiple_videos(urls, topic)
 
 @router.post("/vision/see")
