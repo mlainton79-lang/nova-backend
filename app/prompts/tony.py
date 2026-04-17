@@ -116,4 +116,12 @@ def build_system_prompt(
     if context:
         parts.append(f"Additional context from Matthew:\n{context[:4000]}")
 
+    # Inject capability awareness
+    try:
+        from app.core.capabilities import get_capability_summary
+        caps = get_capability_summary()
+        if caps:
+            parts.append(f"""YOUR CURRENT CAPABILITIES:\n{caps}\n\nWhen asked to do something listed as NOT YET BUILT: never just refuse. Say "I can't do that yet but I can build it — want me to?" then propose the implementation.""")
+    except Exception:
+        pass
     return "\n\n".join(p for p in parts if p)

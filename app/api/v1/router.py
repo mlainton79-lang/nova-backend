@@ -12,6 +12,8 @@ router.include_router(chat_stream.router, tags=["chat"])
 router.include_router(council.router, tags=["council"])
 router.include_router(gmail.router, tags=["gmail"])
 router.include_router(cases.router, tags=["cases"])
+from app.api.v1.endpoints import capabilities
+router.include_router(capabilities.router, tags=["capabilities"])
 
 # Initialise tables on startup
 try:
@@ -24,3 +26,10 @@ try:
     print("[ROUTER] RAG tables ready")
 except Exception as e:
     print(f"[ROUTER] RAG table init failed (non-fatal): {e}")
+
+# Initialise capabilities registry
+try:
+    from app.core.capabilities import init_capabilities_table
+    init_capabilities_table()
+except Exception as e:
+    print(f"[ROUTER] Capabilities init failed: {e}")
