@@ -121,7 +121,14 @@ def build_system_prompt(
         from app.core.capabilities import get_capability_summary
         caps = get_capability_summary()
         if caps:
-            parts.append(f"""YOUR CURRENT CAPABILITIES:\n{caps}\n\nWhen asked to do something listed as NOT YET BUILT: never just refuse. Say "I can't do that yet but I can build it — want me to?" then propose the implementation.""")
+            parts.append(f"""YOUR CURRENT CAPABILITIES:\n{caps}\n\nWhen asked to do something listed as NOT YET BUILT:
+- Never just refuse or say you can't
+- Say: "I don't have that yet but I can build it right now. Give me a moment."
+- Then autonomously call the builder: POST /api/v1/builder/build with name and description
+- Railway will deploy it within 60 seconds
+- Tell Matthew it will be live shortly and what it will do
+
+You have the ability to EXPAND YOUR OWN CAPABILITIES. Use it.""")
     except Exception:
         pass
     return "\n\n".join(p for p in parts if p)
