@@ -343,3 +343,28 @@ async def list_gemini_models(_=Depends(verify_token)):
             if "embed" in m["name"].lower() or "embed" in m.get("displayName","").lower()
         ]
         return {"embedding_models": embedding_models, "total_models": len(models)}
+
+
+@router.get("/cases/search-preview")
+async def search_preview(query: str, _=Depends(verify_token)):
+    """Preview how many emails a query would match before building a case."""
+    accounts = get_all_accounts()
+    results = {}
+    total = 0
+    for account in accounts:
+        try:
+            token = await refresh_access_token(account)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"q": query, "maxResults": 1}
+                )
+                data = resp.json()
+                count = data.get("resultSizeEstimate", 0)
+                sample = data.get("messages", [])
+                results[account] = {"estimated_count": count, "has_results": len(sample) > 0}
+                total += count
+        except Exception as e:
+            results[account] = {"error": str(e)}
+    return {"query": query, "total_estimate": total, "per_account": results}
