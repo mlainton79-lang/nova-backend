@@ -10,7 +10,7 @@ from app.core.rag import (
     get_case_by_name, list_cases, embed_text
 )
 from app.core.gmail_service import (
-    get_all_accounts, refresh_access_token, get_conn as gmail_get_conn
+    get_all_accounts, refresh_access_token
 )
 import httpx, base64, json, os, psycopg2
 
@@ -107,8 +107,14 @@ async def download_attachment(token: str, message_id: str, attachment_id: str,
 
 async def run_ingestion(case_id: int, query: str):
     """Background task — fetch all emails matching query, ingest everything."""
-    conn = db_conn()
-    cur = conn.cursor()
+    conn = None
+    cur = None
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+    except Exception as e:
+        print(f"[CASE] DB connection failed: {e}")
+        return
     try:
         cur.execute("UPDATE cases SET status='ingesting', updated_at=NOW() WHERE id=%s", (case_id,))
         conn.commit()
@@ -185,12 +191,20 @@ async def run_ingestion(case_id: int, query: str):
         conn.commit()
         print(f"[CASE] Ingestion complete: {total_emails} emails, {total_chunks} chunks")
     except Exception as e:
-        cur.execute("UPDATE cases SET status='error', updated_at=NOW() WHERE id=%s", (case_id,))
-        conn.commit()
         print(f"[CASE] Ingestion failed: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            cur.execute("UPDATE cases SET status=%s, updated_at=NOW() WHERE id=%s", (f"error: {str(e)[:200]}", case_id))
+            conn.commit()
+        except Exception:
+            pass
     finally:
-        cur.close()
-        conn.close()
+        try:
+            if cur: cur.close()
+            if conn: conn.close()
+        except Exception:
+            pass
 
 
 @router.post("/cases/build")
@@ -278,3 +292,36 @@ async def delete_case(case_id: int, _=Depends(verify_token)):
     cur.close()
     conn.close()
     return {"deleted": True}
+
+
+@router.get("/cases/test")
+async def test_case_ingestion(_=Depends(verify_token)):
+    """Test endpoint - tries to fetch one email and embed it, returns errors directly."""
+    try:
+        from app.core.rag import init_rag_tables, embed_text
+        init_rag_tables()
+        # Test embedding
+        vec = await embed_text("test embedding for Nova case builder")
+        if not vec:
+            return {"error": "Embedding returned None - check Gemini API key"}
+        # Test Gmail access
+        accounts = get_all_accounts()
+        if not accounts:
+            return {"error": "No Gmail accounts connected"}
+        token = await refresh_access_token(accounts[0])
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"q": "test", "maxResults": 1}
+            )
+        return {
+            "ok": True,
+            "embedding_dims": len(vec),
+            "accounts": accounts,
+            "gmail_status": resp.status_code,
+            "gmail_sample": resp.json().get("messages", [])[:1]
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
