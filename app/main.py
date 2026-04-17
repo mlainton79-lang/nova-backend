@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+import os
+from fastapi import FastAPI, Request
 from app.api.v1.router import router as v1_router
 
 app = FastAPI(title="Nova Backend", version="1.0.0")
@@ -10,7 +11,11 @@ def root():
     return {"service": "Nova Backend", "status": "running"}
 
 @app.post("/internal/trigger-self-improvement")
-async def trigger_self_improvement():
+async def trigger_self_improvement(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if token != os.environ.get("DEV_TOKEN", "nova-dev-token"):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
     """
     Cron-triggered autonomous self-improvement loop.
     Validates, pushes improvements, verifies deployment.
