@@ -21,5 +21,6 @@ except Exception as e:
 
 try:
     init_rag_tables()
+    print("[ROUTER] RAG tables ready")
 except Exception as e:
-    print(f"[ROUTER] RAG table init failed: {e}")
+    print(f"[ROUTER] RAG table init failed (non-fatal): {e}")

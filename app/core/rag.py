@@ -17,7 +17,13 @@ CHUNK_OVERLAP = 100
 
 
 def get_conn():
-    return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+    conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+    try:
+        from pgvector.psycopg2 import register_vector
+        register_vector(conn)
+    except Exception:
+        pass  # pgvector registration optional — falls back to JSON embedding strings
+    return conn
 
 
 def init_rag_tables():
@@ -58,18 +64,29 @@ def init_rag_tables():
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
-        # Index for fast similarity search
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS case_chunks_embedding_idx
-            ON case_chunks USING ivfflat (embedding vector_cosine_ops)
-            WITH (lists = 50)
-        """)
         conn.commit()
+        # ivfflat index requires data to exist first — create separately, ignore if fails
+        try:
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS case_chunks_embedding_idx
+                ON case_chunks USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = 50)
+            """)
+            conn.commit()
+        except Exception as idx_err:
+            print(f"[RAG] Index creation skipped (will retry after data inserted): {idx_err}")
+            conn.rollback()
         cur.close()
         conn.close()
         print("[RAG] Tables initialised")
     except Exception as e:
         print(f"[RAG] Table init failed: {e}")
+        try:
+            conn.rollback()
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
 
 
 async def embed_text(text: str) -> Optional[List[float]]:
