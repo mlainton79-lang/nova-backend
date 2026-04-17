@@ -296,32 +296,31 @@ async def delete_case(case_id: int, _=Depends(verify_token)):
 
 @router.get("/cases/test")
 async def test_case_ingestion(_=Depends(verify_token)):
-    """Test endpoint - tries to fetch one email and embed it, returns errors directly."""
+    """Test endpoint - diagnoses embedding and Gmail access."""
+    import os, traceback
+    results = {}
+    # Test embedding
     try:
-        from app.core.rag import init_rag_tables, embed_text
+        from app.core.rag import embed_text, init_rag_tables
         init_rag_tables()
-        # Test embedding
-        vec = await embed_text("test embedding for Nova case builder")
-        if not vec:
-            return {"error": "Embedding returned None - check Gemini API key"}
-        # Test Gmail access
-        accounts = get_all_accounts()
-        if not accounts:
-            return {"error": "No Gmail accounts connected"}
-        token = await refresh_access_token(accounts[0])
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"q": "test", "maxResults": 1}
-            )
-        return {
-            "ok": True,
-            "embedding_dims": len(vec),
-            "accounts": accounts,
-            "gmail_status": resp.status_code,
-            "gmail_sample": resp.json().get("messages", [])[:1]
-        }
+        vec = await embed_text("test Nova RAG pipeline")
+        results["embedding"] = {"ok": bool(vec), "dims": len(vec) if vec else 0}
     except Exception as e:
-        import traceback
-        return {"error": str(e), "trace": traceback.format_exc()}
+        results["embedding"] = {"ok": False, "error": str(e), "trace": traceback.format_exc()[-500:]}
+    # Test Gmail
+    try:
+        accounts = get_all_accounts()
+        token = await refresh_access_token(accounts[0]) if accounts else None
+        gmail_ok = False
+        if token:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"maxResults": 1}
+                )
+                gmail_ok = r.status_code == 200
+        results["gmail"] = {"ok": gmail_ok, "accounts": accounts}
+    except Exception as e:
+        results["gmail"] = {"ok": False, "error": str(e)}
+    return results

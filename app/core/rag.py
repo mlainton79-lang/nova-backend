@@ -90,20 +90,27 @@ def init_rag_tables():
 
 
 async def embed_text(text: str) -> Optional[List[float]]:
-    """Get embedding vector from Gemini free tier."""
+    """Get embedding vector from Gemini free tier. Tries multiple models."""
     if not text.strip():
         return None
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent?key={GEMINI_API_KEY}",
-                json={"model": f"models/{EMBEDDING_MODEL}", "content": {"parts": [{"text": text[:8000]}]}}
-            )
-            resp.raise_for_status()
-            return resp.json()["embedding"]["values"]
-    except Exception as e:
-        print(f"[RAG] Embed failed: {e}")
-        return None
+    models_to_try = ["text-embedding-004", "embedding-001"]
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for model in models_to_try:
+            try:
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={GEMINI_API_KEY}",
+                    json={"model": f"models/{model}", "content": {"parts": [{"text": text[:8000]}]}}
+                )
+                if resp.status_code == 200:
+                    values = resp.json().get("embedding", {}).get("values")
+                    if values:
+                        return values
+                    print(f"[RAG] Embed {model}: 200 but no values. Response: {resp.text[:200]}")
+                else:
+                    print(f"[RAG] Embed {model}: {resp.status_code} — {resp.text[:200]}")
+            except Exception as e:
+                print(f"[RAG] Embed {model} exception: {e}")
+    return None
 
 
 def chunk_text(text: str, source_label: str = "") -> List[str]:
