@@ -208,7 +208,7 @@ async def get_morning_summary() -> str:
     all_emails = []
     for account in accounts:
         try:
-            emails = await list_emails(account, query="is:unread newer_than:1d", max_results=20, label="")
+            emails = await list_emails(account, query="is:unread newer_than:1d", max_results=20, label="INBOX")
             all_emails.extend(emails)
         except Exception as e:
             print(f"[GMAIL] Morning summary failed for {account}: {e}")
