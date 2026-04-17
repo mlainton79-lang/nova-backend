@@ -11,6 +11,10 @@ import psycopg2
 from typing import List, Optional
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+def vec_str(v):
+    """Format vector list as pgvector literal string."""
+    return '[' + ','.join(str(x) for x in v) + ']' 
 EMBEDDING_MODEL = "gemini-embedding-001"
 CHUNK_SIZE = 800        # tokens approx — characters / 4
 CHUNK_OVERLAP = 100
@@ -223,7 +227,7 @@ async def ingest_email_to_case(case_id: int, email_id: str, account: str,
                      chunk_index, source_type, content, embedding)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,'email_body',%s,%s::vector)
                 """, (case_id, email_id, account, sender, subject, date, i,
-                      chunk, json.dumps(vec)))
+                      chunk, vec_str(vec)))
                 inserted += 1
 
         # Process attachments
@@ -242,7 +246,7 @@ async def ingest_email_to_case(case_id: int, email_id: str, account: str,
                              chunk_index, source_type, attachment_name, content, embedding)
                             VALUES (%s,%s,%s,%s,%s,%s,%s,'attachment',%s,%s,%s::vector)
                         """, (case_id, email_id, account, sender, subject, date, i,
-                              att_name, chunk, json.dumps(vec)))
+                              att_name, chunk, vec_str(vec)))
                         inserted += 1
         conn.commit()
     except Exception as e:
@@ -269,7 +273,7 @@ async def search_case(case_id: int, query: str, top_k: int = 20) -> List[dict]:
             WHERE case_id = %s
             ORDER BY embedding <=> %s::vector
             LIMIT %s
-        """, (json.dumps(vec), case_id, json.dumps(vec), top_k))
+        """, (vec_str(vec), case_id, vec_str(vec), top_k))
         rows = cur.fetchall()
         return [
             {
