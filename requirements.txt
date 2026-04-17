@@ -4,5 +4,4 @@ httpx==0.27.2
 pydantic==2.9.2
 psycopg2-binary
 python-multipart==0.0.9
-
-pgvector
+pgvector==0.3.6
