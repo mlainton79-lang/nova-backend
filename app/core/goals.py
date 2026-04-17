@@ -84,12 +84,19 @@ def init_goals_table():
             )
         ]
 
+        # Add unique constraint on title if not exists
+        try:
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tony_goals_title_idx ON tony_goals(title)")
+            conn.commit()
+        except Exception:
+            pass
+
         for title, desc, cat, status, priority, progress, next_action, blockers, target in known_goals:
             cur.execute("""
                 INSERT INTO tony_goals
                 (title, description, category, status, priority, progress_notes, next_action, blockers, target_date)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (title) DO NOTHING
             """, (title, desc, cat, status, priority, progress, next_action, blockers, target))
 
         conn.commit()
