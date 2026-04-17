@@ -307,3 +307,279 @@ async def tony_search_and_study_youtube(topic: str, max_videos: int = 5) -> dict
     video_urls = [f"https://www.youtube.com/watch?v={vid_id}" for vid_id in video_ids]
     
     return await tony_study_multiple_videos(video_urls, topic)
+
+
+async def tony_extract_youtube_frames(video_id: str, num_frames: int = 5) -> list:
+    """
+    Extract key frames from a YouTube video.
+    Returns list of base64 encoded images.
+    Tony sees the actual visuals, not just the transcript.
+    """
+    frames = []
+    try:
+        import subprocess, tempfile, os, base64
+        
+        # Download a low-res version of the video for frame extraction
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, "video.mp4")
+            
+            # Use yt-dlp to download worst quality (fastest)
+            result = subprocess.run([
+                "yt-dlp",
+                "-f", "worstvideo[ext=mp4]/worst[ext=mp4]/worst",
+                "--no-playlist",
+                "-o", video_path,
+                f"https://www.youtube.com/watch?v={video_id}"
+            ], capture_output=True, timeout=60)
+            
+            if result.returncode != 0 or not os.path.exists(video_path):
+                return []
+            
+            # Extract frames at regular intervals using ffmpeg
+            frames_dir = os.path.join(tmpdir, "frames")
+            os.makedirs(frames_dir)
+            
+            subprocess.run([
+                "ffmpeg", "-i", video_path,
+                "-vf", f"fps=1/{max(1, 60//num_frames)}",  # evenly spaced frames
+                "-frames:v", str(num_frames),
+                "-q:v", "5",
+                os.path.join(frames_dir, "frame%03d.jpg")
+            ], capture_output=True, timeout=30)
+            
+            # Read frames as base64
+            frame_files = sorted(os.listdir(frames_dir))[:num_frames]
+            for fname in frame_files:
+                with open(os.path.join(frames_dir, fname), "rb") as f:
+                    frames.append(base64.b64encode(f.read()).decode())
+    except Exception as e:
+        print(f"[VISION] Frame extraction failed: {e}")
+    
+    return frames
+
+
+async def tony_watch_youtube_properly(video_url: str, question: str = None) -> dict:
+    """
+    Tony genuinely watches a YouTube video.
+    Gets BOTH the transcript (what was said) AND key frames (what was shown).
+    This is real watching, not just reading.
+    """
+    # Extract video ID
+    video_id = None
+    import re
+    for pattern in [r'(?:v=|youtu\.be/|embed/)([a-zA-Z0-9_-]{11})', r'^([a-zA-Z0-9_-]{11})$']:
+        match = re.search(pattern, video_url)
+        if match:
+            video_id = match.group(1)
+            break
+
+    if not video_id:
+        return {"error": "Could not extract video ID"}
+
+    # Get transcript and frames simultaneously
+    transcript_task = tony_get_youtube_transcript(video_id)
+    frames_task = tony_extract_youtube_frames(video_id, num_frames=6)
+    
+    transcript, frames = await asyncio.gather(transcript_task, frames_task)
+
+    # Get metadata
+    metadata = {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            )
+            if r.status_code == 200:
+                data = r.json()
+                metadata = {"title": data.get("title",""), "author": data.get("author_name","")}
+    except Exception:
+        pass
+
+    # Process what Tony sees
+    visual_description = ""
+    if frames:
+        # Tony describes what he sees in each frame
+        frame_descriptions = []
+        for i, frame_b64 in enumerate(frames[:4]):
+            try:
+                desc = await tony_see(
+                    frame_b64,
+                    f"Describe what is shown in this video frame. Be specific about any text, products, people, demonstrations, or important visual information shown. This is frame {i+1} of a video called: {metadata.get('title','')}",
+                    "image/jpeg"
+                )
+                frame_descriptions.append(f"Frame {i+1}: {desc}")
+            except Exception:
+                pass
+        visual_description = "\n".join(frame_descriptions)
+
+    # Now Tony synthesises what he both heard and saw
+    prompt_text = question or "Summarise this video comprehensively — both what was said and what was visually demonstrated."
+    
+    content_parts = []
+    if transcript:
+        content_parts.append(f"TRANSCRIPT (what was said):\n{transcript[:20000]}")
+    if visual_description:
+        content_parts.append(f"VISUAL CONTENT (what was shown):\n{visual_description}")
+    
+    if not content_parts:
+        return {
+            "video_id": video_id,
+            "metadata": metadata,
+            "error": "Could not extract any content from this video"
+        }
+
+    synthesis_prompt = f"""You are Tony. You have just watched this video:
+Title: {metadata.get('title','Unknown')}
+Channel: {metadata.get('author','Unknown')}
+
+{chr(10).join(content_parts)}
+
+Now answer: {prompt_text}
+
+Be specific. Reference both what was said AND what was visually demonstrated where relevant."""
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+                json={
+                    "contents": [{"role": "user", "parts": [{"text": synthesis_prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 4096}
+                }
+            )
+            r.raise_for_status()
+            answer = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        answer = f"Could not process video content: {e}"
+
+    return {
+        "video_id": video_id,
+        "url": video_url,
+        "metadata": metadata,
+        "has_transcript": bool(transcript),
+        "frames_extracted": len(frames),
+        "visual_content_analysed": bool(visual_description),
+        "answer": answer
+    }
+
+
+async def tony_watch_uploaded_video(video_base64: str, filename: str = "video.mp4", question: str = None) -> dict:
+    """
+    Tony watches a video you upload directly.
+    Transcribes audio + extracts and analyses key frames.
+    Supports mp4, mov, avi, webm.
+    """
+    import base64, tempfile, os, subprocess
+    
+    result = {
+        "filename": filename,
+        "transcript": "",
+        "visual_description": "",
+        "answer": ""
+    }
+    
+    try:
+        # Decode and save video
+        video_bytes = base64.b64decode(video_base64)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, filename)
+            with open(video_path, "wb") as f:
+                f.write(video_bytes)
+            
+            # Extract audio for transcription
+            audio_path = os.path.join(tmpdir, "audio.mp3")
+            subprocess.run([
+                "ffmpeg", "-i", video_path, "-q:a", "0", "-map", "a",
+                audio_path, "-y"
+            ], capture_output=True, timeout=60)
+            
+            # Transcribe using Whisper if audio extracted
+            transcript = ""
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
+                try:
+                    import whisper
+                    model = whisper.load_model("tiny")  # smallest, fastest
+                    transcription = model.transcribe(audio_path)
+                    transcript = transcription.get("text", "")
+                    result["transcript"] = transcript
+                except Exception as e:
+                    print(f"[VISION] Whisper transcription failed: {e}")
+                    # Fallback: use Gemini audio
+                    try:
+                        with open(audio_path, "rb") as af:
+                            audio_b64 = base64.b64encode(af.read()).decode()
+                        async with httpx.AsyncClient(timeout=60.0) as client:
+                            r = await client.post(
+                                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+                                json={"contents": [{"role": "user", "parts": [
+                                    {"inline_data": {"mime_type": "audio/mp3", "data": audio_b64}},
+                                    {"text": "Transcribe this audio exactly."}
+                                ]}]}
+                            )
+                            if r.status_code == 200:
+                                transcript = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                                result["transcript"] = transcript
+                    except Exception:
+                        pass
+            
+            # Extract frames
+            frames_dir = os.path.join(tmpdir, "frames")
+            os.makedirs(frames_dir)
+            subprocess.run([
+                "ffmpeg", "-i", video_path,
+                "-vf", "fps=1/10",  # one frame every 10 seconds
+                "-frames:v", "8",
+                "-q:v", "5",
+                os.path.join(frames_dir, "frame%03d.jpg")
+            ], capture_output=True, timeout=30)
+            
+            # Analyse frames
+            import base64 as b64mod
+            frame_descriptions = []
+            frame_files = sorted(os.listdir(frames_dir))[:6]
+            for i, fname in enumerate(frame_files):
+                fpath = os.path.join(frames_dir, fname)
+                if os.path.exists(fpath) and os.path.getsize(fpath) > 100:
+                    with open(fpath, "rb") as f:
+                        frame_b64 = b64mod.b64encode(f.read()).decode()
+                    try:
+                        desc = await tony_see(
+                            frame_b64,
+                            f"Describe everything visible in this video frame. Note any text, people, objects, demonstrations, or important visual information.",
+                            "image/jpeg"
+                        )
+                        frame_descriptions.append(f"[{i*10}s] {desc}")
+                    except Exception:
+                        pass
+            
+            result["visual_description"] = "\n".join(frame_descriptions)
+            result["frames_analysed"] = len(frame_descriptions)
+    
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+    
+    # Synthesise
+    question_text = question or "What is happening in this video? Describe it comprehensively."
+    
+    synthesis_parts = []
+    if result["transcript"]:
+        synthesis_parts.append(f"AUDIO/SPEECH:\n{result['transcript'][:10000]}")
+    if result["visual_description"]:
+        synthesis_parts.append(f"VISUAL CONTENT:\n{result['visual_description']}")
+    
+    if synthesis_parts:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+                    json={"contents": [{"role": "user", "parts": [{"text": f"You are Tony. You've just watched an uploaded video.\n\n{chr(10).join(synthesis_parts)}\n\nNow answer: {question_text}"}]}],
+                          "generationConfig": {"maxOutputTokens": 4096}}
+                )
+                r.raise_for_status()
+                result["answer"] = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            result["answer"] = f"Could not synthesise: {e}"
+    
+    return result

@@ -5,3 +5,7 @@ pydantic==2.9.2
 psycopg2-binary
 python-multipart==0.0.9
 pgvector==0.3.6
+
+yt-dlp
+openai-whisper
+Pillow

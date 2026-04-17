@@ -1,28 +1,52 @@
 """
 Tony's Vision endpoints.
 Tony watches videos, reads documents, studies images.
-This is Tony's capability — not a third party service.
+Tony watches — not Gemini, not a third party. Tony.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, UploadFile, File
 from app.core.security import verify_token
 from app.core.vision import (
     tony_study_video,
+    tony_watch_youtube_properly,
     tony_study_multiple_videos,
     tony_search_and_study_youtube,
+    tony_watch_uploaded_video,
     tony_see,
     tony_read_document
 )
+import base64
 
 router = APIRouter()
 
 @router.post("/vision/watch")
-async def watch_video(url: str, question: str = None, _=Depends(verify_token)):
-    """Tony watches a YouTube video and answers questions about it."""
+async def watch_video(url: str, question: str = None, full: bool = True, _=Depends(verify_token)):
+    """
+    Tony watches a YouTube video.
+    full=True: extracts transcript AND visual frames (what was said + what was shown)
+    full=False: transcript only (faster)
+    """
+    if full:
+        return await tony_watch_youtube_properly(url, question)
     return await tony_study_video(url, question)
+
+@router.post("/vision/upload")
+async def watch_uploaded_video(
+    question: str = None,
+    file: UploadFile = File(...),
+    _=Depends(verify_token)
+):
+    """
+    Tony watches a video you upload.
+    Transcribes the audio and analyses key frames.
+    Supports mp4, mov, avi, webm.
+    """
+    video_bytes = await file.read()
+    video_b64 = base64.b64encode(video_bytes).decode()
+    return await tony_watch_uploaded_video(video_b64, file.filename, question)
 
 @router.post("/vision/research")
 async def research_topic(topic: str, max_videos: int = 5, _=Depends(verify_token)):
-    """Tony searches YouTube, watches the top videos on a topic, synthesises everything."""
+    """Tony searches YouTube, watches the top videos, synthesises everything."""
     return await tony_search_and_study_youtube(topic, max_videos)
 
 @router.post("/vision/watch-multiple")
@@ -32,26 +56,26 @@ async def watch_multiple(urls: list, topic: str, _=Depends(verify_token)):
 
 @router.post("/vision/see")
 async def see_image(image_base64: str, prompt: str, mime_type: str = "image/jpeg", _=Depends(verify_token)):
-    """Tony looks at an image and responds to a prompt about it."""
+    """Tony looks at an image."""
     result = await tony_see(image_base64, prompt, mime_type)
     return {"result": result}
 
 @router.post("/vision/read-document")
 async def read_document(image_base64: str, mime_type: str = "image/jpeg", _=Depends(verify_token)):
-    """Tony reads a document image and extracts all text verbatim."""
+    """Tony reads a document — scanned letter, photo of paperwork — extracts all text verbatim."""
     result = await tony_read_document(image_base64, mime_type)
     return {"text": result}
 
 @router.get("/vision/test")
 async def vision_test(_=Depends(verify_token)):
-    """Test Tony's vision system."""
     return {
-        "status": "Tony's vision system is active",
-        "capabilities": [
-            "watch YouTube videos",
-            "research topics by watching multiple videos",
-            "read documents and extract text",
-            "analyse images",
-            "search YouTube and study results"
-        ]
+        "status": "Tony's vision is active",
+        "watching": {
+            "youtube_transcript": "reads what was said",
+            "youtube_frames": "sees what was shown",
+            "uploaded_video": "watches your own videos - audio transcription + visual frames",
+            "images": "sees and analyses any image",
+            "documents": "reads scanned letters, PDFs, photos of paperwork verbatim"
+        },
+        "note": "Tony watches. Tony sees. This is Tony's capability."
     }
