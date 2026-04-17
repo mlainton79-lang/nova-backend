@@ -188,12 +188,12 @@ async def delete_email(email: str, message_id: str) -> bool:
         resp = await client.delete(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}", headers={"Authorization": f"Bearer {token}"})
         return resp.status_code == 204
 
-async def search_all_accounts(query: str, max_per_account: int = 10) -> list:
+async def search_all_accounts(query: str, max_per_account: int = 10, label: str = "") -> list:
     accounts = get_all_accounts()
     all_results = []
     for account in accounts:
         try:
-            results = await list_emails(account, query=query, max_results=max_per_account, label="")
+            results = await list_emails(account, query=query, max_results=max_per_account, label=label)
             all_results.extend(results)
         except Exception as e:
             print(f"[GMAIL] Search failed for {account}: {e}")

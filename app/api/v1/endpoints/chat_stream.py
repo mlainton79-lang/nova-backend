@@ -133,14 +133,27 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         if any(k in msg_lower for k in email_kw):
             from app.core.gmail_service import get_morning_summary, search_all_accounts
             # Specific search query or general summary
-            search_triggers = ["from ", "about ", "subject", "find", "search", "look for", "anything from", "emails from"]
+            # Detect folder intent
+            label = ""
+            if any(w in msg_lower for w in ["sent", "sent mail", "i sent", "i wrote"]):
+                label = "SENT"
+            elif any(w in msg_lower for w in ["spam", "junk"]):
+                label = "SPAM"
+            elif any(w in msg_lower for w in ["trash", "deleted", "bin"]):
+                label = "TRASH"
+            elif any(w in msg_lower for w in ["starred", "important", "flagged"]):
+                label = "STARRED"
+            elif any(w in msg_lower for w in ["archive", "archived", "all mail"]):
+                label = ""  # All Mail = no label filter
+
+            search_triggers = ["from ", "about ", "subject", "find", "search", "look for", "anything from", "emails from", "sent", "show me", "any ", "have i"]
             if any(t in msg_lower for t in search_triggers):
-                # Extract search query - use the full message as query
                 results = await search_all_accounts(request.message, max_per_account=5)
                 if results:
                     lines = ["[GMAIL SEARCH RESULTS]"]
                     for e in results[:8]:
-                        lines.append(f"• [{e['account']}] From: {e['from']} — {e['subject']} ({e['date']})")
+                        sender = e.get("from","").split("<")[0].strip() or e.get("from","")
+                        lines.append(f"• [{e['account']}] From: {sender} — {e['subject']} ({e['date']})")
                         if e.get("snippet"):
                             lines.append(f"  {e['snippet'][:150]}")
                     gmail_context = "\n".join(lines)
