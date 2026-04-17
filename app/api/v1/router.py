@@ -18,6 +18,8 @@ from app.api.v1.endpoints import agent
 router.include_router(agent.router, tags=["agent"])
 from app.api.v1.endpoints import builder
 router.include_router(builder.router, tags=["builder"])
+from app.api.v1.endpoints import vision
+router.include_router(vision.router, tags=["vision"])
 
 # Initialise tables on startup
 try:

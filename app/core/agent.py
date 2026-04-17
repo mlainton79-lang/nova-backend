@@ -160,6 +160,29 @@ async def tool_think(thought: str) -> str:
     except Exception as e:
         return f"Think failed: {e}"
 
+async def tool_watch_video(url: str, question: str = None) -> str:
+    """Tony watches a YouTube video."""
+    try:
+        from app.core.vision import tony_study_video
+        result = await tony_study_video(url, question)
+        if "error" in result:
+            return f"Could not watch video: {result['error']}"
+        title = result.get("metadata", {}).get("title", "Unknown")
+        return f"Watched: {title}\n\n{result.get('answer', 'No content extracted')}"
+    except Exception as e:
+        return f"Video watch failed: {e}"
+
+async def tool_research_youtube(topic: str, max_videos: int = 3) -> str:
+    """Tony searches YouTube and studies multiple videos on a topic."""
+    try:
+        from app.core.vision import tony_search_and_study_youtube
+        result = await tony_search_and_study_youtube(topic, max_videos)
+        if "error" in result:
+            return f"YouTube research failed: {result['error']}"
+        return f"Studied {result.get('videos_studied', 0)} videos on '{topic}':\n\n{result.get('synthesis', 'No synthesis available')}"
+    except Exception as e:
+        return f"YouTube research failed: {e}"
+
 TOOLS = {
     "web_search": tool_web_search,
     "read_emails": tool_read_emails,
@@ -167,6 +190,8 @@ TOOLS = {
     "remember": tool_remember,
     "http_get": tool_http_get,
     "think": tool_think,
+    "watch_video": tool_watch_video,
+    "research_youtube": tool_research_youtube,
 }
 
 TOOL_DESCRIPTIONS = """
@@ -177,6 +202,8 @@ Available tools (call as JSON in your response):
 - remember(category, text) — store something to memory
 - http_get(url) — fetch a URL
 - think(thought) — log a thought or reasoning step
+- watch_video(url, question=None) — watch a YouTube video and understand it
+- research_youtube(topic, max_videos=3) — search YouTube, watch top videos, synthesise
 
 To use a tool, respond with:
 TOOL: {"name": "tool_name", "args": {"arg1": "value1"}}

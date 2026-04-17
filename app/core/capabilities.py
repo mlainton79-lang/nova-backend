@@ -55,6 +55,8 @@ def init_capabilities_table():
             ("think_sessions", "Tony's reasoning logs", "active", "/api/v1/think-sessions"),
             ("health_check", "Backend health monitoring", "active", "/api/v1/health"),
             ("self_improvement_loop", "48-hour autonomous check and improve cycle", "active", "/internal/trigger-self-improvement"),
+            ("vision_video", "Watch YouTube videos, study transcripts, research topics by video", "active", "/api/v1/vision/watch"),
+            ("vision_image", "See and analyse images, read scanned documents", "active", "/api/v1/vision/see"),
             ("calendar", "Google Calendar read/write", "not_built", None),
             ("facebook", "Facebook posting and reading", "not_built", None),
             ("vinted", "Vinted listing creation", "not_built", None),
