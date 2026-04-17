@@ -125,6 +125,40 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     except Exception as e:
         print(f"[STREAM] search failed: {e}")
 
+    # Case RAG injection — if user is asking about a known case
+    case_context = ""
+    try:
+        from app.core.rag import list_cases, search_case
+        case_kw = ["case", "western circle", "complaint", "legal", "build a case",
+                   "emails about", "what did they say", "what have they said",
+                   "timeline", "evidence", "prove", "claim", "dispute"]
+        if any(k in request.message.lower() for k in case_kw):
+            all_cases = list_cases()
+            ready_cases = [c for c in all_cases if c["status"] == "ready"]
+            if ready_cases:
+                # Find most relevant case by name mention, or use first ready case
+                target_case = ready_cases[0]
+                for c in ready_cases:
+                    if c["name"].lower() in request.message.lower():
+                        target_case = c
+                        break
+                results = await search_case(target_case["id"], request.message, top_k=20)
+                if results:
+                    lines = [f"[CASE: {target_case['name']} — {target_case['total_emails']} emails, {target_case['total_chunks']} chunks ingested]"]
+                    lines.append("Most relevant excerpts for this question:
+")
+                    for r in results:
+                        src = f"[{r['date'][:16]}] {r['sender']} — {r['subject']}"
+                        if r.get("attachment"):
+                            src += f" (attachment: {r['attachment']})"
+                        lines.append(f"SOURCE: {src}")
+                        lines.append(r["content"])
+                        lines.append("---")
+                    case_context = "
+".join(lines)
+    except Exception as e:
+        print(f"[STREAM] case context failed: {e}")
+
     # Gmail context injection
     gmail_context = ""
     try:
@@ -183,6 +217,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         print(f"[STREAM] gmail context failed: {e}")
 
     sp = safe_system_prompt(request, search_results)
+    if case_context:
+        sp += f"\n\n{case_context}"
     if gmail_context:
         sp += f"\n\n{gmail_context}"
     start = time.time()
