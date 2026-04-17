@@ -494,34 +494,25 @@ async def tony_watch_uploaded_video(video_base64: str, filename: str = "video.mp
                 audio_path, "-y"
             ], capture_output=True, timeout=60)
             
-            # Transcribe using Whisper if audio extracted
+            # Transcribe audio using Gemini (handles mp3 audio)
             transcript = ""
             if os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
                 try:
-                    import whisper
-                    model = whisper.load_model("tiny")  # smallest, fastest
-                    transcription = model.transcribe(audio_path)
-                    transcript = transcription.get("text", "")
-                    result["transcript"] = transcript
+                    with open(audio_path, "rb") as af:
+                        audio_b64 = base64.b64encode(af.read()).decode()
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        r = await client.post(
+                            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+                            json={"contents": [{"role": "user", "parts": [
+                                {"inline_data": {"mime_type": "audio/mpeg", "data": audio_b64}},
+                                {"text": "Transcribe this audio exactly. Return only the spoken words."}
+                            ]}]}
+                        )
+                        if r.status_code == 200:
+                            transcript = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                            result["transcript"] = transcript
                 except Exception as e:
-                    print(f"[VISION] Whisper transcription failed: {e}")
-                    # Fallback: use Gemini audio
-                    try:
-                        with open(audio_path, "rb") as af:
-                            audio_b64 = base64.b64encode(af.read()).decode()
-                        async with httpx.AsyncClient(timeout=60.0) as client:
-                            r = await client.post(
-                                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                                json={"contents": [{"role": "user", "parts": [
-                                    {"inline_data": {"mime_type": "audio/mp3", "data": audio_b64}},
-                                    {"text": "Transcribe this audio exactly."}
-                                ]}]}
-                            )
-                            if r.status_code == 200:
-                                transcript = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                                result["transcript"] = transcript
-                    except Exception:
-                        pass
+                    print(f"[VISION] Audio transcription failed: {e}")
             
             # Extract frames
             frames_dir = os.path.join(tmpdir, "frames")
