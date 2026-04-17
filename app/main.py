@@ -115,6 +115,14 @@ async def trigger_self_improvement(request: Request):
     except Exception as e:
         db_log("github_check_failed", str(e))
 
+    # Phase 4a: Tony works on Matthew's goals autonomously
+    try:
+        from app.core.goals import tony_work_on_goals
+        goal_results = await tony_work_on_goals()
+        db_log("goal_work", f"Worked on {len(goal_results)} goals")
+    except Exception as e:
+        db_log("goal_work_failed", str(e))
+
     # Phase 4b: Tony runs proactive scan — emails, legal, deadlines
     try:
         from app.core.proactive import run_proactive_scan

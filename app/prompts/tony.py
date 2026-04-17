@@ -116,6 +116,15 @@ def build_system_prompt(
     if context:
         parts.append(f"Additional context from Matthew:\n{context[:4000]}")
 
+    # Inject active goals
+    try:
+        from app.core.goals import get_goals_summary
+        goals = get_goals_summary()
+        if goals:
+            parts.append(goals)
+    except Exception:
+        pass
+
     # Inject proactive alerts — things Tony is watching for Matthew
     try:
         from app.core.proactive import get_unread_alerts

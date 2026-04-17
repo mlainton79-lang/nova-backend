@@ -192,7 +192,31 @@ TOOLS = {
     "think": tool_think,
     "watch_video": tool_watch_video,
     "research_youtube": tool_research_youtube,
+    "deep_research": tool_deep_research,
+    "update_goal": tool_update_goal,
 }
+
+async def tool_deep_research(topic: str, depth: int = 2) -> str:
+    """Tony researches a topic deeply — reads full pages, synthesises findings."""
+    try:
+        from app.core.research import tony_deep_research
+        result = await tony_deep_research(topic, depth)
+        return f"Research on '{topic}':\n{result.get('findings','No findings')}\n\nSources read: {result.get('sources_read',0)}"
+    except Exception as e:
+        return f"Research failed: {e}"
+
+async def tool_update_goal(goal_title: str, progress: str, next_action: str = None) -> str:
+    """Tony updates progress on one of Matthew's goals."""
+    try:
+        from app.core.goals import get_active_goals, update_goal_progress
+        goals = get_active_goals()
+        for g in goals:
+            if goal_title.lower() in g["title"].lower():
+                update_goal_progress(g["id"], progress=progress, next_action=next_action)
+                return f"Updated goal: {g['title']}"
+        return f"Goal not found: {goal_title}"
+    except Exception as e:
+        return f"Goal update failed: {e}"
 
 TOOL_DESCRIPTIONS = """
 Available tools (call as JSON in your response):
@@ -204,6 +228,8 @@ Available tools (call as JSON in your response):
 - think(thought) — log a thought or reasoning step
 - watch_video(url, question=None) — watch a YouTube video and understand it
 - research_youtube(topic, max_videos=3) — search YouTube, watch top videos, synthesise
+- deep_research(topic, depth=2) — read full web pages and synthesise comprehensive research
+- update_goal(goal_title, progress, next_action=None) — update progress on one of Matthew's goals
 
 To use a tool, respond with:
 TOOL: {"name": "tool_name", "args": {"arg1": "value1"}}

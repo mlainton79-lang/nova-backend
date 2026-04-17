@@ -24,6 +24,8 @@ from app.api.v1.endpoints import proactive
 router.include_router(proactive.router, tags=["proactive"])
 from app.api.v1.endpoints import calendar
 router.include_router(calendar.router, tags=["calendar"])
+from app.api.v1.endpoints import goals
+router.include_router(goals.router, tags=["goals"])
 
 # Initialise tables on startup
 try:
@@ -36,6 +38,20 @@ try:
     print("[ROUTER] RAG tables ready")
 except Exception as e:
     print(f"[ROUTER] RAG table init failed (non-fatal): {e}")
+
+# Initialise goals system
+try:
+    from app.core.goals import init_goals_table
+    init_goals_table()
+except Exception as e:
+    print(f"[ROUTER] Goals init failed: {e}")
+
+# Initialise emotional intelligence
+try:
+    from app.core.emotional_intelligence import init_emotional_tables
+    init_emotional_tables()
+except Exception as e:
+    print(f"[ROUTER] EI init failed: {e}")
 
 # Initialise proactive system
 try:
