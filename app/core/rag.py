@@ -225,7 +225,7 @@ async def ingest_email_to_case(case_id: int, email_id: str, account: str,
                     INSERT INTO case_chunks
                     (case_id, email_id, account, sender, subject, email_date,
                      chunk_index, source_type, content, embedding)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,'email_body',%s,%s::vector)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,'email_body',%s,CAST(%s AS vector))
                 """, (case_id, email_id, account, sender, subject, date, i,
                       chunk, vec_str(vec)))
                 inserted += 1
@@ -244,7 +244,7 @@ async def ingest_email_to_case(case_id: int, email_id: str, account: str,
                             INSERT INTO case_chunks
                             (case_id, email_id, account, sender, subject, email_date,
                              chunk_index, source_type, attachment_name, content, embedding)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,'attachment',%s,%s,%s::vector)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,'attachment',%s,%s,CAST(%s AS vector))
                         """, (case_id, email_id, account, sender, subject, date, i,
                               att_name, chunk, vec_str(vec)))
                         inserted += 1
@@ -268,10 +268,10 @@ async def search_case(case_id: int, query: str, top_k: int = 20) -> List[dict]:
     try:
         cur.execute("""
             SELECT content, sender, subject, email_date, source_type, attachment_name,
-                   1 - (embedding <=> %s::vector) AS similarity
+                   1 - (embedding <=> CAST(%s AS vector)) AS similarity
             FROM case_chunks
             WHERE case_id = %s
-            ORDER BY embedding <=> %s::vector
+            ORDER BY embedding <=> CAST(%s AS vector)
             LIMIT %s
         """, (vec_str(vec), case_id, vec_str(vec), top_k))
         rows = cur.fetchall()
