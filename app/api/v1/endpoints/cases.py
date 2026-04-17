@@ -107,6 +107,24 @@ async def download_attachment(token: str, message_id: str, attachment_id: str,
 
 async def run_ingestion(case_id: int, query: str):
     """Background task — fetch all emails matching query, ingest everything."""
+    try:
+        await _run_ingestion_inner(case_id, query)
+    except BaseException as e:
+        import traceback
+        print(f"[CASE] FATAL in run_ingestion: {e}")
+        traceback.print_exc()
+        try:
+            conn = db_conn()
+            cur = conn.cursor()
+            cur.execute("UPDATE cases SET status=%s WHERE id=%s", (f"error: {str(e)[:100]}", case_id))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
+
+async def _run_ingestion_inner(case_id: int, query: str):
+    """Inner ingestion logic."""
     conn = None
     cur = None
     try:
