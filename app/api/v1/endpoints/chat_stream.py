@@ -125,7 +125,35 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     except Exception as e:
         print(f"[STREAM] search failed: {e}")
 
+    # Gmail context injection
+    gmail_context = ""
+    try:
+        msg_lower = request.message.lower()
+        email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ", "subject", "sent me", "wrote to", "morning", "summary"]
+        if any(k in msg_lower for k in email_kw):
+            from app.core.gmail_service import get_morning_summary, search_all_accounts
+            # Specific search query or general summary
+            search_triggers = ["from ", "about ", "subject", "find", "search", "look for", "anything from", "emails from"]
+            if any(t in msg_lower for t in search_triggers):
+                # Extract search query - use the full message as query
+                results = await search_all_accounts(request.message, max_per_account=5)
+                if results:
+                    lines = ["[GMAIL SEARCH RESULTS]"]
+                    for e in results[:8]:
+                        lines.append(f"• [{e['account']}] From: {e['from']} — {e['subject']} ({e['date']})")
+                        if e.get("snippet"):
+                            lines.append(f"  {e['snippet'][:150]}")
+                    gmail_context = "\n".join(lines)
+            else:
+                summary = await get_morning_summary()
+                if summary:
+                    gmail_context = f"[GMAIL SUMMARY]\n{summary}"
+    except Exception as e:
+        print(f"[STREAM] gmail context failed: {e}")
+
     sp = safe_system_prompt(request, search_results)
+    if gmail_context:
+        sp += f"\n\n{gmail_context}"
     start = time.time()
 
     async def gen():
