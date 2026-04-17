@@ -199,6 +199,64 @@ async def search_all_accounts(query: str, max_per_account: int = 10, label: str 
             print(f"[GMAIL] Search failed for {account}: {e}")
     return sorted(all_results, key=lambda x: x.get("date", ""), reverse=True)
 
+async def deep_search_account(email: str, query: str, max_results: int = 200) -> list:
+    """Paginated search - fetches ALL matching emails up to max_results. For case building etc."""
+    token = await refresh_access_token(email)
+    all_messages = []
+    page_token = None
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        while len(all_messages) < max_results:
+            params = {"maxResults": min(50, max_results - len(all_messages)), "q": query}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await client.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            messages = data.get("messages", [])
+            if not messages:
+                break
+            all_messages.extend(messages)
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        results = []
+        for msg in all_messages:
+            detail = await client.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "To"]}
+            )
+            if detail.status_code == 200:
+                d = detail.json()
+                headers = {h["name"]: h["value"] for h in d.get("payload", {}).get("headers", [])}
+                results.append({
+                    "id": msg["id"],
+                    "account": email,
+                    "subject": headers.get("Subject", "(no subject)"),
+                    "from": headers.get("From", ""),
+                    "to": headers.get("To", ""),
+                    "date": headers.get("Date", ""),
+                    "snippet": d.get("snippet", ""),
+                    "labels": d.get("labelIds", [])
+                })
+        return results
+
+async def deep_search_all_accounts(query: str, max_per_account: int = 200) -> list:
+    """Search all accounts with pagination - for legal/case building scenarios."""
+    accounts = get_all_accounts()
+    all_results = []
+    for account in accounts:
+        try:
+            results = await deep_search_account(account, query, max_per_account)
+            all_results.extend(results)
+        except Exception as e:
+            print(f"[GMAIL] Deep search failed for {account}: {e}")
+    return sorted(all_results, key=lambda x: x.get("date", ""), reverse=True)
+
 async def get_morning_summary() -> str:
     accounts = get_all_accounts()
     if not accounts:

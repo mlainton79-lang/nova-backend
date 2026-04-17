@@ -146,12 +146,30 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             elif any(w in msg_lower for w in ["archive", "archived", "all mail"]):
                 label = ""  # All Mail = no label filter
 
-            search_triggers = ["from ", "about ", "subject", "find", "search", "look for", "anything from", "emails from", "sent", "show me", "any ", "have i"]
-            if any(t in msg_lower for t in search_triggers):
-                results = await search_all_accounts(request.message, max_per_account=5)
+            # Detect deep/case-building search intent
+            deep_triggers = ["all emails", "every email", "everything from", "build a case", "case against",
+                             "legal", "complaint", "all from", "history with", "all messages", "full history",
+                             "how many", "timeline", "how long", "years", "months", "going back"]
+            is_deep = any(t in msg_lower for t in deep_triggers)
+
+            search_triggers = ["from ", "about ", "subject", "find", "search", "look for", "anything from",
+                               "emails from", "sent", "show me", "any ", "have i", "all emails", "everything from"]
+            if is_deep:
+                from app.core.gmail_service import deep_search_all_accounts
+                results = await deep_search_all_accounts(request.message, max_per_account=200)
+                if results:
+                    lines = [f"[GMAIL DEEP SEARCH — {len(results)} results]"]
+                    for e in results[:50]:  # cap at 50 in prompt, Tony summarises
+                        sender = e.get("from","").split("<")[0].strip() or e.get("from","")
+                        lines.append(f"• [{e['account']}] {e['date'][:16]} | {sender} — {e['subject']}")
+                    if len(results) > 50:
+                        lines.append(f"... and {len(results) - 50} more.")
+                    gmail_context = "\n".join(lines)
+            elif any(t in msg_lower for t in search_triggers):
+                results = await search_all_accounts(request.message, max_per_account=10)
                 if results:
                     lines = ["[GMAIL SEARCH RESULTS]"]
-                    for e in results[:8]:
+                    for e in results[:10]:
                         sender = e.get("from","").split("<")[0].strip() or e.get("from","")
                         lines.append(f"• [{e['account']}] From: {sender} — {e['subject']} ({e['date']})")
                         if e.get("snippet"):
