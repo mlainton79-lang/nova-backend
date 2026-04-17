@@ -83,3 +83,29 @@ async def gmail_delete(message_id: str, account: str, _=Depends(verify_token)):
 async def gmail_morning(_=Depends(verify_token)):
     summary = await get_morning_summary()
     return {"summary": summary}
+
+@router.get("/gmail/debug")
+async def gmail_debug(_=Depends(verify_token)):
+    """Test each account individually with a simple unread query"""
+    from app.core.gmail_service import refresh_access_token
+    import httpx
+    accounts = get_all_accounts()
+    results = {}
+    for account in accounts:
+        try:
+            token = await refresh_access_token(account)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"q": "is:unread", "maxResults": 3}
+                )
+                data = resp.json()
+                results[account] = {
+                    "status": resp.status_code,
+                    "message_count": len(data.get("messages", [])),
+                    "error": data.get("error", {}).get("message") if resp.status_code != 200 else None
+                }
+        except Exception as e:
+            results[account] = {"status": "exception", "error": str(e)}
+    return {"accounts": results}

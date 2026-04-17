@@ -204,19 +204,27 @@ async def search_all_accounts(query: str, max_per_account: int = 10) -> list:
 async def get_morning_summary() -> str:
     accounts = get_all_accounts()
     if not accounts:
-        return ""
+        return "No Gmail accounts connected."
     all_emails = []
+    errors = []
     for account in accounts:
         try:
-            emails = await list_emails(account, query="is:unread newer_than:1d", max_results=20, label="")
+            # Try unread from last 3 days to be safe with timezone drift
+            emails = await list_emails(account, query="is:unread newer_than:3d", max_results=20, label="")
             all_emails.extend(emails)
         except Exception as e:
+            err_msg = f"{account}: {str(e)}"
+            errors.append(err_msg)
             print(f"[GMAIL] Morning summary failed for {account}: {e}")
     if not all_emails:
-        return "No unread emails in the last 24 hours across all accounts."
+        if errors:
+            return f"Gmail error(s): {'; '.join(errors)}"
+        return "No unread emails in the last 3 days across all accounts."
     lines = [f"📧 {len(all_emails)} unread email(s) across {len(accounts)} account(s):\n"]
-    for e in all_emails[:10]:
+    for e in all_emails[:15]:
         lines.append(f"• [{e['account']}] From: {e['from']} — {e['subject']}")
         if e.get("snippet"):
-            lines.append(f"  {e['snippet'][:100]}...")
+            lines.append(f"  {e['snippet'][:120]}")
+    if errors:
+        lines.append(f"\n⚠️ Errors on: {', '.join(errors)}")
     return "\n".join(lines)
