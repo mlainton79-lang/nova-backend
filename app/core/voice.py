@@ -36,6 +36,40 @@ def _clean_text(text: str) -> str:
     return clean
 
 
+async def _elevenlabs_speak(text: str) -> Optional[str]:
+    """ElevenLabs TTS — genuinely natural voice, best quality."""
+    if not ELEVENLABS_API_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+                headers={
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/mpeg"
+                },
+                json={
+                    "text": text,
+                    "model_id": "eleven_turbo_v2_5",
+                    "voice_settings": {
+                        "stability": 0.5,
+                        "similarity_boost": 0.75,
+                        "style": 0.3,
+                        "use_speaker_boost": True
+                    }
+                }
+            )
+            if r.status_code == 200:
+                return base64.b64encode(r.content).decode()
+            else:
+                print(f"[VOICE] ElevenLabs error {r.status_code}: {r.text[:200]}")
+                return None
+    except Exception as e:
+        print(f"[VOICE] ElevenLabs failed: {e}")
+        return None
+
+
 async def _azure_speak(text: str) -> Optional[str]:
     """Azure Cognitive Services TTS — 500k chars/month free."""
     if not AZURE_SPEECH_KEY:
@@ -107,19 +141,25 @@ async def tony_speak(text: str, voice: str = "en-GB-RyanNeural") -> Optional[str
     if not clean:
         return None
 
-    # 1. Azure — best quality, most generous free tier
+    # 1. ElevenLabs — best quality, most natural
+    result = await _elevenlabs_speak(clean)
+    if result:
+        print("[VOICE] ElevenLabs OK")
+        return result
+
+    # 2. Azure — good quality, 500k chars/month free
     result = await _azure_speak(clean)
     if result:
         print("[VOICE] Azure TTS OK")
         return result
 
-    # 2. Google Cloud TTS
+    # 3. Google Cloud TTS
     result = await _google_speak(clean, voice)
     if result:
         print("[VOICE] Google TTS OK")
         return result
 
-    # 3. gTTS fallback
+    # 4. gTTS fallback
     print("[VOICE] Falling back to gTTS")
     return await _gtts_speak(clean)
 
