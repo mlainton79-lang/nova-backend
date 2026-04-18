@@ -366,6 +366,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] World model update failed: {e}")
 
+            try:
+                from app.core.episodic_memory import process_conversation_for_episode
+                asyncio.create_task(process_conversation_for_episode(request.message, full))
+            except Exception as e:
+                print(f"[CHAT_STREAM] Episodic memory failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"

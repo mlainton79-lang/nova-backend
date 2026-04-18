@@ -186,4 +186,13 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject episodic memory — what Tony and Matthew have experienced together
+    try:
+        from app.core.episodic_memory import format_episodic_block
+        episodes = format_episodic_block()
+        if episodes:
+            parts.append(episodes)
+    except Exception:
+        pass
+
     return "\n\n".join(p for p in parts if p)

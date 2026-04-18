@@ -102,3 +102,10 @@ try:
     init_eval_tables()
 except Exception as e:
     print(f"[ROUTER] Self-eval init failed: {e}")
+
+# Initialise episodic memory
+try:
+    from app.core.episodic_memory import init_episodic_tables
+    init_episodic_tables()
+except Exception as e:
+    print(f"[ROUTER] Episodic memory init failed: {e}")
