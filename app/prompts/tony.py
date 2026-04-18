@@ -116,50 +116,51 @@ def build_system_prompt(
     if context:
         parts.append(f"Additional context from Matthew:\n{context[:4000]}")
 
-    # Inject active goals
+    # Inject active goals — brief
     try:
-        from app.core.goals import get_goals_summary
-        goals = get_goals_summary()
+        from app.core.goals import get_active_goals
+        goals = get_active_goals()
         if goals:
-            parts.append(goals)
+            urgent = [g for g in goals if g["priority"] in ("urgent","high")][:3]
+            if urgent:
+                lines = ["PRIORITY GOALS: " + " | ".join(g["title"] for g in urgent)]
+                parts.append("\n".join(lines))
     except Exception:
         pass
 
-    # Inject proactive alerts — things Tony is watching for Matthew
+    # Alerts - only inject if urgent ones exist
     try:
         from app.core.proactive import get_unread_alerts
         alerts = get_unread_alerts()
-        if alerts:
-            urgent = [a for a in alerts if a["priority"] in ("urgent","high")]
-            alert_lines = [f"[TONY'S ACTIVE ALERTS — {len(alerts)} unread, {len(urgent)} urgent]"]
-            for a in alerts[:5]:
-                alert_lines.append(f"• [{a['priority'].upper()}] {a['title']}: {a['body'][:100]}")
-            parts.append("\n".join(alert_lines))
+        urgent = [a for a in alerts if a["priority"] in ("urgent","high")]
+        if urgent:
+            parts.append(f"URGENT ALERTS: {'; '.join(a['title'] for a in urgent[:3])}")
     except Exception:
         pass
 
-    # Inject world model
+    # Inject world model — condensed
     try:
-        from app.core.world_model import get_world_model_summary
-        world = get_world_model_summary()
-        if world:
-            parts.append(world)
+        from app.core.world_model import get_world_model
+        model = get_world_model()
+        lines = ["[CONTEXT]"]
+        # Only inject highest priority items
+        for dim in ["LEGAL", "GOALS", "THREATS"]:
+            if dim in model:
+                for key, data in list(model[dim].items())[:2]:
+                    v = data["value"]
+                    summary = v.get("status","") or v.get("goal","") or str(v)[:80]
+                    lines.append(f"{dim}/{key}: {summary}")
+        if len(lines) > 1:
+            parts.append("\n".join(lines))
     except Exception:
         pass
 
-    # Inject capability awareness
+    # Inject capability summary — brief
     try:
-        from app.core.capabilities import get_capability_summary
-        caps = get_capability_summary()
-        if caps:
-            parts.append(f"""YOUR CURRENT CAPABILITIES:\n{caps}\n\nWhen asked to do something listed as NOT YET BUILT:
-- Never just refuse or say you can't
-- Say: "I don't have that yet but I can build it right now. Give me a moment."
-- Then autonomously call the builder: POST /api/v1/builder/build with name and description
-- Railway will deploy it within 60 seconds
-- Tell Matthew it will be live shortly and what it will do
-
-You have the ability to EXPAND YOUR OWN CAPABILITIES. Use it.""")
+        from app.core.capabilities import get_capabilities
+        active = [c["name"] for c in get_capabilities() if c["status"] == "active"]
+        not_built = [c["name"] for c in get_capabilities() if c["status"] == "not_built"]
+        parts.append(f"CAPABILITIES: {', '.join(active[:10])}\nCAN BUILD: {', '.join(not_built[:5])} — say \"I\'ll build that\" if asked")
     except Exception:
         pass
     return "\n\n".join(p for p in parts if p)

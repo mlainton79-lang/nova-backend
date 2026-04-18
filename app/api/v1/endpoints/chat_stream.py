@@ -154,14 +154,14 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                         target = c
                         break
                 results = await _pre_asyncio.wait_for(
-                    search_case(target["id"], request.message, top_k=5),
+                    search_case(target["id"], request.message, top_k=3),
                     timeout=2.0
                 )
                 if results:
                     lines = [f"[CASE: {target['name']} — answer only from these excerpts]"]
                     for r in results:
                         lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
-                        lines.append(r["content"][:200])
+                        lines.append(r["content"][:150])
                         lines.append("---")
                     case_context = "\n".join(lines)
     except Exception:
@@ -181,14 +181,14 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
 
             async def _gmail_fetch():
                 if any(t in msg_lower for t in search_triggers):
-                    results = await search_all_accounts(request.message, max_per_account=8)
+                    results = await search_all_accounts(request.message, max_per_account=5)
                     if results:
                         lines = ["[GMAIL SEARCH]"]
-                        for e in results[:8]:
+                        for e in results[:5]:
                             sender = e.get("from","").split("<")[0].strip()
                             lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
                             if e.get("snippet"):
-                                lines.append(f"  {e['snippet'][:100]}")
+                                lines.append(f"  {e['snippet'][:80]}")
                         return "\n".join(lines)
                 else:
                     summary = await get_morning_summary()
