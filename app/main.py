@@ -6,6 +6,31 @@ app = FastAPI(title="Nova Backend", version="1.0.0")
 
 app.include_router(v1_router, prefix="/api/v1")
 
+import asyncio
+from datetime import datetime
+
+async def autonomous_loop():
+    """Tony runs autonomously every 48h - no cron job needed."""
+    await asyncio.sleep(300)  # 5 min after startup
+    while True:
+        try:
+            print(f"[AUTONOMOUS] Starting loop at {datetime.utcnow().isoformat()}")
+            from app.core.goals import tony_work_on_goals
+            from app.core.proactive import run_proactive_scan
+            from app.core.tony_mission import run_autonomous_improvement
+            await tony_work_on_goals()
+            await run_proactive_scan()
+            await run_autonomous_improvement()
+            print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
+        except Exception as e:
+            print(f"[AUTONOMOUS] Error: {e}")
+        await asyncio.sleep(48 * 3600)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(autonomous_loop())
+    print("[STARTUP] Tony autonomous loop started")
+
 @app.get("/")
 def root():
     return {"service": "Nova Backend", "status": "running"}
