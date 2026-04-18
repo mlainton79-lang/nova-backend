@@ -32,6 +32,8 @@ from app.api.v1.endpoints import monitor
 router.include_router(monitor.router, tags=["monitor"])
 from app.api.v1.endpoints import voice
 router.include_router(voice.router, tags=["voice"])
+from app.api.v1.endpoints import drafts
+router.include_router(drafts.router, tags=["drafts"])
 
 # Initialise tables on startup
 try:
@@ -86,3 +88,17 @@ try:
     init_capabilities_table()
 except Exception as e:
     print(f"[ROUTER] Capabilities init failed: {e}")
+
+# Initialise email drafter
+try:
+    from app.core.email_drafter import init_draft_tables
+    init_draft_tables()
+except Exception as e:
+    print(f"[ROUTER] Email drafter init failed: {e}")
+
+# Initialise self-eval
+try:
+    from app.core.self_eval import init_eval_tables
+    init_eval_tables()
+except Exception as e:
+    print(f"[ROUTER] Self-eval init failed: {e}")
