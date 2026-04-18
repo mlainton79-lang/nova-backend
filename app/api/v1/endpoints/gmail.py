@@ -19,6 +19,13 @@ async def gmail_auth_init(_=Depends(verify_token)):
     url = get_auth_url()
     return {"auth_url": url}
 
+@router.get("/gmail/connect")
+async def gmail_connect_public():
+    """Public endpoint — redirects browser directly to Google OAuth. No token needed."""
+    from fastapi.responses import RedirectResponse
+    url = get_auth_url()
+    return RedirectResponse(url=url)
+
 @router.get("/gmail/auth/callback")
 async def gmail_auth_callback(code: str = None, error: str = None, state: str = None):
     if error or not code:
