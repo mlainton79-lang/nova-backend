@@ -57,6 +57,8 @@ async def fca_complaint_template(_=Depends(verify_token)):
     result = await tony_generate_document(
         document_type="FCA Complaint",
         context="""Write a COMPLETE, DETAILED formal complaint letter. Every ground must be fully argued. Do not truncate.
+Matthew's full address for the letter: 61 Swangate, Brampton Bierlow, Rotherham, S63 6ER.
+Matthew's National Insurance number: JK985746C.
 Matthew Lainton has a CCJ from Western Circle Ltd (trading as Cashfloat) for approximately £700.
 Case reference: K9QZ4X9N.
 

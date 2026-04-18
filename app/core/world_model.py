@@ -69,9 +69,11 @@ def init_world_model_table():
                 "name": "Matthew Lainton",
                 "born": "1979",
                 "location": "Rotherham",
+                "full_address": "61 Swangate, Brampton Bierlow, Rotherham, S63 6ER",
                 "originally_from": "Stafford",
                 "occupation": "Care worker, Sid Bailey Care Home, Brampton",
                 "works": "night shifts",
+                "national_insurance": "JK985746C",
                 "builder": "Nova app developer, builds late nights after midnight on Android phone using AndroidIDE",
                 "personality": "direct, determined, ambitious, loyal, building something real"
             }, 1.0, "initial"),
