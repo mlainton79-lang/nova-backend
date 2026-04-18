@@ -15,12 +15,12 @@ import base64
 import asyncio
 from typing import Optional
 
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+# Daniel voice - natural British male
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")
 AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "uksouth")
 GOOGLE_TTS_KEY = os.environ.get("GOOGLE_TTS_KEY", "")
-
-# Ryan — natural British male, warm and clear
-# Alternatives: en-GB-OliverNeural, en-GB-ThomasNeural
 AZURE_VOICE = os.environ.get("AZURE_VOICE", "en-GB-RyanNeural")
 
 
