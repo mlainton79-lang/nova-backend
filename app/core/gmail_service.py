@@ -205,6 +205,10 @@ async def build_smart_query(raw_query: str) -> str:
 
 async def search_all_accounts(query: str, max_per_account: int = 10, label: str = "") -> list:
     smart_query = await build_smart_query(query)
+    # For exact email address searches, limit results to speed up response
+    import re as _re
+    if _re.search(r'[\w.+\-]+@[\w.\-]+', smart_query):
+        max_per_account = min(max_per_account, 5)
     accounts = get_all_accounts()
     all_results = []
     for account in accounts:
