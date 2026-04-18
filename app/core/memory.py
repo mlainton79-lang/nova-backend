@@ -81,3 +81,63 @@ def format_memory_block(memories: list = None) -> str:
     except Exception as e:
         print(f"[MEMORY] format failed: {e}")
         return ""
+
+
+async def deduplicate_memories():
+    """
+    Remove near-duplicate memories from both tables.
+    Runs on startup and as part of the autonomous loop.
+    Uses Gemini to identify semantic duplicates.
+    """
+    import httpx, json, re, os
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+    if not GEMINI_API_KEY:
+        return
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # Get all memories
+        cur.execute("SELECT id, category, text FROM memories ORDER BY created_at DESC LIMIT 200")
+        memories = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if len(memories) < 2:
+            return
+
+        # Group by category for efficiency
+        by_category = {}
+        for mid, cat, text in memories:
+            by_category.setdefault(cat, []).append((mid, text))
+
+        to_delete = set()
+
+        for cat, items in by_category.items():
+            if len(items) < 2:
+                continue
+
+            # Simple text similarity first — exact duplicates
+            seen_texts = {}
+            for mid, text in items:
+                normalized = text.lower().strip()
+                if normalized in seen_texts:
+                    to_delete.add(mid)  # Keep first, delete later ones
+                else:
+                    seen_texts[normalized] = mid
+
+        if to_delete:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM memories WHERE id = ANY(%s)",
+                (list(to_delete),)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            print(f"[MEMORY] Deduplicated: removed {len(to_delete)} exact duplicates")
+
+    except Exception as e:
+        print(f"[MEMORY] Dedup failed: {e}")

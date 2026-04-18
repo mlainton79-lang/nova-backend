@@ -328,6 +328,19 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     # Run synchronous system prompt build in thread pool to avoid blocking event loop
     loop = asyncio.get_event_loop()
     sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
+
+    # Emotional intelligence — Tony reads context and adjusts approach
+    try:
+        from app.core.emotional_intelligence import tony_read_context
+        from datetime import datetime
+        ei = await asyncio.wait_for(
+            tony_read_context(request.message, datetime.utcnow().hour),
+            timeout=3.0
+        )
+        if ei.get("adjustment"):
+            sp += f"\n\n[RESPONSE ADJUSTMENT]: {ei['adjustment']}"
+    except Exception as e:
+        print(f"[CHAT_STREAM] EI failed: {e}")
     if case_context:
         sp += f"\n\n{case_context}"
     if gmail_context:

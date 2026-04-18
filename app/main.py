@@ -44,6 +44,16 @@ async def startup_event():
             print(f"[STARTUP] Semantic migration failed: {e}")
     asyncio.create_task(_migrate())
 
+    # Deduplicate memories on startup
+    async def _dedup():
+        await asyncio.sleep(30)  # Wait for startup to settle
+        try:
+            from app.core.memory import deduplicate_memories
+            await deduplicate_memories()
+        except Exception as e:
+            print(f"[STARTUP] Memory dedup failed: {e}")
+    asyncio.create_task(_dedup())
+
 @app.get("/")
 def root():
     return {"service": "Nova Backend", "status": "running"}
