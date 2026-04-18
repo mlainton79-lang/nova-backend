@@ -226,141 +226,133 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             yield "data: " + json.dumps({"type": "done"}) + "\n\n"
         return StreamingResponse(err(), media_type="text/event-stream")
 
-    search_results = ""
-    case_context = ""
-    gmail_context = ""
-    calendar_context = ""
+    msg_lower = request.message.lower()
 
-    import time as _time
-    _preprocess_start = _time.time()
+    async def _web_search():
+        try:
+            from app.core.brave_search import should_search, brave_search
+            if should_search(request.message):
+                return await asyncio.wait_for(brave_search(request.message), timeout=2.0)
+        except Exception as e:
+            print(f"[CHAT_STREAM] Web search failed: {e}")
+        return ""
 
-    def _time_left():
-        return max(0, 5.0 - (_time.time() - _preprocess_start))
-
-    # 1. Web search (1.5s budget)
-    try:
-        from app.core.brave_search import should_search, brave_search
-        if should_search(request.message) and _time_left() > 1.0:
-            search_results = await asyncio.wait_for(
-                brave_search(request.message), timeout=1.5
-            )
-    except Exception as e:
-        print(f"[CHAT_STREAM] Web search failed: {e}")
-
-    # 2. Case RAG search (2s budget)
-    try:
-        from app.core.rag import list_cases, search_case
-        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
-                   "what did they say", "timeline", "evidence", "claim", "dispute", "ccj"]
-        if any(k in request.message.lower() for k in case_kw) and _time_left() > 1.5:
+    async def _case_search():
+        try:
+            case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
+                       "timeline", "evidence", "claim", "dispute", "ccj"]
+            if not any(k in msg_lower for k in case_kw):
+                return ""
+            from app.core.rag import list_cases, search_case
             all_cases = list_cases()
             ready_cases = [c for c in all_cases if c["status"] == "ready"]
-            if ready_cases:
-                target = ready_cases[0]
-                for c in ready_cases:
-                    if c["name"].lower() in request.message.lower():
-                        target = c
-                        break
-                results = await asyncio.wait_for(
-                    search_case(target["id"], request.message, top_k=3),
-                    timeout=2.0
-                )
-                if results:
-                    lines = [f"[CASE: {target['name']} — answer only from these excerpts]"]
-                    for r in results:
-                        lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
-                        lines.append(r["content"][:150])
-                        lines.append("---")
-                    case_context = "\n".join(lines)
-    except Exception as e:
-        print(f"[CHAT_STREAM] Case search failed: {e}")
+            if not ready_cases:
+                return ""
+            target = next((c for c in ready_cases if c["name"].lower() in msg_lower), ready_cases[0])
+            results = await asyncio.wait_for(
+                search_case(target["id"], request.message, top_k=3), timeout=2.0
+            )
+            if results:
+                lines = [f"[CASE: {target['name']} — answer only from these excerpts]"]
+                for r in results:
+                    lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
+                    lines.append(r["content"][:150])
+                    lines.append("---")
+                return "\n".join(lines)
+        except Exception as e:
+            print(f"[CHAT_STREAM] Case search failed: {e}")
+        return ""
 
-    # 3. Gmail search (2s budget)
-    try:
-        msg_lower = request.message.lower()
-        email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ",
-                    "subject", "sent me", "wrote to", "morning", "summary",
-                    "look up", "find", "search", "emails from"]
-        if any(k in msg_lower for k in email_kw) and _time_left() > 1.0:
+    async def _gmail_search():
+        try:
+            email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ",
+                        "subject", "sent me", "wrote to", "morning", "summary",
+                        "look up", "find", "search", "emails from"]
+            if not any(k in msg_lower for k in email_kw):
+                return ""
             from app.core.gmail_service import get_morning_summary, search_all_accounts
             search_triggers = ["from ", "find", "search", "look for", "anything from",
                                "emails from", "show me", "look up", "any emails", "have i got"]
+            if any(t in msg_lower for t in search_triggers):
+                results = await asyncio.wait_for(
+                    search_all_accounts(request.message, max_per_account=5), timeout=3.0
+                )
+                if results:
+                    lines = ["[GMAIL SEARCH]"]
+                    for e in results[:5]:
+                        sender = e.get("from", "").split("<")[0].strip()
+                        lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
+                        if e.get("snippet"):
+                            lines.append(f"  {e['snippet'][:80]}")
+                    return "\n".join(lines)
+            else:
+                summary = await asyncio.wait_for(get_morning_summary(), timeout=3.0)
+                return f"[GMAIL]\n{summary}" if summary else ""
+        except Exception as e:
+            print(f"[CHAT_STREAM] Gmail failed: {e}")
+        return ""
 
-            async def _gmail_fetch():
-                if any(t in msg_lower for t in search_triggers):
-                    results = await search_all_accounts(request.message, max_per_account=5)
-                    if results:
-                        lines = ["[GMAIL SEARCH]"]
-                        for e in results[:5]:
-                            sender = e.get("from", "").split("<")[0].strip()
-                            lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
-                            if e.get("snippet"):
-                                lines.append(f"  {e['snippet'][:80]}")
-                        return "\n".join(lines)
-                else:
-                    summary = await get_morning_summary()
-                    return f"[GMAIL]\n{summary}" if summary else ""
+    async def _calendar_search():
+        try:
+            cal_kw = ["calendar", "schedule", "today", "appointment", "meeting",
+                      "what have i got", "what's on", "diary"]
+            if not any(k in msg_lower for k in cal_kw):
                 return ""
-
-            gmail_context = await asyncio.wait_for(
-                _gmail_fetch(), timeout=min(2.0, _time_left())
-            )
-    except Exception as e:
-        print(f"[CHAT_STREAM] Gmail fetch failed: {e}")
-
-    # 4. Calendar (1s budget)
-    try:
-        cal_kw = ["calendar", "schedule", "today", "appointment", "meeting",
-                  "what have i got", "what's on", "diary"]
-        if any(k in request.message.lower() for k in cal_kw) and _time_left() > 0.5:
             from app.core.calendar_service import get_todays_schedule
             from app.core.gmail_service import get_all_accounts
             accounts = get_all_accounts()
             if accounts:
-                cal = await asyncio.wait_for(
-                    get_todays_schedule(accounts[0]), timeout=1.0
-                )
+                cal = await asyncio.wait_for(get_todays_schedule(accounts[0]), timeout=2.0)
                 if cal and "Nothing" not in cal:
-                    calendar_context = f"[CALENDAR]\n{cal}"
-    except Exception as e:
-        print(f"[CHAT_STREAM] Calendar fetch failed: {e}")
+                    return f"[CALENDAR]\n{cal}"
+        except Exception as e:
+            print(f"[CHAT_STREAM] Calendar failed: {e}")
+        return ""
 
-    # Run synchronous system prompt build in thread pool to avoid blocking event loop
-    loop = asyncio.get_event_loop()
+    async def _emotional_intelligence():
+        try:
+            from app.core.emotional_intelligence import tony_read_context
+            from datetime import datetime
+            return await asyncio.wait_for(
+                tony_read_context(request.message, datetime.utcnow().hour), timeout=3.0
+            )
+        except Exception as e:
+            print(f"[CHAT_STREAM] EI failed: {e}")
+        return {"adjustment": ""}
+
+    async def _reasoning():
+        try:
+            from app.core.reasoning import reason_before_responding
+            return await asyncio.wait_for(
+                reason_before_responding(request.message, ""), timeout=5.0
+            )
+        except Exception as e:
+            print(f"[CHAT_STREAM] Reasoning failed: {e}")
+        return None
+
+    # All run concurrently — total wait = slowest single task, not sum of all
+    (
+        search_results, case_context, gmail_context,
+        calendar_context, ei_result, reasoning_result
+    ) = await asyncio.gather(
+        _web_search(), _case_search(), _gmail_search(),
+        _calendar_search(), _emotional_intelligence(), _reasoning()
+    )
+
     sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
 
-    # Emotional intelligence — Tony reads context and adjusts approach
-    try:
-        from app.core.emotional_intelligence import tony_read_context
-        from datetime import datetime
-        ei = await asyncio.wait_for(
-            tony_read_context(request.message, datetime.utcnow().hour),
-            timeout=3.0
-        )
-        if ei.get("adjustment"):
-            sp += f"\n\n[RESPONSE ADJUSTMENT]: {ei['adjustment']}"
-    except Exception as e:
-        print(f"[CHAT_STREAM] EI failed: {e}")
-
-    # Chain-of-thought reasoning for complex questions
-    try:
-        from app.core.reasoning import reason_before_responding
-        reasoning = await asyncio.wait_for(
-            reason_before_responding(request.message, sp[:800]),
-            timeout=8.0
-        )
-        if reasoning:
-            sp += f"\n\n[TONY'S REASONING — use this to inform your response, don't repeat it verbatim]:\n{reasoning}"
-    except Exception as e:
-        print(f"[CHAT_STREAM] Reasoning failed: {e}")
     if case_context:
         sp += f"\n\n{case_context}"
     if gmail_context:
         sp += f"\n\n{gmail_context}"
     if calendar_context:
         sp += f"\n\n{calendar_context}"
+    if ei_result and ei_result.get("adjustment"):
+        sp += f"\n\n[RESPONSE ADJUSTMENT]: {ei_result['adjustment']}"
+    if reasoning_result:
+        sp += f"\n\n[TONY'S REASONING — use this to inform your response, don't repeat it verbatim]:\n{reasoning_result}"
 
-    start = time.time()
+        start = time.time()
 
     async def gen():
         parts = []
