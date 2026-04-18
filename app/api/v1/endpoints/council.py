@@ -104,7 +104,9 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         pass
 
 
-    system_prompt = safe_system_prompt(req, search_results)
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+    system_prompt = await loop.run_in_executor(None, lambda: safe_system_prompt(req, search_results))
     for ctx in [case_context, gmail_context]:
         if ctx:
             system_prompt += "\n\n" + ctx

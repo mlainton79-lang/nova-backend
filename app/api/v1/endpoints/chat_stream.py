@@ -325,7 +325,9 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     except Exception as e:
         print(f"[CHAT_STREAM] Calendar fetch failed: {e}")
 
-    sp = safe_system_prompt(request, search_results)
+    # Run synchronous system prompt build in thread pool to avoid blocking event loop
+    loop = asyncio.get_event_loop()
+    sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
     if case_context:
         sp += f"\n\n{case_context}"
     if gmail_context:
