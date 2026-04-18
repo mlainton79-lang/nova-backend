@@ -159,7 +159,7 @@ Do not include the date, sender address, or recipient address — those are hand
 Start directly with "Dear [appropriate salutation]," and end with "Yours faithfully," followed by a blank line for signature.
 
 Important: Be specific, factual, and reference relevant regulations where applicable (FCA CONC rules, Consumer Duty, etc).
-Write the complete letter now:"""
+Write the complete letter now. Do not truncate or summarise. Every paragraph must be complete. The letter must be fully self-contained and ready to send:"""
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -167,7 +167,7 @@ Write the complete letter now:"""
                 f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
                 json={
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.3}
+                    "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.3}
                 }
             )
             r.raise_for_status()

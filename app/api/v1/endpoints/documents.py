@@ -56,7 +56,7 @@ async def fca_complaint_template(_=Depends(verify_token)):
     """Generate Tony's FCA complaint about Western Circle."""
     result = await tony_generate_document(
         document_type="FCA Complaint",
-        context="""
+        context="""Write a COMPLETE, DETAILED formal complaint letter. Every ground must be fully argued. Do not truncate.
 Matthew Lainton has a CCJ from Western Circle Ltd (trading as Cashfloat) for approximately £700.
 Case reference: K9QZ4X9N.
 
