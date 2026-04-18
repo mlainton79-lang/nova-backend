@@ -18,8 +18,10 @@ async def autonomous_loop():
             from app.core.goals import tony_work_on_goals
             from app.core.proactive import run_proactive_scan
             from app.core.tony_mission import run_autonomous_improvement
+            from app.core.email_drafter import scan_and_draft_replies
             await tony_work_on_goals()
             await run_proactive_scan()
+            await scan_and_draft_replies()
             await run_autonomous_improvement()
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
