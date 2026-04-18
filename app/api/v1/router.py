@@ -38,6 +38,8 @@ from app.api.v1.endpoints import documents
 router.include_router(documents.router, tags=["documents"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
+from app.api.v1.endpoints import transcription
+router.include_router(transcription.router, tags=["voice"])
 
 # Initialise tables on startup
 try:
