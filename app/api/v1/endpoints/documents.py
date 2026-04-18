@@ -1,14 +1,13 @@
 """
 Tony's document generation endpoint.
 Tony creates properly formatted PDF letters and documents.
+General purpose - works for any company, any context.
 """
 from fastapi import APIRouter, Depends
-from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 from app.core.security import verify_token
 from app.core.document_generator import tony_generate_document, tony_generate_custom_pdf
-import base64
 
 router = APIRouter()
 
@@ -25,6 +24,14 @@ class CustomPDFRequest(BaseModel):
     content: str
     recipient_name: Optional[str] = ""
     recipient_address: Optional[str] = ""
+
+
+class EmailResponseRequest(BaseModel):
+    company: str
+    recipient_name: Optional[str] = ""
+    recipient_address: Optional[str] = ""
+    email_query: Optional[str] = ""
+    intent: Optional[str] = ""
 
 
 @router.post("/documents/generate")
@@ -51,33 +58,51 @@ async def custom_pdf(req: CustomPDFRequest, _=Depends(verify_token)):
     return result
 
 
-@router.get("/documents/fca-complaint")
-async def fca_complaint_template(_=Depends(verify_token)):
-    """Generate Tony's FCA complaint about Western Circle."""
+@router.post("/documents/from-emails")
+async def generate_from_emails(req: EmailResponseRequest, _=Depends(verify_token)):
+    """
+    Tony reads all emails about a company and drafts a formal response letter.
+    This is the general purpose endpoint - works for any company.
+    """
+    from app.core.gmail_service import deep_search_all_accounts
+
+    # Search all Gmail accounts for emails related to this company
+    query = req.email_query or req.company
+    emails = await deep_search_all_accounts(query, max_per_account=50)
+
+    if not emails:
+        return {"ok": False, "error": f"No emails found relating to {req.company}"}
+
+    # Build email summary for context
+    email_summary = f"Emails found relating to {req.company}:\n\n"
+    for i, e in enumerate(emails[:20], 1):
+        email_summary += f"[{i}] {e.get('date', '')[:16]} | From: {e.get('from', '')} | Subject: {e.get('subject', '')}\n"
+        if e.get('snippet'):
+            email_summary += f"    Preview: {e.get('snippet', '')[:200]}\n"
+        email_summary += "\n"
+
+    context = f"""Write a COMPLETE, DETAILED formal letter. Do not truncate. Every point must be fully argued.
+
+Company being written to: {req.company}
+Matthew's intent: {req.intent or "formal response addressing all issues raised in correspondence"}
+
+Email correspondence found:
+{email_summary}
+
+Matthew's full address: 61 Swangate, Brampton Bierlow, Rotherham, S63 6ER
+Matthew's phone: 07735589035
+Matthew's NI: JK985746C
+
+Write a professional, firm letter addressing all relevant points from the correspondence.
+Reference specific emails and dates where relevant. Be direct and factual."""
+
     result = await tony_generate_document(
-        document_type="FCA Complaint",
-        context="""Write a COMPLETE, DETAILED formal complaint letter. Every ground must be fully argued. Do not truncate.
-Matthew's full address for the letter: 61 Swangate, Brampton Bierlow, Rotherham, S63 6ER.
-Matthew's National Insurance number: JK985746C.
-Matthew Lainton has a CCJ from Western Circle Ltd (trading as Cashfloat) for approximately £700.
-Case reference: K9QZ4X9N.
-
-Grounds for complaint:
-1. Irresponsible lending — Western Circle failed to conduct adequate affordability assessments under FCA CONC 5.2
-2. Failure to apply vulnerability rules — Matthew had a gambling addiction at the time, which Western Circle was or should have been aware of
-3. Western Circle acknowledged vulnerability in correspondence but maintained their affordability checks were sufficient
-4. Failure to apply forbearance and due consideration under CONC 7.3
-5. Breach of Consumer Duty (PS22/9) — failure to act in consumer's best interests
-6. Breach of FG21/1 (vulnerable customer guidance)
-
-The complaint is addressed to the FCA and requests:
-- Investigation into Western Circle's lending practices
-- Review of the CCJ under reference K9QZ4X9N
-- Appropriate regulatory action against Western Circle
-
-Matthew wants the CCJ removed and compensation considered.
-        """,
-        recipient_name="Financial Conduct Authority",
-        recipient_address="12 Endeavour Square\nLondon\nE20 1JN"
+        document_type=f"Letter to {req.company}",
+        context=context,
+        recipient_name=req.recipient_name or req.company,
+        recipient_address=req.recipient_address
     )
+
+    result["emails_found"] = len(emails)
+    result["company"] = req.company
     return result

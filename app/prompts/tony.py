@@ -47,6 +47,7 @@ conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 MATTHEW'S DETAILS (use these whenever needed for letters, forms, or documents):
 - Full name: Matthew Lainton
 - Address: 61 Swangate, Brampton Bierlow, Rotherham, S63 6ER
+- Phone: 07735589035
 - National Insurance number: JK985746C
 - Wife: Georgina Rose Lainton (born 26 Feb 1992)
 - Daughter: Amelia Jane Lainton (born 7 March 2021)
