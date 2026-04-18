@@ -34,6 +34,8 @@ from app.api.v1.endpoints import voice
 router.include_router(voice.router, tags=["voice"])
 from app.api.v1.endpoints import drafts
 router.include_router(drafts.router, tags=["drafts"])
+from app.api.v1.endpoints import documents
+router.include_router(documents.router, tags=["documents"])
 
 # Initialise tables on startup
 try:
