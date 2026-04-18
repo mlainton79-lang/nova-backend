@@ -374,6 +374,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] Episodic memory failed: {e}")
 
+            try:
+                from app.core.learning import analyse_conversation_for_learning
+                asyncio.create_task(analyse_conversation_for_learning(request.message, full, provider_key))
+            except Exception as e:
+                print(f"[CHAT_STREAM] Learning analysis failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"

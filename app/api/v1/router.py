@@ -118,3 +118,10 @@ try:
     init_semantic_memory_tables()
 except Exception as e:
     print(f"[ROUTER] Semantic memory init failed: {e}")
+
+# Initialise learning loop
+try:
+    from app.core.learning import init_learning_tables
+    init_learning_tables()
+except Exception as e:
+    print(f"[ROUTER] Learning init failed: {e}")

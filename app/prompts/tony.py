@@ -218,6 +218,15 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject learned behaviour rules
+    try:
+        from app.core.learning import format_behaviour_rules_for_prompt
+        rules = format_behaviour_rules_for_prompt()
+        if rules:
+            parts.append(rules)
+    except Exception:
+        pass
+
     # Inject episodic memory — what Tony and Matthew have experienced together
     try:
         from app.core.episodic_memory import format_episodic_block
