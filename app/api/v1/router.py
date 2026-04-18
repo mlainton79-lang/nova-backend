@@ -132,3 +132,10 @@ try:
     init_proactive_intelligence_tables()
 except Exception as e:
     print(f"[ROUTER] Proactive intelligence init failed: {e}")
+
+# Initialise knowledge base
+try:
+    from app.core.knowledge_base import init_knowledge_tables
+    init_knowledge_tables()
+except Exception as e:
+    print(f"[ROUTER] Knowledge base init failed: {e}")

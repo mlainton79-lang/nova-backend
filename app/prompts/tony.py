@@ -227,6 +227,16 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject relevant knowledge base entries
+    try:
+        if context:
+            from app.core.knowledge_base import get_relevant_knowledge
+            kb = get_relevant_knowledge(context)
+            if kb:
+                parts.append(kb)
+    except Exception:
+        pass
+
     # Inject episodic memory — what Tony and Matthew have experienced together
     try:
         from app.core.episodic_memory import format_episodic_block
