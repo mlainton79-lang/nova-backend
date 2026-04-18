@@ -1,24 +1,24 @@
 """
-Tony's Push Notification System.
+Tony's Push Notification System - FCM V1 API.
 
-Tony reaches Matthew without being asked.
-Uses Firebase Cloud Messaging (FCM) - free tier.
+Uses Firebase Cloud Messaging HTTP v1 API (current standard).
+Requires a service account JSON key from Firebase project settings.
 
-Setup needed:
-- FIREBASE_SERVER_KEY env var in Railway
-- FCM device token stored when app starts
-
-Until Firebase is configured, Tony stores notifications
-in the alerts table and surfaces them on next open.
+Setup:
+1. Firebase console → Project Settings → Service accounts
+2. Generate new private key → download JSON
+3. Add contents as FIREBASE_SERVICE_ACCOUNT env var in Railway (paste entire JSON as string)
+4. Add FIREBASE_PROJECT_ID env var (e.g. nova-f83e3)
 """
 import os
+import json
 import httpx
 import psycopg2
 from datetime import datetime
 from typing import Optional
 
-FIREBASE_SERVER_KEY = os.environ.get("FIREBASE_SERVER_KEY", "")
-BACKEND_URL = "https://web-production-be42b.up.railway.app"
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
+FIREBASE_SERVICE_ACCOUNT = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
@@ -45,16 +45,11 @@ def init_push_table():
 
 
 def save_push_token(token: str, platform: str = "android"):
-    """Save or update the FCM device token."""
     try:
         conn = get_conn()
         cur = conn.cursor()
-        # Keep only latest token
         cur.execute("DELETE FROM push_tokens WHERE platform = %s", (platform,))
-        cur.execute(
-            "INSERT INTO push_tokens (token, platform) VALUES (%s, %s)",
-            (token, platform)
-        )
+        cur.execute("INSERT INTO push_tokens (token, platform) VALUES (%s, %s)", (token, platform))
         conn.commit()
         cur.close()
         conn.close()
@@ -64,7 +59,6 @@ def save_push_token(token: str, platform: str = "android"):
 
 
 def get_push_token() -> Optional[str]:
-    """Get the current FCM device token."""
     try:
         conn = get_conn()
         cur = conn.cursor()
@@ -77,53 +71,105 @@ def get_push_token() -> Optional[str]:
         return None
 
 
-async def send_push(title: str, body: str, data: dict = None) -> bool:
-    """
-    Send a push notification to Matthew's phone.
-    Falls back to storing in alerts if FCM not configured.
-    """
-    token = get_push_token()
-
-    # If FCM is configured and we have a token, send real push
-    if FIREBASE_SERVER_KEY and token:
+async def get_fcm_access_token() -> Optional[str]:
+    """Get OAuth2 access token for FCM V1 API using service account."""
+    if not FIREBASE_SERVICE_ACCOUNT:
+        return None
+    try:
+        import time, base64, hashlib, hmac
+        sa = json.loads(FIREBASE_SERVICE_ACCOUNT)
+        
+        # Build JWT for service account auth
+        now = int(time.time())
+        header = base64.urlsafe_b64encode(
+            json.dumps({"alg": "RS256", "typ": "JWT"}).encode()
+        ).rstrip(b"=").decode()
+        
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "iss": sa["client_email"],
+            "scope": "https://www.googleapis.com/auth/firebase.messaging",
+            "aud": "https://oauth2.googleapis.com/token",
+            "iat": now,
+            "exp": now + 3600
+        }).encode()).rstrip(b"=").decode()
+        
+        signing_input = f"{header}.{payload}"
+        
+        # Sign with private key using cryptography library
         try:
-            payload = {
-                "to": token,
-                "notification": {
-                    "title": title,
-                    "body": body,
-                    "sound": "default"
-                },
-                "data": data or {},
-                "priority": "high"
-            }
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.post(
-                    "https://fcm.googleapis.com/fcm/send",
-                    headers={
-                        "Authorization": f"key={FIREBASE_SERVER_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json=payload
-                )
-                if r.status_code == 200:
-                    print(f"[PUSH] Sent: {title}")
-                    return True
-                else:
-                    print(f"[PUSH] FCM failed: {r.status_code}")
-        except Exception as e:
-            print(f"[PUSH] Send failed: {e}")
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import padding
+            from cryptography.hazmat.backends import default_backend
+            
+            private_key = serialization.load_pem_private_key(
+                sa["private_key"].encode(),
+                password=None,
+                backend=default_backend()
+            )
+            signature = private_key.sign(signing_input.encode(), padding.PKCS1v15(), hashes.SHA256())
+            sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+            jwt_token = f"{signing_input}.{sig_b64}"
+        except ImportError:
+            print("[PUSH] cryptography library not installed - cannot sign JWT")
+            return None
+        
+        # Exchange JWT for access token
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": jwt_token
+                }
+            )
+            if r.status_code == 200:
+                return r.json().get("access_token")
+    except Exception as e:
+        print(f"[PUSH] Access token failed: {e}")
+    return None
 
-    # Fallback: store as alert (shown when app opens)
+
+async def send_push(title: str, body: str, data: dict = None) -> bool:
+    """Send FCM V1 push notification."""
+    token = get_push_token()
+    
+    if FIREBASE_PROJECT_ID and FIREBASE_SERVICE_ACCOUNT and token:
+        try:
+            access_token = await get_fcm_access_token()
+            if access_token:
+                message = {
+                    "message": {
+                        "token": token,
+                        "notification": {"title": title, "body": body},
+                        "data": {k: str(v) for k, v in (data or {}).items()},
+                        "android": {
+                            "priority": "high",
+                            "notification": {"sound": "default"}
+                        }
+                    }
+                }
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    r = await client.post(
+                        f"https://fcm.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/messages:send",
+                        headers={
+                            "Authorization": f"Bearer {access_token}",
+                            "Content-Type": "application/json"
+                        },
+                        json=message
+                    )
+                    if r.status_code == 200:
+                        print(f"[PUSH] Sent: {title}")
+                        return True
+                    else:
+                        print(f"[PUSH] FCM V1 failed: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            print(f"[PUSH] Send error: {e}")
+    
+    # Fallback: store as alert
     try:
         from app.core.proactive import create_alert
-        create_alert(
-            alert_type="notification",
-            title=title,
-            body=body,
-            priority="high",
-            source="tony_push"
-        )
+        create_alert(alert_type="notification", title=title, body=body,
+                    priority="high", source="tony_push")
         return True
     except Exception as e:
         print(f"[PUSH] Alert fallback failed: {e}")
@@ -131,6 +177,6 @@ async def send_push(title: str, body: str, data: dict = None) -> bool:
 
 
 async def tony_notify(message: str, priority: str = "normal"):
-    """Tony sends Matthew a notification. Simple interface."""
+    """Tony sends Matthew a notification."""
     title = "Tony" if priority == "normal" else "⚠️ Tony — Urgent"
     return await send_push(title, message)

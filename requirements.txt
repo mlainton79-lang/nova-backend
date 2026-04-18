@@ -8,3 +8,4 @@ pgvector==0.3.6
 
 yt-dlp
 Pillow
+cryptography
