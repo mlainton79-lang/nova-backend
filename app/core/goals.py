@@ -89,7 +89,17 @@ def init_goals_table():
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tony_goals_title_idx ON tony_goals(title)")
             conn.commit()
         except Exception:
-            pass  # logged above
+            conn.rollback()
+
+        # Remove duplicates keeping lowest id
+        try:
+            cur.execute("""
+                DELETE FROM tony_goals a USING tony_goals b
+                WHERE a.id > b.id AND a.title = b.title
+            """)
+            conn.commit()
+        except Exception:
+            conn.rollback()  # logged above
 
         for title, desc, cat, status, priority, progress, next_action, blockers, target in known_goals:
             cur.execute("""

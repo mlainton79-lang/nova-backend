@@ -215,6 +215,38 @@ async def tool_notify(message: str, priority: str = "normal") -> str:
     except Exception as e:
         return f"Notify failed: {e}"
 
+async def tool_get_weather(location: str = "Rotherham") -> str:
+    """Tony checks the weather."""
+    try:
+        from app.core.weather import get_weather
+        w = await get_weather()
+        return w.get("summary", "Weather unavailable") + " " + w.get("advice", "")
+    except Exception as e:
+        return f"Weather failed: {e}"
+
+async def tool_search_news(topic: str) -> str:
+    """Tony searches for recent news on a topic."""
+    try:
+        from app.core.news_monitor import search_news
+        results = await search_news(topic, count=5)
+        if not results:
+            return f"No recent news found for: {topic}"
+        lines = [f"Recent news on '{topic}':"]
+        for r in results[:5]:
+            lines.append(f"• {r.get('title','')} — {r.get('description','')[:100]}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"News search failed: {e}"
+
+async def tool_watch_topic(topic: str, keywords: str = None) -> str:
+    """Tony starts monitoring a topic for Matthew."""
+    try:
+        from app.core.news_monitor import add_watched_topic
+        ok = add_watched_topic(topic, keywords)
+        return f"Now monitoring: {topic}" if ok else "Failed to add topic"
+    except Exception as e:
+        return f"Watch topic failed: {e}"
+
 TOOLS = {
     "web_search": tool_web_search,
     "read_emails": tool_read_emails,
@@ -227,6 +259,9 @@ TOOLS = {
     "deep_research": tool_deep_research,
     "update_goal": tool_update_goal,
     "notify": tool_notify,
+    "get_weather": tool_get_weather,
+    "search_news": tool_search_news,
+    "watch_topic": tool_watch_topic,
 }
 
 TOOL_DESCRIPTIONS = """
@@ -242,6 +277,9 @@ Available tools (call as JSON in your response):
 - deep_research(topic, depth=2) — read full web pages and synthesise comprehensive research
 - update_goal(goal_title, progress, next_action=None) — update progress on one of Matthew's goals
 - notify(message, priority="normal") — send Matthew a push notification
+- get_weather(location="Rotherham") — get current weather
+- search_news(topic) — search for recent news on any topic
+- watch_topic(topic, keywords=None) — start monitoring a topic for Matthew
 
 To use a tool, respond with:
 TOOL: {"name": "tool_name", "args": {"arg1": "value1"}}

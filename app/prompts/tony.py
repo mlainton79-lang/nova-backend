@@ -116,6 +116,20 @@ def build_system_prompt(
     if context:
         parts.append(f"Additional context from Matthew:\n{context[:4000]}")
 
+    # Inject weather - Tony knows conditions
+    try:
+        import asyncio as _aw
+        from app.core.weather import get_weather_summary
+        try:
+            loop = _aw.get_event_loop()
+            weather = loop.run_until_complete(get_weather_summary()) if not loop.is_running() else ""
+        except Exception:
+            weather = ""
+        if weather:
+            parts.append(weather)
+    except Exception:
+        pass
+
     # Inject active goals — brief
     try:
         from app.core.goals import get_active_goals

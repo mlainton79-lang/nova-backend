@@ -28,6 +28,8 @@ from app.api.v1.endpoints import goals
 router.include_router(goals.router, tags=["goals"])
 from app.api.v1.endpoints import push
 router.include_router(push.router, tags=["push"])
+from app.api.v1.endpoints import monitor
+router.include_router(monitor.router, tags=["monitor"])
 
 # Initialise tables on startup
 try:
@@ -40,6 +42,13 @@ try:
     print("[ROUTER] RAG tables ready")
 except Exception as e:
     print(f"[ROUTER] RAG table init failed (non-fatal): {e}")
+
+# Initialise news monitor
+try:
+    from app.core.news_monitor import init_news_tables
+    init_news_tables()
+except Exception as e:
+    print(f"[ROUTER] News init failed: {e}")
 
 # Initialise goals system
 try:
