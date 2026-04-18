@@ -40,6 +40,10 @@ from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
 router.include_router(transcription.router, tags=["voice"])
+from app.api.v1.endpoints import vinted
+router.include_router(vinted.router, tags=["vinted"])
+from app.api.v1.endpoints import whatsapp
+router.include_router(whatsapp.router, tags=["whatsapp"])
 
 # Initialise tables on startup
 try:
