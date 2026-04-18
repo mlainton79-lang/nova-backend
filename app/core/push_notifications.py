@@ -17,8 +17,60 @@ import psycopg2
 from datetime import datetime
 from typing import Optional
 
-FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "nova-f83e3")
 FIREBASE_SERVICE_ACCOUNT = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
+
+def get_firebase_credentials():
+    """Get Firebase service account - from env var or DB."""
+    sa = FIREBASE_SERVICE_ACCOUNT
+    if sa:
+        return sa
+    # Try DB
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM tony_config WHERE key = 'firebase_service_account' LIMIT 1")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row:
+            return row[0]
+    except Exception:
+        pass
+    return ""
+
+def init_config_table():
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tony_config (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[CONFIG] Init failed: {e}")
+
+def store_config(key: str, value: str):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO tony_config (key, value) VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        """, (key, value))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[CONFIG] Store failed: {e}")
+        return False
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
@@ -73,11 +125,12 @@ def get_push_token() -> Optional[str]:
 
 async def get_fcm_access_token() -> Optional[str]:
     """Get OAuth2 access token for FCM V1 API using service account."""
-    if not FIREBASE_SERVICE_ACCOUNT:
+    creds = get_firebase_credentials()
+    if not creds:
         return None
     try:
         import time, base64, hashlib, hmac
-        sa = json.loads(FIREBASE_SERVICE_ACCOUNT)
+        sa = json.loads(creds)
         
         # Build JWT for service account auth
         now = int(time.time())
