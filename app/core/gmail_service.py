@@ -188,12 +188,28 @@ async def delete_email(email: str, message_id: str) -> bool:
         resp = await client.delete(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}", headers={"Authorization": f"Bearer {token}"})
         return resp.status_code == 204
 
+async def build_smart_query(raw_query: str) -> str:
+    """Convert natural language to Gmail search operators where possible."""
+    import re
+    q = raw_query
+    # If message contains an email address, use from: operator
+    email_match = re.search(r'[\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,}', q)
+    if email_match:
+        return f"from:{email_match.group()}"
+    # If contains "from X" or "emails from X" extract the name
+    from_match = re.search(r'(?:from|by)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', q)
+    if from_match:
+        name = from_match.group(1)
+        return f'from:"{name}"'
+    return q
+
 async def search_all_accounts(query: str, max_per_account: int = 10, label: str = "") -> list:
+    smart_query = await build_smart_query(query)
     accounts = get_all_accounts()
     all_results = []
     for account in accounts:
         try:
-            results = await list_emails(account, query=query, max_results=max_per_account, label=label)
+            results = await list_emails(account, query=smart_query, max_results=max_per_account, label=label)
             all_results.extend(results)
         except Exception as e:
             print(f"[GMAIL] Search failed for {account}: {e}")
