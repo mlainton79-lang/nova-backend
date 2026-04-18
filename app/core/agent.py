@@ -206,6 +206,15 @@ async def tool_update_goal(goal_title: str, progress: str, next_action: str = No
         return f"Goal update failed: {e}"
 
 
+async def tool_notify(message: str, priority: str = "normal") -> str:
+    """Tony sends Matthew a push notification."""
+    try:
+        from app.core.push_notifications import tony_notify
+        ok = await tony_notify(message, priority)
+        return "Notification sent" if ok else "Notification stored as alert"
+    except Exception as e:
+        return f"Notify failed: {e}"
+
 TOOLS = {
     "web_search": tool_web_search,
     "read_emails": tool_read_emails,
@@ -217,6 +226,7 @@ TOOLS = {
     "research_youtube": tool_research_youtube,
     "deep_research": tool_deep_research,
     "update_goal": tool_update_goal,
+    "notify": tool_notify,
 }
 
 TOOL_DESCRIPTIONS = """
@@ -231,6 +241,7 @@ Available tools (call as JSON in your response):
 - research_youtube(topic, max_videos=3) — search YouTube, watch top videos, synthesise
 - deep_research(topic, depth=2) — read full web pages and synthesise comprehensive research
 - update_goal(goal_title, progress, next_action=None) — update progress on one of Matthew's goals
+- notify(message, priority="normal") — send Matthew a push notification
 
 To use a tool, respond with:
 TOOL: {"name": "tool_name", "args": {"arg1": "value1"}}

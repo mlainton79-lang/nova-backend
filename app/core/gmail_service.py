@@ -129,8 +129,8 @@ def get_all_accounts() -> List[str]:
 
 async def list_emails(email: str, query: str = "", max_results: int = 20, label: str = "INBOX") -> list:
     token = await refresh_access_token(email)
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        params = {"maxResults": max_results}
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        params = {"maxResults": min(max_results, 10)}
         if label:
             params["labelIds"] = [label]
         if query:
@@ -139,8 +139,11 @@ async def list_emails(email: str, query: str = "", max_results: int = 20, label:
         resp.raise_for_status()
         messages = resp.json().get("messages", [])
         results = []
-        for msg in messages[:max_results]:
-            detail = await client.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}", headers={"Authorization": f"Bearer {token}"}, params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "To"]})
+        for msg in messages[:min(max_results, 10)]:
+            try:
+                detail = await client.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}", headers={"Authorization": f"Bearer {token}"}, params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "To"]})
+            except Exception:
+                continue
             if detail.status_code == 200:
                 d = detail.json()
                 headers = {h["name"]: h["value"] for h in d.get("payload", {}).get("headers", [])}

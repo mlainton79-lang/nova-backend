@@ -72,7 +72,20 @@ def init_proactive_tables():
 def create_alert(alert_type: str, title: str, body: str,
                   priority: str = "normal", source: str = None,
                   expires_hours: int = 48):
-    """Tony creates an alert for Matthew."""
+    """Tony creates an alert for Matthew and sends push if urgent."""
+    import asyncio
+    # Fire push notification for urgent alerts
+    if priority in ("urgent", "high"):
+        try:
+            from app.core.push_notifications import tony_notify
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(tony_notify(f"{title}: {body[:100]}", priority))
+            except Exception:
+                pass
+        except Exception:
+            pass
     try:
         conn = get_conn()
         cur = conn.cursor()

@@ -27,6 +27,7 @@ check "Calendar" "$BASE/api/v1/calendar/test"
 check "Vision" "$BASE/api/v1/vision/test"
 check "Capabilities" "$BASE/api/v1/capabilities/active"
 check "Agent" "$BASE/api/v1/agent/runs"
+check "Push" "$BASE/api/v1/push/status"
 
 echo ""
 echo "=== CASE STATUS ==="

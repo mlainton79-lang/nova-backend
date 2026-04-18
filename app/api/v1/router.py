@@ -26,6 +26,8 @@ from app.api.v1.endpoints import calendar
 router.include_router(calendar.router, tags=["calendar"])
 from app.api.v1.endpoints import goals
 router.include_router(goals.router, tags=["goals"])
+from app.api.v1.endpoints import push
+router.include_router(push.router, tags=["push"])
 
 # Initialise tables on startup
 try:
