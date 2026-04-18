@@ -87,3 +87,23 @@ async def get_weather_summary() -> str:
     if "error" in w:
         return ""
     return f"[WEATHER — {w['summary']} {w['advice']}]"
+
+
+async def get_location_from_ip() -> dict:
+    """Get approximate location from IP address. Free, no key needed."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("https://ipapi.co/json/")
+            if r.status_code == 200:
+                d = r.json()
+                return {
+                    "city": d.get("city", "Unknown"),
+                    "region": d.get("region", ""),
+                    "country": d.get("country_name", "UK"),
+                    "lat": d.get("latitude", LAT),
+                    "lon": d.get("longitude", LON),
+                    "source": "ip"
+                }
+    except Exception:
+        pass
+    return {"city": LOCATION, "region": "South Yorkshire", "country": "UK", "lat": LAT, "lon": LON, "source": "default"}
