@@ -17,7 +17,7 @@ from typing import Optional
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 # Daniel voice - natural British male
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "bIHbv24MWmeRgasZH58o")  # Will - natural British male
 AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "uksouth")
 GOOGLE_TTS_KEY = os.environ.get("GOOGLE_TTS_KEY", "")
