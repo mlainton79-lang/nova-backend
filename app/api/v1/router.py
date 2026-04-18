@@ -30,6 +30,8 @@ from app.api.v1.endpoints import push
 router.include_router(push.router, tags=["push"])
 from app.api.v1.endpoints import monitor
 router.include_router(monitor.router, tags=["monitor"])
+from app.api.v1.endpoints import voice
+router.include_router(voice.router, tags=["voice"])
 
 # Initialise tables on startup
 try:
