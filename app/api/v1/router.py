@@ -111,3 +111,10 @@ try:
     init_episodic_tables()
 except Exception as e:
     print(f"[ROUTER] Episodic memory init failed: {e}")
+
+# Initialise semantic memory
+try:
+    from app.core.semantic_memory import init_semantic_memory_tables
+    init_semantic_memory_tables()
+except Exception as e:
+    print(f"[ROUTER] Semantic memory init failed: {e}")

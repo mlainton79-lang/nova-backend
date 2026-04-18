@@ -33,6 +33,15 @@ async def startup_event():
     asyncio.create_task(autonomous_loop())
     print("[STARTUP] Tony autonomous loop started")
 
+    # Migrate existing memories to semantic index on first run
+    async def _migrate():
+        try:
+            from app.core.semantic_memory import migrate_existing_memories
+            await migrate_existing_memories()
+        except Exception as e:
+            print(f"[STARTUP] Semantic migration failed: {e}")
+    asyncio.create_task(_migrate())
+
 @app.get("/")
 def root():
     return {"service": "Nova Backend", "status": "running"}

@@ -77,8 +77,22 @@ def build_system_prompt(
     include_codebase: bool = False
 ) -> str:
     try:
-        from app.core.memory import format_memory_block
-        memory_block = format_memory_block()
+        # Semantic memory — retrieve most relevant memories for this conversation
+        from app.core.semantic_memory import format_semantic_memory_block
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.get_event_loop()
+            if loop.is_running():
+                # Can't await in sync context — fall back to flat memory
+                from app.core.memory import format_memory_block
+                memory_block = format_memory_block()
+            else:
+                memory_block = loop.run_until_complete(
+                    format_semantic_memory_block(context or "general")
+                )
+        except Exception:
+            from app.core.memory import format_memory_block
+            memory_block = format_memory_block()
     except Exception as e:
         print(f"[TONY] memory load failed: {e}")
         memory_block = ""

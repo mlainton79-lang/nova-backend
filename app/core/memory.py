@@ -16,6 +16,21 @@ def add_memory(category: str, text: str):
     except Exception as e:
         print(f"[MEMORY] add failed: {e}")
 
+    # Also index semantically for relevance-based retrieval
+    try:
+        import asyncio as _am_asyncio
+        from app.core.semantic_memory import add_semantic_memory
+        try:
+            loop = _am_asyncio.get_event_loop()
+            if loop.is_running():
+                _am_asyncio.create_task(add_semantic_memory(category, text))
+            else:
+                loop.run_until_complete(add_semantic_memory(category, text))
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[MEMORY] Semantic index failed: {e}")
+
 def calculate_age(birthdate_str: str) -> str:
     try:
         for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d %B %Y", "%B %d, %Y"):
