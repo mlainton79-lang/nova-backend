@@ -142,10 +142,12 @@ async def tony_speak(text: str, voice: str = "en-GB-RyanNeural") -> Optional[str
         return None
 
     # 1. ElevenLabs — best quality, most natural
+    print(f"[VOICE] ElevenLabs key set: {bool(ELEVENLABS_API_KEY)}, voice: {ELEVENLABS_VOICE_ID}")
     result = await _elevenlabs_speak(clean)
     if result:
         print("[VOICE] ElevenLabs OK")
         return result
+    print("[VOICE] ElevenLabs failed, trying Azure")
 
     # 2. Azure — good quality, 500k chars/month free
     result = await _azure_speak(clean)
