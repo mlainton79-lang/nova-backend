@@ -51,11 +51,11 @@ async def _elevenlabs_speak(text: str) -> Optional[str]:
                 },
                 json={
                     "text": text,
-                    "model_id": "eleven_turbo_v2_5",
+                    "model_id": "eleven_multilingual_v2",
                     "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75,
-                        "style": 0.3,
+                        "stability": 0.4,
+                        "similarity_boost": 0.85,
+                        "style": 0.35,
                         "use_speaker_boost": True
                     }
                 }

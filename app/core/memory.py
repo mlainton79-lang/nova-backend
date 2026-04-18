@@ -51,7 +51,7 @@ def format_memory_block(memories: list = None) -> str:
         if memories is None:
             conn = get_conn()
             cur = conn.cursor()
-            cur.execute("SELECT id, category, text, created_at FROM memories ORDER BY created_at DESC LIMIT 50")
+            cur.execute("SELECT id, category, text, created_at FROM memories ORDER BY created_at DESC LIMIT 100")
             rows = cur.fetchall()
             cur.close()
             conn.close()

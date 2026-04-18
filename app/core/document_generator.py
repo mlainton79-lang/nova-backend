@@ -48,33 +48,35 @@ def _create_pdf(title: str, body_text: str, sender_name: str = "Matthew Lainton"
     
     normal = ParagraphStyle(
         'Normal',
-        fontName='Helvetica',
+        fontName='Times-Roman',
         fontSize=11,
-        leading=16,
-        spaceAfter=8,
+        leading=17,
+        spaceAfter=10,
         alignment=TA_JUSTIFY
     )
     bold = ParagraphStyle(
         'Bold',
-        fontName='Helvetica-Bold',
+        fontName='Times-Bold',
         fontSize=11,
-        leading=16,
-        spaceAfter=8
+        leading=17,
+        spaceAfter=10
     )
     right = ParagraphStyle(
         'Right',
-        fontName='Helvetica',
+        fontName='Times-Roman',
         fontSize=11,
-        leading=14,
-        alignment=TA_RIGHT
+        leading=15,
+        alignment=TA_RIGHT,
+        spaceAfter=4
     )
     heading = ParagraphStyle(
         'Heading',
         fontName='Helvetica-Bold',
-        fontSize=13,
+        fontSize=12,
         leading=18,
-        spaceAfter=12,
-        spaceBefore=8
+        spaceAfter=14,
+        spaceBefore=10,
+        textColor=colors.HexColor('#1a1a2e')
     )
 
     story = []

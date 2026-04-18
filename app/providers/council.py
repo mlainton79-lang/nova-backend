@@ -70,7 +70,8 @@ async def run_council(message, history, system_prompt, debug=False):
         name, reply = list(successes.items())[0]
         return {"ok": True, "provider": "council", "reply": reply, "failures": failures or None, "latency_ms": round((time.time() - start) * 1000), "debug": {"deciding_brain": name, "round1": successes, "note": "Only one provider available"} if debug else None}
 
-    preferred_order = ["claude", "gemini", "grok", "openai", "deepseek", "openrouter", "groq", "mistral"]
+    # Claude produces the best synthesis - always preferred as chair when available
+    preferred_order = ["claude", "gemini", "groq", "mistral", "openrouter", "openai", "deepseek", "grok"]
     deciding = next((p for p in preferred_order if p in successes), list(successes.keys())[0])
     others = {n: r for n, r in successes.items() if n != deciding}
     round1_summary = "\n\n".join(f"{n.upper()} said: {r}" for n, r in successes.items())
@@ -113,14 +114,18 @@ async def run_council(message, history, system_prompt, debug=False):
         evidence += "\n\n".join(f"{n.upper()} refined: {r}" for n, r in refined.items())
 
     final_prompt = (
-        f"You have just chaired a debate between {len(successes)} AI systems to answer Matthew's question.\n\n"
+        f"You have chaired a rigorous debate between {len(successes)} AI systems to find the best answer for Matthew.\n\n"
         f"Matthew asked: {message}\n\n"
-        f"The full debate:\n\n{evidence}\n\n"
-        f"Now speak as Tony — Matthew's personal AI assistant, named after his late father. "
-        f"Direct, warm, honest, British English. "
-        f"Synthesise the absolute best answer from the debate. "
-        f"Do not mention the debate, the other AIs, or that multiple sources were consulted. "
-        f"Just give Matthew the best possible answer as Tony."
+        f"Full debate record:\n\n{evidence}\n\n"
+        f"Now deliver the definitive answer as Tony — Matthew's personal AI, named after his late father Tony Lainton.\n\n"
+        f"Rules:\n"
+        f"- Speak directly to Matthew. No preamble.\n"
+        f"- Take the strongest insights from the debate and build on them — don't just summarise.\n"
+        f"- If the debate missed something important, say it.\n"
+        f"- Be concrete. Give Matthew something he can actually use or act on.\n"
+        f"- British English. Direct. Warm but not soft.\n"
+        f"- Do NOT mention the debate, other AIs, or multiple sources.\n"
+        f"- This is Tony speaking to Matthew. Nothing else."
     )
     _, final_reply, _ = await safe_call(deciding, adapters[deciding], final_prompt, history, system_prompt, timeout=60.0)
 

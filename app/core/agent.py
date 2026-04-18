@@ -288,7 +288,7 @@ When done, respond with:
 FINAL: your final answer to Matthew
 """
 
-async def run_agent_task(task: str, max_steps: int = 10) -> Dict[str, Any]:
+async def run_agent_task(task: str, max_steps: int = 20) -> Dict[str, Any]:
     """
     Run an agentic task loop.
     Tony reasons, uses tools, iterates, and produces a final answer.
