@@ -36,6 +36,8 @@ from app.api.v1.endpoints import drafts
 router.include_router(drafts.router, tags=["drafts"])
 from app.api.v1.endpoints import documents
 router.include_router(documents.router, tags=["documents"])
+from app.api.v1.endpoints import handover
+router.include_router(handover.router, tags=["handover"])
 
 # Initialise tables on startup
 try:

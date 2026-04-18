@@ -237,6 +237,15 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject live system state summary
+    try:
+        from app.core.handover import format_handover_for_prompt
+        state = format_handover_for_prompt()
+        if state:
+            parts.append(state)
+    except Exception:
+        pass
+
     # Inject episodic memory — what Tony and Matthew have experienced together
     try:
         from app.core.episodic_memory import format_episodic_block
