@@ -177,4 +177,13 @@ def build_system_prompt(
         parts.append(f"CAPABILITIES: {', '.join(active[:10])}\nCAN BUILD: {', '.join(not_built[:5])} — say \"I\'ll build that\" if asked")
     except Exception:
         pass
+    # Inject self-eval accuracy — Tony knows his own track record
+    try:
+        from app.core.self_eval import get_eval_context_for_prompt
+        eval_ctx = get_eval_context_for_prompt()
+        if eval_ctx:
+            parts.append(eval_ctx)
+    except Exception:
+        pass
+
     return "\n\n".join(p for p in parts if p)
