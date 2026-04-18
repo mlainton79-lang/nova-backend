@@ -125,3 +125,10 @@ try:
     init_learning_tables()
 except Exception as e:
     print(f"[ROUTER] Learning init failed: {e}")
+
+# Initialise proactive intelligence
+try:
+    from app.core.proactive_intelligence import init_proactive_intelligence_tables
+    init_proactive_intelligence_tables()
+except Exception as e:
+    print(f"[ROUTER] Proactive intelligence init failed: {e}")
