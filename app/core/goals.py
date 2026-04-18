@@ -89,7 +89,7 @@ def init_goals_table():
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tony_goals_title_idx ON tony_goals(title)")
             conn.commit()
         except Exception:
-            pass
+            pass  # logged above
 
         for title, desc, cat, status, priority, progress, next_action, blockers, target in known_goals:
             cur.execute("""

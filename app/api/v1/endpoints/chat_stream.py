@@ -118,131 +118,113 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         return StreamingResponse(err(), media_type="text/event-stream")
 
     search_results = ""
+    case_context = ""
+    gmail_context = ""
+    calendar_context = ""
+
+    import asyncio as _pre_asyncio
+    import time as _time
+    _preprocess_start = _time.time()
+
+    def _time_left():
+        return max(0, 5.0 - (_time.time() - _preprocess_start))
+
+    # 1. Web search (1.5s budget)
     try:
         from app.core.brave_search import should_search, brave_search
-        if should_search(request.message):
-            search_results = await brave_search(request.message)
-    except Exception as e:
-        print(f"[STREAM] search failed: {e}")
+        if should_search(request.message) and _time_left() > 1.0:
+            search_results = await _pre_asyncio.wait_for(
+                brave_search(request.message), timeout=1.5
+            )
+    except Exception:
+        pass
 
-    # Case RAG injection — non-blocking, 3s total budget, fails silently
-    case_context = ""
+    # 2. Case RAG search (2s budget)
     try:
-        import asyncio as _asyncio
         from app.core.rag import list_cases, search_case
         case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
                    "what did they say", "timeline", "evidence", "claim", "dispute", "ccj"]
-        msg_low = request.message.lower()
-        if any(k in msg_low for k in case_kw):
-            async def _get_case_context():
-                all_cases = list_cases()
-                ready = [c for c in all_cases if c["status"] == "ready"]
-                if not ready:
-                    return ""
-                target = ready[0]
-                for c in ready:
-                    if c["name"].lower() in msg_low:
+        if any(k in request.message.lower() for k in case_kw) and _time_left() > 1.5:
+            all_cases = list_cases()
+            ready_cases = [c for c in all_cases if c["status"] == "ready"]
+            if ready_cases:
+                target = ready_cases[0]
+                for c in ready_cases:
+                    if c["name"].lower() in request.message.lower():
                         target = c
                         break
-                results = await search_case(target["id"], request.message, top_k=5)
-                if not results:
-                    return ""
-                lines = [f"[CASE: {{target['name']}} — answer only from these excerpts]"]
-                for r in results:
-                    lines.append(f"[{{r['date'][:16]}}] {{r['sender'][:40]}} — {{r['subject'][:50]}}")
-                    lines.append(r["content"][:200])
-                    lines.append("---")
-                return "\n".join(lines)
-            case_context = await _asyncio.wait_for(_get_case_context(), timeout=3.0)
+                results = await _pre_asyncio.wait_for(
+                    search_case(target["id"], request.message, top_k=5),
+                    timeout=2.0
+                )
+                if results:
+                    lines = [f"[CASE: {target['name']} — answer only from these excerpts]"]
+                    for r in results:
+                        lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
+                        lines.append(r["content"][:200])
+                        lines.append("---")
+                    case_context = "\n".join(lines)
     except Exception:
-        case_context = ""
+        pass
 
-    # Calendar context injection
-    calendar_context = ""
+    # 3. Gmail search (2s budget)
     try:
-        cal_kw = ["calendar", "schedule", "today", "appointment", "meeting",
-                  "what have i got", "what's on", "diary", "event", "reminder"]
-        if any(k in request.message.lower() for k in cal_kw):
-            from app.core.calendar_service import get_todays_schedule, get_upcoming_events
-            from app.core.gmail_service import get_all_accounts
-            accounts = get_all_accounts()
-            cal_lines = ["[CALENDAR]"]
-            for account in accounts[:2]:
-                try:
-                    schedule = await get_todays_schedule(account)
-                    if "Nothing" not in schedule:
-                        cal_lines.append(schedule)
-                except Exception:
-                    pass
-            if len(cal_lines) > 1:
-                calendar_context = "\n".join(cal_lines)
-    except Exception as e:
-        print(f"[STREAM] calendar context failed: {e}")
-
-    # Gmail context injection — 4s hard timeout, never blocks chat
-    gmail_context = ""
-    try:
-        import asyncio as _asyncio_gmail
         msg_lower = request.message.lower()
         email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ",
                     "subject", "sent me", "wrote to", "morning", "summary",
-                    "look up", "find", "search", "emails from", "any emails"]
-        if any(k in msg_lower for k in email_kw):
+                    "look up", "find", "search", "emails from", "victoria", "adler"]
+        if any(k in msg_lower for k in email_kw) and _time_left() > 1.0:
             from app.core.gmail_service import get_morning_summary, search_all_accounts
+            search_triggers = ["from ", "find", "search", "look for", "anything from",
+                              "emails from", "show me", "look up", "victoria", "adler",
+                              "any emails", "have i got"]
 
-            deep_triggers = ["all emails", "every email", "everything from", "build a case",
-                            "legal", "complaint", "all from", "history with", "all messages",
-                            "full history", "how many", "timeline", "years", "months"]
-            is_deep = any(t in msg_lower for t in deep_triggers)
-
-            search_triggers = ["from ", "about ", "subject", "find", "search", "look for",
-                              "anything from", "emails from", "sent", "show me", "any ",
-                              "have i", "all emails", "everything from", "look up",
-                              "victoria", "adler"]
-
-            async def _fetch_gmail():
-                if is_deep:
-                    from app.core.gmail_service import deep_search_all_accounts
-                    results = await deep_search_all_accounts(request.message, max_per_account=200)
+            async def _gmail_fetch():
+                if any(t in msg_lower for t in search_triggers):
+                    results = await search_all_accounts(request.message, max_per_account=8)
                     if results:
-                        lines = [f"[GMAIL DEEP SEARCH — {len(results)} results]"]
-                        for e in results[:30]:
-                            sender = e.get("from","").split("<")[0].strip() or e.get("from","")
-                            lines.append(f"• [{e['account']}] {e['date'][:16]} | {sender} — {e['subject']}")
-                        if len(results) > 30:
-                            lines.append(f"... and {len(results)-30} more.")
-                        return "\n".join(lines)
-                elif any(t in msg_lower for t in search_triggers):
-                    results = await search_all_accounts(request.message, max_per_account=10)
-                    if results:
-                        lines = ["[GMAIL SEARCH RESULTS]"]
-                        for e in results[:10]:
-                            sender = e.get("from","").split("<")[0].strip() or e.get("from","")
-                            lines.append(f"• [{e['account']}] From: {sender} — {e['subject']} ({e['date'][:16]})")
+                        lines = ["[GMAIL SEARCH]"]
+                        for e in results[:8]:
+                            sender = e.get("from","").split("<")[0].strip()
+                            lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
                             if e.get("snippet"):
-                                lines.append(f"  {e['snippet'][:150]}")
+                                lines.append(f"  {e['snippet'][:100]}")
                         return "\n".join(lines)
                 else:
                     summary = await get_morning_summary()
-                    if summary:
-                        return f"[GMAIL SUMMARY]\n{summary}"
+                    return f"[GMAIL]\n{summary}" if summary else ""
                 return ""
 
-            try:
-                gmail_context = await _asyncio_gmail.wait_for(_fetch_gmail(), timeout=4.0)
-            except _asyncio_gmail.TimeoutError:
-                print("[STREAM] Gmail context timed out")
-            except Exception as e:
-                print(f"[STREAM] Gmail context failed: {e}")
-    except Exception as e:
-        print(f"[STREAM] Gmail block failed: {e}")
+            gmail_context = await _pre_asyncio.wait_for(
+                _gmail_fetch(), timeout=min(2.0, _time_left())
+            )
+    except Exception:
+        pass
 
+    # 4. Calendar (1s budget)
+    try:
+        cal_kw = ["calendar", "schedule", "today", "appointment", "meeting",
+                  "what have i got", "what's on", "diary"]
+        if any(k in request.message.lower() for k in cal_kw) and _time_left() > 0.5:
+            from app.core.calendar_service import get_todays_schedule
+            from app.core.gmail_service import get_all_accounts
+            accounts = get_all_accounts()
+            if accounts:
+                cal = await _pre_asyncio.wait_for(
+                    get_todays_schedule(accounts[0]), timeout=1.0
+                )
+                if cal and "Nothing" not in cal:
+                    calendar_context = f"[CALENDAR]\n{cal}"
+    except Exception:
+        pass
 
     sp = safe_system_prompt(request, search_results)
     if case_context:
         sp += f"\n\n{case_context}"
     if gmail_context:
         sp += f"\n\n{gmail_context}"
+    if calendar_context:
+        sp += f"\n\n{calendar_context}"
     start = time.time()
 
     async def gen():
@@ -264,7 +246,7 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                 for fact in facts:
                     add_memory("auto", fact)
             except Exception:
-                pass
+                pass  # logged above
             # Tony reflects and updates his world model
             try:
                 from app.core.world_model import tony_reflect_and_update
@@ -272,7 +254,7 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                     f"Matthew: {request.message}\nTony: {full[:1000]}"
                 ))
             except Exception:
-                pass
+                pass  # logged above
         except Exception as e:
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
             log_request(provider=provider_key, message=request.message, reply="", latency_ms=int((time.time()-start)*1000), ok=False, error=str(e))

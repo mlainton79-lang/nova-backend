@@ -30,79 +30,84 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         log_request(provider="council", message=req.message, reply="", ok=False, error=reason)
         return CouncilResponse(ok=False, provider="council", reply="I cannot process that message.", error=reason)
 
-    # Auto search before Council deliberation
+    # Pre-processing: all context gathered with unified 5s budget
+    import asyncio as _pre_asyncio
+    import time as _ctime
+    _cstart = _ctime.time()
+    def _cleft(): return max(0, 5.0 - (_ctime.time() - _cstart))
+
     search_results = ""
+    case_context = ""
+    gmail_context = ""
+
+    # Web search
     try:
         from app.core.brave_search import should_search, brave_search
-        if should_search(req.message):
-            search_results = await brave_search(req.message)
-            if search_results:
-                print(f"[COUNCIL] Search results injected for: {req.message[:50]}")
-    except Exception as e:
-        print(f"[COUNCIL] search failed: {e}")
+        if should_search(req.message) and _cleft() > 1.0:
+            search_results = await _pre_asyncio.wait_for(brave_search(req.message), timeout=1.5)
+    except Exception:
+        pass
 
-    # Case RAG injection — non-blocking, 3s total budget, fails silently
-    case_context = ""
+    # Case RAG
     try:
-        import asyncio as _asyncio
         from app.core.rag import list_cases, search_case
         case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
                    "what did they say", "timeline", "evidence", "claim", "dispute", "ccj"]
-        msg_low = req.message.lower()
-        if any(k in msg_low for k in case_kw):
-            async def _get_case_context():
-                all_cases = list_cases()
-                ready = [c for c in all_cases if c["status"] == "ready"]
-                if not ready:
-                    return ""
+        if any(k in req.message.lower() for k in case_kw) and _cleft() > 1.5:
+            all_cases = list_cases()
+            ready = [c for c in all_cases if c["status"] == "ready"]
+            if ready:
                 target = ready[0]
                 for c in ready:
-                    if c["name"].lower() in msg_low:
-                        target = c
-                        break
-                results = await search_case(target["id"], req.message, top_k=5)
-                if not results:
-                    return ""
-                lines = [f"[CASE: {{target['name']}} — answer only from these excerpts]"]
-                for r in results:
-                    lines.append(f"[{{r['date'][:16]}}] {{r['sender'][:40]}} — {{r['subject'][:50]}}")
-                    lines.append(r["content"][:200])
-                    lines.append("---")
-                return "\n".join(lines)
-            case_context = await _asyncio.wait_for(_get_case_context(), timeout=3.0)
+                    if c["name"].lower() in req.message.lower():
+                        target = c; break
+                results = await _pre_asyncio.wait_for(
+                    search_case(target["id"], req.message, top_k=5), timeout=2.0)
+                if results:
+                    lines = [f"[CASE: {target['name']} — answer only from these excerpts]"]
+                    for r in results:
+                        lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
+                        lines.append(r["content"][:200])
+                        lines.append("---")
+                    case_context = "\n".join(lines)
     except Exception:
-        case_context = ""
+        pass
 
-    # Gmail context injection
-    gmail_context = ""
+    # Gmail
     try:
         msg_lower = req.message.lower()
-        email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ", "subject", "sent me", "wrote to", "morning", "summary"]
-        if any(k in msg_lower for k in email_kw):
+        email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ",
+                    "subject", "sent me", "wrote to", "morning", "look up", "find",
+                    "search", "emails from", "victoria", "adler"]
+        if any(k in msg_lower for k in email_kw) and _cleft() > 1.0:
             from app.core.gmail_service import get_morning_summary, search_all_accounts
-            search_triggers = ["from ", "about ", "subject", "find", "search", "look for", "anything from", "emails from", "sent", "show me", "any ", "have i", "all emails", "everything from"]
-            if any(t in msg_lower for t in search_triggers):
-                results = await search_all_accounts(req.message, max_per_account=10)
-                if results:
-                    lines = ["[GMAIL SEARCH RESULTS]"]
-                    for e in results[:10]:
-                        sender = e.get("from","").split("<")[0].strip() or e.get("from","")
-                        lines.append(f"• [{e['account']}] From: {sender} — {e['subject']} ({e['date']})")
-                        if e.get("snippet"):
-                            lines.append(f"  {e['snippet'][:150]}")
-                    gmail_context = "\n".join(lines)
-            else:
-                summary = await get_morning_summary()
-                if summary:
-                    gmail_context = "[GMAIL SUMMARY]\n" + summary
-    except Exception as e:
-        print(f"[COUNCIL] gmail context failed: {e}")
+            search_triggers = ["from ", "find", "search", "look for", "anything from",
+                              "emails from", "show me", "look up", "victoria", "adler"]
+
+            async def _gc():
+                if any(t in msg_lower for t in search_triggers):
+                    results = await search_all_accounts(req.message, max_per_account=8)
+                    if results:
+                        lines = ["[GMAIL SEARCH]"]
+                        for e in results[:8]:
+                            sender = e.get("from","").split("<")[0].strip()
+                            lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
+                            if e.get("snippet"):
+                                lines.append(f"  {e['snippet'][:100]}")
+                        return "\n".join(lines)
+                else:
+                    s = await get_morning_summary()
+                    return f"[GMAIL]\n{s}" if s else ""
+                return ""
+            gmail_context = await _pre_asyncio.wait_for(_gc(), timeout=min(2.0, _cleft()))
+    except Exception:
+        pass
+
 
     system_prompt = safe_system_prompt(req, search_results)
-    if case_context:
-        system_prompt += "\n\n" + case_context
-    if gmail_context:
-        system_prompt += "\n\n" + gmail_context
+    for ctx in [case_context, gmail_context]:
+        if ctx:
+            system_prompt += "\n\n" + ctx
 
     result = await run_council(req.message, req.history, system_prompt, debug=req.debug or False)
     reply = result.get("reply", "")

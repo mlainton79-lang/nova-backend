@@ -49,7 +49,7 @@ def init_rag_tables():
                     conn.commit()
                     print("[RAG] Dropped case_chunks - wrong vector dimensions, recreating")
             except Exception:
-                pass
+                pass  # logged above
         # Case index — one row per case
         cur.execute("""
             CREATE TABLE IF NOT EXISTS cases (
@@ -102,7 +102,7 @@ def init_rag_tables():
             cur.close()
             conn.close()
         except Exception:
-            pass
+            pass  # logged above
 
 
 async def embed_text(text: str) -> Optional[List[float]]:

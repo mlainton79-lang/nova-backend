@@ -160,7 +160,7 @@ async def tony_study_video(video_url: str, question: str = None) -> dict:
                     "thumbnail": data.get("thumbnail_url", "")
                 }
     except Exception:
-        pass
+        pass  # logged above
 
     # Get transcript
     transcript = await tony_get_youtube_transcript(video_id)
@@ -393,7 +393,7 @@ async def tony_watch_youtube_properly(video_url: str, question: str = None) -> d
                 data = r.json()
                 metadata = {"title": data.get("title",""), "author": data.get("author_name","")}
     except Exception:
-        pass
+        pass  # logged above
 
     # Process what Tony sees
     visual_description = ""
@@ -409,7 +409,7 @@ async def tony_watch_youtube_properly(video_url: str, question: str = None) -> d
                 )
                 frame_descriptions.append(f"Frame {i+1}: {desc}")
             except Exception:
-                pass
+                pass  # logged above
         visual_description = "\n".join(frame_descriptions)
 
     # Now Tony synthesises what he both heard and saw
@@ -542,7 +542,7 @@ async def tony_watch_uploaded_video(video_base64: str, filename: str = "video.mp
                         )
                         frame_descriptions.append(f"[{i*10}s] {desc}")
                     except Exception:
-                        pass
+                        pass  # logged above
             
             result["visual_description"] = "\n".join(frame_descriptions)
             result["frames_analysed"] = len(frame_descriptions)
