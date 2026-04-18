@@ -341,6 +341,18 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             sp += f"\n\n[RESPONSE ADJUSTMENT]: {ei['adjustment']}"
     except Exception as e:
         print(f"[CHAT_STREAM] EI failed: {e}")
+
+    # Chain-of-thought reasoning for complex questions
+    try:
+        from app.core.reasoning import reason_before_responding
+        reasoning = await asyncio.wait_for(
+            reason_before_responding(request.message, sp[:800]),
+            timeout=8.0
+        )
+        if reasoning:
+            sp += f"\n\n[TONY'S REASONING — use this to inform your response, don't repeat it verbatim]:\n{reasoning}"
+    except Exception as e:
+        print(f"[CHAT_STREAM] Reasoning failed: {e}")
     if case_context:
         sp += f"\n\n{case_context}"
     if gmail_context:
