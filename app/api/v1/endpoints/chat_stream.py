@@ -339,11 +339,29 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         _calendar_search(), _emotional_intelligence(), _reasoning()
     )
 
-    # Use minimal system prompt when image is present to avoid context overflow
+    # Build system prompt with new intelligent assembler
     if request.image_base64:
         sp = "You are Tony, Matthew Lainton's personal AI assistant. British English. Direct and warm. Describe what you see and answer the question."
     else:
-        sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
+        try:
+            from app.core.prompt_assembler import build_prompt
+            code_kw = ["code","function","file","class","bug","error","fix","kotlin","python","api","push","patch","build","nova"]
+            inc_codebase = any(k in request.message.lower() for k in code_kw)
+            sp = await build_prompt(
+                context=request.context,
+                document_text=request.document_text,
+                document_base64=request.document_base64,
+                document_name=request.document_name,
+                document_mime=request.document_mime,
+                include_codebase=inc_codebase,
+                user_message=request.message,
+                image_present=bool(request.image_base64)
+            )
+            if search_results:
+                sp += f"\n\n[WEB SEARCH RESULTS]:\n{search_results}"
+        except Exception as e:
+            print(f"[CHAT_STREAM] Prompt assembler failed: {e}, using fallback")
+            sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
 
     if case_context:
         sp += f"\n\n{case_context}"

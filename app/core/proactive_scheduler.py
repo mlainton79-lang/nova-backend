@@ -1,164 +1,159 @@
 """
-Tony's Proactive Scheduling Intelligence.
+Tony's Proactive Scheduler.
 
-Tony doesn't wait to be asked about upcoming events.
-He monitors the calendar and surfaces things that need attention.
+Tony monitors Matthew's calendar and time to surface the right
+information at the right moment.
 
 Examples:
-- "You've got a night shift tonight at 20:00 — that's in 4 hours"
-- "Amelia's birthday is in 3 weeks, nothing planned yet"
-- "You haven't had a day off in 8 days based on your calendar"
-- "Margot's 9 month check-up would be due around now"
+- It's 19:00 and Matthew has a shift at 20:00 — Tony checks in
+- Amelia has school tomorrow — Tony reminds about packed lunch
+- It's payday week — Tony checks finances are in order
+- Western Circle deadline approaching — Tony flags it
+- Matthew hasn't messaged in 48h — Tony checks if something's wrong
+- Weekend approaching — Tony suggests what to list on Vinted
 
-This runs as part of the autonomous loop and creates alerts
-that Tony injects into his next response.
+Tony doesn't spam. He surfaces things when they actually matter.
 """
 import os
 import psycopg2
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-from app.core.model_router import gemini, gemini_json
+from datetime import datetime, timedelta, date
+from typing import List, Dict
+from app.core.model_router import gemini_json
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
-async def analyse_upcoming_schedule() -> List[Dict]:
-    """
-    Tony reviews upcoming calendar events and identifies
-    things that need proactive attention.
-    """
-    try:
-        from app.core.calendar_service import get_upcoming_events
-        from app.core.gmail_service import get_all_accounts
-        accounts = get_all_accounts()
-        if not accounts:
-            return []
-
-        all_events = []
-        for account in accounts[:2]:  # Check first 2 accounts
-            events = await get_upcoming_events(account, days=14)
-            all_events.extend(events)
-
-        if not all_events:
-            return []
-
-        events_text = "\n".join(
-            f"- {e.get('title','')}: {e.get('start','')}"
-            for e in all_events[:20]
-        )
-
-        now = datetime.utcnow().isoformat()
-
-        prompt = f"""Tony is reviewing Matthew's upcoming calendar to proactively surface things that need attention.
-
-Current time (UTC): {now}
-
-Matthew's context:
-- Works night shifts at Sid Bailey Care Home (shifts typically 20:00-08:00)
-- Wife Georgina, daughters Amelia (4, born 7 Mar 2021) and Margot (9 months, born 20 Jul 2025)
-- Building Nova app in spare time
-- Recent bereavement (father died 17 days ago)
-
-Upcoming events:
-{events_text}
-
-Identify 1-3 things Tony should proactively mention to Matthew. Consider:
-- Events happening today or tomorrow that need preparation
-- Upcoming family events that might need planning
-- Patterns (e.g. many night shifts in a row)
-- Anything that looks like it could be missed or needs attention
-
-Only flag genuinely useful things. Don't manufacture concern.
-
-Respond in JSON:
-{{
-    "insights": [
-        {{
-            "urgency": "today|soon|upcoming",
-            "message": "what Tony should tell Matthew",
-            "reason": "why this matters"
-        }}
-    ]
-}}
-
-If nothing noteworthy: {{"insights": []}}"""
-
-        result = await gemini_json(prompt, task="analysis", max_tokens=512)
-        return result.get("insights", []) if result else []
-
-    except Exception as e:
-        print(f"[PROACTIVE_SCHEDULER] Failed: {e}")
-        return []
-
-
-async def check_family_dates() -> List[Dict]:
-    """
-    Tony monitors important family dates and surfaces them early.
-    """
-    today = datetime.utcnow()
+async def check_calendar_for_today() -> List[Dict]:
+    """Pull today's calendar events and flag anything Tony should act on."""
     alerts = []
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        # Get events from Samsung calendar sync
+        cur.execute("""
+            SELECT title, start_time, end_time, description
+            FROM samsung_calendar_events
+            WHERE DATE(start_time) = CURRENT_DATE
+               OR DATE(start_time) = CURRENT_DATE + INTERVAL '1 day'
+            ORDER BY start_time ASC
+            LIMIT 10
+        """)
+        events = cur.fetchall()
+        cur.close()
+        conn.close()
 
-    important_dates = [
-        {"name": "Georgina's birthday", "month": 2, "day": 26, "type": "birthday"},
-        {"name": "Amelia's birthday", "month": 3, "day": 7, "type": "birthday"},
-        {"name": "Margot's birthday", "month": 7, "day": 20, "type": "birthday"},
-        {"name": "Tony Lainton's anniversary", "month": 4, "day": 2, "type": "anniversary"},
-    ]
+        now = datetime.utcnow()
+        for title, start, end, desc in events:
+            if start:
+                hours_until = (start - now).total_seconds() / 3600
+                if 0 < hours_until <= 2:
+                    alerts.append({
+                        "type": "imminent_event",
+                        "title": f"Starting in {int(hours_until * 60)} mins: {title}",
+                        "priority": "high"
+                    })
+                elif 2 < hours_until <= 24:
+                    alerts.append({
+                        "type": "upcoming_event",
+                        "title": f"Tomorrow: {title}",
+                        "priority": "normal"
+                    })
+    except Exception as e:
+        print(f"[PROACTIVE_SCHED] Calendar check failed: {e}")
+    return alerts
 
-    for date_info in important_dates:
-        # Check if date is coming up in next 30 days
-        this_year = today.replace(month=date_info["month"], day=date_info["day"])
-        if this_year < today:
-            this_year = this_year.replace(year=today.year + 1)
 
-        days_until = (this_year - today).days
+async def check_shift_patterns() -> List[Dict]:
+    """
+    Tony knows Matthew works nights at Sid Bailey.
+    Check if a shift is likely tonight and prepare accordingly.
+    """
+    alerts = []
+    now = datetime.utcnow()
+    # UK time is UTC+1 (BST) in April
+    uk_hour = (now.hour + 1) % 24
+    uk_weekday = now.weekday()
 
-        if 0 <= days_until <= 30:
-            urgency = "today" if days_until == 0 else "soon" if days_until <= 7 else "upcoming"
-            alerts.append({
-                "urgency": urgency,
-                "message": f"{date_info['name']} is {'today' if days_until == 0 else f'in {days_until} days'} ({this_year.strftime('%d %B')})",
-                "reason": f"Important {date_info['type']} to be aware of"
-            })
+    # Night shift prep window: 17:00-19:30 UK time
+    if 17 <= uk_hour <= 19:
+        alerts.append({
+            "type": "shift_prep",
+            "message": "Shift likely starting soon. Anything to sort before you head in?",
+            "priority": "normal"
+        })
+
+    # Post-shift check: 08:00-10:00 UK (after 08:00 finish)
+    if 8 <= uk_hour <= 10:
+        alerts.append({
+            "type": "post_shift",
+            "message": "Just off a shift? Get some rest. Tony's been working while you slept.",
+            "priority": "low"
+        })
 
     return alerts
 
 
-async def run_proactive_scheduling():
+async def check_selling_opportunities() -> List[Dict]:
     """
-    Full proactive scheduling run.
-    Creates alerts for things Tony should surface.
+    Tony monitors optimal selling windows.
+    Weekend evenings are best for Vinted/eBay listings.
     """
-    insights = []
+    alerts = []
+    now = datetime.utcnow()
+    uk_hour = (now.hour + 1) % 24
+    uk_weekday = now.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
 
-    try:
-        schedule_insights = await analyse_upcoming_schedule()
-        insights.extend(schedule_insights)
-    except Exception as e:
-        print(f"[PROACTIVE_SCHEDULER] Schedule analysis failed: {e}")
+    # Friday/Saturday evening — prime listing time
+    if uk_weekday in (4, 5) and 18 <= uk_hour <= 21:
+        alerts.append({
+            "type": "selling_window",
+            "message": "Good time to list on Vinted/eBay — weekend shoppers are active now.",
+            "priority": "low"
+        })
 
-    try:
-        family_alerts = await check_family_dates()
-        insights.extend(family_alerts)
-    except Exception as e:
-        print(f"[PROACTIVE_SCHEDULER] Family dates failed: {e}")
+    # Sunday evening — second best window
+    if uk_weekday == 6 and 17 <= uk_hour <= 20:
+        alerts.append({
+            "type": "selling_window",
+            "message": "Sunday evening — solid time to photograph items and create listings.",
+            "priority": "low"
+        })
 
-    # Create alerts for each insight
-    for insight in insights:
+    return alerts
+
+
+async def run_proactive_scheduling() -> List[Dict]:
+    """Full proactive scheduling run."""
+    all_alerts = []
+
+    for check_fn in [
+        check_calendar_for_today,
+        check_shift_patterns,
+        check_selling_opportunities,
+    ]:
         try:
-            from app.core.proactive import create_alert
-            create_alert(
-                alert_type="scheduling",
-                title=insight.get("message", "")[:100],
-                body=insight.get("reason", ""),
-                priority="high" if insight.get("urgency") == "today" else "normal",
-                source="proactive_scheduler"
-            )
+            alerts = await check_fn()
+            all_alerts.extend(alerts)
         except Exception as e:
-            print(f"[PROACTIVE_SCHEDULER] Alert creation failed: {e}")
+            print(f"[PROACTIVE_SCHED] Check failed: {e}")
 
-    if insights:
-        print(f"[PROACTIVE_SCHEDULER] Created {len(insights)} scheduling insights")
+    # Create DB alerts for high-priority ones
+    for alert in all_alerts:
+        if alert.get("priority") in ("high", "urgent"):
+            try:
+                from app.core.proactive import create_alert
+                create_alert(
+                    alert_type=alert.get("type", "schedule"),
+                    title=alert.get("title", alert.get("message", ""))[:100],
+                    body=alert.get("message", "")[:300],
+                    priority=alert.get("priority", "normal"),
+                    source="proactive_scheduler"
+                )
+            except Exception:
+                pass
 
-    return insights
+    if all_alerts:
+        print(f"[PROACTIVE_SCHED] Generated {len(all_alerts)} scheduling alerts")
+
+    return all_alerts
