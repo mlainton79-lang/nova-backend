@@ -83,6 +83,15 @@ async def build_prompt(
             used += tokens
         return True
 
+    # 0. Handover state (what Tony needs to know from last session)
+    try:
+        from app.core.handover import format_handover_for_prompt
+        handover = format_handover_for_prompt()
+        if handover:
+            add_section(handover)
+    except Exception:
+        pass
+
     # 1. Active alerts (urgent — always check first)
     try:
         conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")
