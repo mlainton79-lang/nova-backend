@@ -163,3 +163,10 @@ try:
     init_banking_tables()
 except Exception as e:
     print(f"[ROUTER] Banking init failed: {e}")
+
+# Initialise YouTube monitor
+try:
+    from app.core.youtube_monitor import init_youtube_tables
+    init_youtube_tables()
+except Exception as e:
+    print(f"[ROUTER] YouTube monitor init failed: {e}")
