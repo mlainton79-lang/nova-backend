@@ -300,6 +300,21 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject Tony's recent journal reflections for continuity
+    try:
+        from app.core.tony_journal import get_recent_journal
+        import asyncio as _tj_asyncio
+        try:
+            loop = _tj_asyncio.get_event_loop()
+            if not loop.is_running():
+                journal = loop.run_until_complete(get_recent_journal(days=2))
+                if journal:
+                    parts.append(journal)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     # Inject living memory - Tony's current picture of Matthew
     try:
         from app.core.living_memory import get_living_memory_for_prompt

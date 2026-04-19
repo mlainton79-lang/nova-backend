@@ -186,3 +186,10 @@ try:
     init_pattern_tables()
 except Exception as e:
     print(f"[ROUTER] Pattern recognition init failed: {e}")
+
+# Initialise Tony's journal
+try:
+    from app.core.tony_journal import init_journal_tables
+    init_journal_tables()
+except Exception as e:
+    print(f"[ROUTER] Journal init failed: {e}")

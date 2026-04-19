@@ -34,9 +34,15 @@ async def autonomous_loop():
             from app.core.self_improvement import run_self_improvement
             from app.core.youtube_monitor import run_youtube_monitoring
             from app.core.pattern_recognition import run_pattern_analysis
+            from app.core.income_engine import run_income_intelligence
+            from app.core.goal_executor import run_goal_execution
+            from app.core.tony_journal import write_daily_reflection
             await run_self_improvement()
             await run_youtube_monitoring()
             await run_pattern_analysis()
+            await run_income_intelligence()
+            await run_goal_execution()
+            await write_daily_reflection()
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
