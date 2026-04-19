@@ -339,7 +339,11 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         _calendar_search(), _emotional_intelligence(), _reasoning()
     )
 
-    sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
+    # Use minimal system prompt when image is present to avoid context overflow
+    if request.image_base64:
+        sp = "You are Tony, Matthew Lainton's personal AI assistant. British English. Direct and warm. Describe what you see and answer the question."
+    else:
+        sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
 
     if case_context:
         sp += f"\n\n{case_context}"
