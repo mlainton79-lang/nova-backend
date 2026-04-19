@@ -61,6 +61,18 @@ async def autonomous_loop():
             await write_daily_reflection()
             from app.core.self_repair import run_self_repair_cycle
             await run_self_repair_cycle()
+            # Code intelligence - Tony improves his own functions
+            try:
+                from app.core.code_intelligence import run_code_intelligence_cycle
+                await run_code_intelligence_cycle()
+            except Exception as e:
+                print(f"[MAIN] Code intelligence error: {e}")
+            # Memory consolidation
+            try:
+                from app.core.memory_consolidator import run_memory_consolidation
+                await run_memory_consolidation()
+            except Exception as e:
+                print(f"[MAIN] Memory consolidation error: {e}")
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
