@@ -73,6 +73,12 @@ async def autonomous_loop():
                 await run_memory_consolidation()
             except Exception as e:
                 print(f"[MAIN] Memory consolidation error: {e}")
+            # Meta-cognition - Tony thinks about his own thinking
+            try:
+                from app.core.meta_cognition import run_meta_cognition
+                await run_meta_cognition()
+            except Exception as e:
+                print(f"[MAIN] Meta-cognition error: {e}")
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
