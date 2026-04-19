@@ -79,6 +79,12 @@ async def autonomous_loop():
                 await run_meta_cognition()
             except Exception as e:
                 print(f"[MAIN] Meta-cognition error: {e}")
+            # Strategic advisor - weekly life assessment
+            try:
+                from app.core.strategic_advisor import run_strategic_advisor
+                await run_strategic_advisor()
+            except Exception as e:
+                print(f"[MAIN] Strategic advisor error: {e}")
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
