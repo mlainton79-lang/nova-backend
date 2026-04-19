@@ -85,6 +85,12 @@ async def autonomous_loop():
                 await run_strategic_advisor()
             except Exception as e:
                 print(f"[MAIN] Strategic advisor error: {e}")
+            # Financial intelligence from emails
+            try:
+                from app.core.financial_intelligence import run_financial_intelligence
+                await run_financial_intelligence()
+            except Exception as e:
+                print(f"[MAIN] Financial intelligence error: {e}")
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")

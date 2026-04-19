@@ -208,5 +208,12 @@ try:
 except Exception as e:
     print(f"[ROUTER] Email agent init failed: {e}")
 
+# Initialise financial intelligence
+try:
+    from app.core.financial_intelligence import init_financial_tables
+    init_financial_tables()
+except Exception as e:
+    print(f"[ROUTER] Financial intelligence init failed: {e}")
+
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])
