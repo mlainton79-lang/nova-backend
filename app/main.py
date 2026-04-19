@@ -22,9 +22,11 @@ async def autonomous_loop():
             from app.core.learning import run_weekly_learning_synthesis
             from app.core.proactive_intelligence import run_proactive_intelligence
             from app.core.whatsapp import check_and_notify_urgent_alerts
+            from app.core.proactive_scheduler import run_proactive_scheduling
             await tony_work_on_goals()
             await run_proactive_scan()
             await run_proactive_intelligence()
+            await run_proactive_scheduling()
             await check_and_notify_urgent_alerts()
             await scan_and_draft_replies()
             await run_weekly_learning_synthesis()
