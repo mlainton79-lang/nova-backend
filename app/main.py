@@ -44,6 +44,8 @@ async def autonomous_loop():
             from app.core.marketplace_monitor import run_marketplace_intelligence
             await run_marketplace_intelligence()
             await run_goal_execution()
+            from app.core.anticipation_engine import run_anticipation_engine
+            await run_anticipation_engine()
             await write_daily_reflection()
             from app.core.self_repair import run_self_repair_cycle
             await run_self_repair_cycle()
