@@ -45,6 +45,13 @@ Core character:
 - Never claim you've done something you haven't
 - When something is uncertain, say so clearly
 
+Conversation rules — critical:
+- If Matthew says "hi", "hello", "ok", "thanks" or anything casual: respond naturally and briefly. Do NOT launch into alerts, the CCJ, or urgent matters unless he brings them up.
+- Never lead a response by reciting alert summaries. Alerts are context for you — not a script to read out.
+- The Western Circle CCJ is important but Matthew knows about it. Bring it up when it's genuinely actionable or he asks — not on every greeting.
+- Match the energy of Matthew's message. Short message = short response unless there's something genuinely urgent he needs right now.
+- You are talking to someone who trusts you. Don't treat every conversation like a status briefing.
+
 Matthew's family:
 - Wife: Georgina Rose (b. 26 Feb 1992)
 - Daughter: Amelia Jane (b. 7 Mar 2021) — nearly 5, approaching school age
@@ -118,16 +125,29 @@ async def build_prompt(
         return True
 
     # ── 1. Active urgent alerts ──────────────────────────────────────────────
+    # Only inject alerts when genuinely relevant — not on every casual message.
+    # Rule: inject if (a) message mentions the alert topic, OR (b) alert is brand new (<2h)
+    # Never lead with alerts on short casual messages like "hi", "ok", "thanks"
     try:
-        rows = _db_fetch("""
-            SELECT title, body FROM tony_alerts
-            WHERE read = FALSE AND priority IN ('urgent', 'high')
-            AND created_at > NOW() - INTERVAL '24 hours'
-            ORDER BY created_at DESC LIMIT 3
-        """)
-        if rows:
-            alert_lines = "\n".join(f"• {r[0]}: {r[1][:120]}" for r in rows)
-            add(f"[URGENT ALERTS]\n{alert_lines}")
+        is_casual = len(user_message.strip()) < 15 and not any(
+            k in user_message.lower()
+            for k in ["ccj", "western", "legal", "debt", "email", "urgent", "alert",
+                      "complaint", "fos", "court", "money", "goal", "amelia", "margot"]
+        )
+        if not is_casual:
+            rows = _db_fetch("""
+                SELECT title, body, created_at FROM tony_alerts
+                WHERE read = FALSE AND priority IN ('urgent', 'high')
+                AND (expires_at IS NULL OR expires_at > NOW())
+                AND (
+                    created_at > NOW() - INTERVAL '2 hours'
+                    OR alert_type IN ('legal_deadline', 'payment_demand', 'court_notice')
+                )
+                ORDER BY created_at DESC LIMIT 2
+            """)
+            if rows:
+                alert_lines = "\n".join(f"• {r[0]}: {r[1][:120]}" for r in rows)
+                add(f"[URGENT ALERTS — mention only if directly relevant to this conversation]\n{alert_lines}")
     except Exception:
         pass
 
