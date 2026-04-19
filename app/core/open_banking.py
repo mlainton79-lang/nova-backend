@@ -28,6 +28,11 @@ import psycopg2
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
+# Read at request time not import time to pick up Railway env vars
+def _get_client_id(): return os.environ.get("TRUELAYER_CLIENT_ID", "")
+def _get_client_secret(): return os.environ.get("TRUELAYER_CLIENT_SECRET", "")
+def _get_redirect_uri(): return os.environ.get("TRUELAYER_REDIRECT_URI", "https://web-production-be42b.up.railway.app/api/v1/banking/callback")
+
 TRUELAYER_CLIENT_ID = os.environ.get("TRUELAYER_CLIENT_ID", "")
 TRUELAYER_CLIENT_SECRET = os.environ.get("TRUELAYER_CLIENT_SECRET", "")
 TRUELAYER_REDIRECT_URI = os.environ.get(
@@ -81,21 +86,22 @@ def init_banking_tables():
 
 def get_auth_url() -> str:
     """Generate TrueLayer OAuth URL for bank connection."""
-    if not TRUELAYER_CLIENT_ID:
+    client_id = _get_client_id()
+    if not client_id:
         return ""
     import urllib.parse
     params = {
         "response_type": "code",
-        "client_id": TRUELAYER_CLIENT_ID,
+        "client_id": client_id,
         "scope": "info accounts balance transactions offline_access",
-        "redirect_uri": TRUELAYER_REDIRECT_URI,
+        "redirect_uri": _get_redirect_uri(),
         "providers": "uk-ob-all uk-oauth-all",
     }
     return f"{TRUELAYER_AUTH_URL}/?{urllib.parse.urlencode(params)}"
 
 
 def is_configured() -> bool:
-    return bool(TRUELAYER_CLIENT_ID and TRUELAYER_CLIENT_SECRET)
+    return bool(_get_client_id() and _get_client_secret())
 
 
 async def get_access_token() -> Optional[str]:
