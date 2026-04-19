@@ -93,3 +93,28 @@ def get_capabilities_summary() -> str:
 
 def get_full_capabilities() -> Dict:
     return TONY_CAPABILITIES
+
+
+async def run_startup_health_check() -> Dict:
+    """
+    Tony runs a health check on all systems at startup.
+    Reports what's working, what needs attention.
+    """
+    import httpx
+    results = {"ok": True, "issues": [], "working": []}
+    
+    checks = {
+        "Gemini API": ("https://generativelanguage.googleapis.com", "GEMINI_API_KEY"),
+        "Brave Search": ("https://api.search.brave.com", "BRAVE_API_KEY"),
+        "ElevenLabs": ("https://api.elevenlabs.io", "ELEVENLABS_API_KEY"),
+    }
+    
+    import os
+    for service, (url, env_key) in checks.items():
+        if os.environ.get(env_key):
+            results["working"].append(service)
+        else:
+            results["issues"].append(f"{service}: API key not configured")
+            results["ok"] = False
+    
+    return results

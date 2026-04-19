@@ -43,6 +43,8 @@ async def autonomous_loop():
             await run_income_intelligence()
             await run_goal_execution()
             await write_daily_reflection()
+            from app.core.self_repair import run_self_repair_cycle
+            await run_self_repair_cycle()
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
@@ -71,6 +73,17 @@ async def startup_event():
         except Exception as e:
             print(f"[STARTUP] Memory dedup failed: {e}")
     asyncio.create_task(_dedup())
+
+    # Run self-repair cycle on startup
+    async def _self_repair():
+        await asyncio.sleep(60)  # After everything settles
+        try:
+            from app.core.self_repair import run_self_repair_cycle
+            result = await run_self_repair_cycle()
+            print(f"[STARTUP] Self-repair: {result.get('health', {}).get('overall', 'unknown')}")
+        except Exception as e:
+            print(f"[STARTUP] Self-repair failed: {e}")
+    asyncio.create_task(_self_repair())
 
 @app.get("/")
 def root():
