@@ -403,6 +403,16 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] Living memory update failed: {e}")
 
+            try:
+                from app.core.pattern_recognition import analyse_message_for_patterns
+                from datetime import datetime
+                now = datetime.utcnow()
+                asyncio.create_task(
+                    analyse_message_for_patterns(request.message, now.hour, now.weekday())
+                )
+            except Exception as e:
+                print(f"[CHAT_STREAM] Pattern analysis failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"

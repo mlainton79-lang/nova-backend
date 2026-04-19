@@ -285,6 +285,21 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject pattern insights - Tony's learned understanding of Matthew
+    try:
+        from app.core.pattern_recognition import get_pattern_insights
+        import asyncio as _pr_asyncio
+        try:
+            loop = _pr_asyncio.get_event_loop()
+            if not loop.is_running():
+                patterns = loop.run_until_complete(get_pattern_insights())
+                if patterns:
+                    parts.append(patterns)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     # Inject living memory - Tony's current picture of Matthew
     try:
         from app.core.living_memory import get_living_memory_for_prompt

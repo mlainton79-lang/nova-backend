@@ -179,3 +179,10 @@ try:
     init_correspondence_tables()
 except Exception as e:
     print(f"[ROUTER] Correspondence init failed: {e}")
+
+# Initialise pattern recognition
+try:
+    from app.core.pattern_recognition import init_pattern_tables
+    init_pattern_tables()
+except Exception as e:
+    print(f"[ROUTER] Pattern recognition init failed: {e}")

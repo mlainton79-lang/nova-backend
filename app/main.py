@@ -33,8 +33,10 @@ async def autonomous_loop():
             await run_autonomous_improvement()
             from app.core.self_improvement import run_self_improvement
             from app.core.youtube_monitor import run_youtube_monitoring
+            from app.core.pattern_recognition import run_pattern_analysis
             await run_self_improvement()
             await run_youtube_monitoring()
+            await run_pattern_analysis()
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
