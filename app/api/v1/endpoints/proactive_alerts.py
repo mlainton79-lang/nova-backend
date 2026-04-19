@@ -1,73 +1,45 @@
-from fastapi import APIRouter, Depends, HTTPException
+"""
+Proactive alerts endpoint — Matthew's pending alerts.
+"""
+from fastapi import APIRouter, Depends
 from app.core.security import verify_token
-import os
-import psycopg2
-import httpx
-from pydantic import BaseModel
-
-# Assuming Email API and Push API keys are set as environment variables
-PUSH_API_KEY = os.environ.get("KEY_PUSHPRO", "")
-EMAIL_API_KEY = os.environ.get("KEY_EMAILAPI", "")
-
-# Database connection
-conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
-cur = conn.cursor()
 
 router = APIRouter()
 
-class EmailNotification(BaseModel):
-    subject: str
-    body: str
 
-class ProactiveAlertsStatus(BaseModel):
-    status: str
-
-@router.get("/proactive_alerts/test")
-async def test_proactive_alerts(_=Depends(verify_token)):
-    return {"status": "OK"}
-
-@router.post("/proactive_alerts/email")
-async def send_email_notification(email_notification: EmailNotification, _=Depends(verify_token)):
+@router.get("/proactive_alerts")
+async def get_proactive_alerts(_=Depends(verify_token)):
+    """Get all unread proactive alerts."""
     try:
-        # Assuming a simple email sending mechanism via httpx for demonstration
-        # Replace with actual email API (e.g., EmailEngine) integration
-        response = httpx.post(
-            f"https://api.emailengine.com/v1/send",
-            headers={"Authorization": f"Bearer {EMAIL_API_KEY}"},
-            json={"subject": email_notification.subject, "body": email_notification.body},
-        )
-        response.raise_for_status()
-        return {"message": "Email sent successfully"}
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=500, detail="Failed to send email") from exc
+        from app.core.proactive import get_unread_alerts
+        alerts = get_unread_alerts()
+        return {"ok": True, "alerts": alerts, "count": len(alerts)}
+    except Exception as e:
+        return {"ok": False, "alerts": [], "error": str(e)}
 
-@router.post("/proactive_alerts/push")
-async def send_push_notification(notification: str, _=Depends(verify_token)):
-    try:
-        # Pushover API example
-        response = httpx.post(
-            "https://api.pushover.net/1/messages.json",
-            data={
-                "token": PUSH_API_KEY,
-                "user": "Matthew's User Key",  # Replace with actual user key
-                "message": notification,
-            },
-        )
-        response.raise_for_status()
-        return {"message": "Push notification sent successfully"}
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=500, detail="Failed to send push notification") from exc
 
-@router.get("/proactive_alerts/events")
-async def monitor_events(_=Depends(verify_token)):
+@router.post("/proactive_alerts/{alert_id}/read")
+async def mark_alert_read(alert_id: int, _=Depends(verify_token)):
+    """Mark a specific alert as read."""
     try:
-        # Fetch new events or emails from database or external API
-        cur.execute("SELECT * FROM events WHERE processed = FALSE")
-        events = cur.fetchall()
-        for event in events:
-            # Process event (e.g., send push notification or email)
-            # For demonstration, assume sending a push notification
-            yield send_push_notification("New event detected").json()
-        return {"message": "Events processed"}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="Failed to process events") from exc
+        from app.core.proactive import mark_alert_read
+        mark_alert_read(alert_id)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/proactive_alerts/read-all")
+async def mark_all_read(_=Depends(verify_token)):
+    """Mark all alerts as read."""
+    try:
+        import psycopg2, os
+        conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+        cur = conn.cursor()
+        cur.execute("UPDATE tony_alerts SET read = TRUE WHERE read = FALSE")
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

@@ -295,52 +295,74 @@ async def push_to_github(filepath: str, code: str, commit_message: str) -> bool:
 async def wire_into_router(module_name: str, capability_name: str) -> bool:
     """
     Automatically update router.py to include the new module.
-    This is Tony updating his own infrastructure.
+    Safe: checks for duplicates before writing, validates syntax after edit,
+    aborts if result would be invalid.
     """
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/app/api/v1/router.py"
             headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-            
+
             r = await client.get(url, headers=headers)
             if r.status_code != 200:
                 return False
-            
+
             router_content = base64.b64decode(r.json()["content"]).decode()
             sha = r.json()["sha"]
-            
-            # Check if already wired
-            if f"from app.api.v1.endpoints import {module_name}" in router_content:
+
+            # Already wired — nothing to do
+            if (f"from app.api.v1.endpoints import {module_name}" in router_content
+                    or f"router.include_router({module_name}.router" in router_content):
+                log_build("wire_router", f"{module_name} already wired — skipping", True)
                 return True
-            
-            # Find the last router.include_router line and add after it
+
+            # Find the last router.include_router line and insert after it
             lines = router_content.split('\n')
             last_include = 0
             for i, line in enumerate(lines):
                 if 'router.include_router' in line:
                     last_include = i
-            
+
             if last_include == 0:
+                log_build("wire_router_error", "Could not find insertion point in router.py", False)
                 return False
-            
+
             new_lines = (
                 lines[:last_include + 1] +
                 [f"from app.api.v1.endpoints import {module_name}",
                  f"router.include_router({module_name}.router, tags=[\"{capability_name}\"])"] +
                 lines[last_include + 1:]
             )
-            
+
             new_content = '\n'.join(new_lines)
+
+            # Validate syntax before pushing — never push broken router.py
+            try:
+                ast.parse(new_content)
+            except SyntaxError as e:
+                log_build("wire_router_syntax_error",
+                          f"router.py would be invalid after wiring: {e}", False)
+                return False
+
+            # Sanity: no duplicate include_router for this module
+            include_count = new_content.count(f"router.include_router({module_name}.router")
+            if include_count > 1:
+                log_build("wire_router_error",
+                          f"Duplicate detected after wiring {module_name} — aborting", False)
+                return False
+
             payload = {
                 "message": f"auto-wire: {capability_name} endpoint integrated by Tony",
                 "content": base64.b64encode(new_content.encode()).decode(),
                 "sha": sha,
                 "branch": "main"
             }
-            
+
             r = await client.put(url, headers=headers, json=payload)
-            return r.status_code in (200, 201)
-    
+            success = r.status_code in (200, 201)
+            log_build("wire_router", f"{'Wired' if success else 'Wire failed'}: {module_name}", success)
+            return success
+
     except Exception as e:
         log_build("router_wire_error", str(e), False)
         return False
