@@ -1,59 +1,45 @@
-from fastapi import APIRouter, Depends, HTTPException
+"""
+Proactive alerts endpoint — Matthew's pending alerts.
+"""
+from fastapi import APIRouter, Depends
 from app.core.security import verify_token
-import psycopg2
-import os
-import httpx
-from pydantic import BaseModel
 
 router = APIRouter()
 
-# Assuming Email API and PushOver API credentials are set as environment variables
-PUSHOVER_API_KEY = os.environ.get("PUSHOVER_API_KEY", "")
-PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN", "")
-EMAIL_API_KEY = os.environ.get("EMAIL_API_KEY", "")
-EMAIL_API_SECRET = os.environ.get("EMAIL_API_SECRET", "")
 
-# Connect to DB
-def get_db():
-    conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
-    return conn
-
-# Define a model for proactive alerts
-class ProactiveAlert(BaseModel):
-    message: str
-
-# Test endpoint
-@router.get("/proactive_alerts/test")
-async def test_proactive_alerts(_=Depends(verify_token)):
-    return {"status": "OK"}
-
-# Endpoint to send proactive alerts
-@router.post("/proactive_alerts")
-async def send_proactive_alert(alert: ProactiveAlert, _=Depends(verify_token)):
+@router.get("/proactive_alerts")
+async def get_proactive_alerts(_=Depends(verify_token)):
+    """Get all unread proactive alerts."""
     try:
-        # Assuming a function to send push notifications via PushOver API
-        async def send_push_notification(title: str, message: str):
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"https://api.pushover.net/1/messages.json",
-                    data={
-                        "token": PUSHOVER_API_TOKEN,
-                        "user": PUSHOVER_API_KEY,
-                        "title": title,
-                        "message": message,
-                    },
-                )
-                if response.status_code != 200:
-                    raise HTTPException(status_code=500, detail="Failed to send push notification")
-
-        # Assuming a function to monitor emails and trigger alerts
-        async def monitor_emails():
-            # Implement email monitoring logic here, e.g., using EmailEngine API
-            # For demonstration purposes, assume an email is monitored and an alert is triggered
-            alert_message = "New email received!"
-            await send_push_notification("Proactive Alert", alert_message)
-
-        await monitor_emails()
-        return {"message": "Proactive alert sent successfully"}
+        from app.core.proactive import get_unread_alerts
+        alerts = get_unread_alerts()
+        return {"ok": True, "alerts": alerts, "count": len(alerts)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"ok": False, "alerts": [], "error": str(e)}
+
+
+@router.post("/proactive_alerts/{alert_id}/read")
+async def mark_alert_read(alert_id: int, _=Depends(verify_token)):
+    """Mark a specific alert as read."""
+    try:
+        from app.core.proactive import mark_alert_read
+        mark_alert_read(alert_id)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/proactive_alerts/read-all")
+async def mark_all_read(_=Depends(verify_token)):
+    """Mark all alerts as read."""
+    try:
+        import psycopg2, os
+        conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+        cur = conn.cursor()
+        cur.execute("UPDATE tony_alerts SET read = TRUE WHERE read = FALSE")
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

@@ -335,6 +335,17 @@ async def run_agi_improvement_cycle() -> Dict:
         print(f"[AGI_LOOP] Priority {priority}/10 too low — skipping this cycle")
         return {"ok": True, "reason": "priority_too_low", "skipped": capability}
 
+    # Protected modules — never rebuild these, they are maintained manually
+    PROTECTED = [
+        "proactive_alerts", "proactive alerts", "chat_stream", "chat stream",
+        "council", "router", "main", "prompt_assembler", "whatsapp",
+        "security", "logger", "config"
+    ]
+    cap_lower = capability.lower()
+    if any(p in cap_lower for p in PROTECTED):
+        print(f"[AGI_LOOP] {capability} is a protected module — skipping autonomous rebuild")
+        return {"ok": True, "reason": "protected_module", "skipped": capability}
+
     print(f"[AGI_LOOP] Building: {capability}")
     print(f"[AGI_LOOP] Why now: {decision.get('why_now', '')[:120]}")
 
