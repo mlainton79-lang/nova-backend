@@ -111,7 +111,22 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         if ctx:
             system_prompt += "\n\n" + ctx
 
-    result = await run_council(req.message, req.history, system_prompt, debug=req.debug or False)
+    # Handle image in council mode - describe image first then include in council
+    message_for_council = req.message
+    if req.image_base64:
+        try:
+            from app.core.vision import tony_see
+            image_description = await tony_see(
+                req.image_base64,
+                prompt=f"Describe this image in detail for context: {req.message}",
+                mime_type="image/jpeg"
+            )
+            if image_description:
+                message_for_council = req.message + "\n\n[Image Tony can see: " + image_description + "]"
+        except Exception as e:
+            print(f"[COUNCIL] Vision preprocessing failed: {e}")
+
+    result = await run_council(message_for_council, req.history, system_prompt, debug=req.debug or False)
     reply = result.get("reply", "")
     try:
         reply, push_results = await process_auto_push(reply)
