@@ -200,3 +200,13 @@ try:
     init_architect_tables()
 except Exception as e:
     print(f"[ROUTER] Architect init failed: {e}")
+
+# Initialise email agent
+try:
+    from app.core.email_agent import init_email_agent_tables
+    init_email_agent_tables()
+except Exception as e:
+    print(f"[ROUTER] Email agent init failed: {e}")
+
+from app.api.v1.endpoints import email_agent
+router.include_router(email_agent.router, tags=["email_agent"])

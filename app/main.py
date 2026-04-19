@@ -28,6 +28,12 @@ async def autonomous_loop():
             await run_proactive_intelligence()
             await run_proactive_scheduling()
             await check_and_notify_urgent_alerts()
+            # Email agent - scan for Western Circle + other actionable emails
+            try:
+                from app.core.email_agent import scan_for_actionable_emails
+                await scan_for_actionable_emails()
+            except Exception as e:
+                print(f"[MAIN] Email agent scan error: {e}")
             await scan_and_draft_replies()
             await run_weekly_learning_synthesis()
             await run_autonomous_improvement()  # Legacy
