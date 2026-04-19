@@ -31,6 +31,8 @@ async def autonomous_loop():
             await scan_and_draft_replies()
             await run_weekly_learning_synthesis()
             await run_autonomous_improvement()
+            from app.core.self_improvement import run_self_improvement
+            await run_self_improvement()
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
