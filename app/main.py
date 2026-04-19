@@ -30,7 +30,13 @@ async def autonomous_loop():
             await check_and_notify_urgent_alerts()
             await scan_and_draft_replies()
             await run_weekly_learning_synthesis()
-            await run_autonomous_improvement()
+            await run_autonomous_improvement()  # Legacy
+            # AGI improvement cycle - Tony builds new capabilities
+            try:
+                from app.core.tony_agi_loop import run_agi_improvement_cycle
+                await run_agi_improvement_cycle()
+            except Exception as e:
+                print(f"[MAIN] AGI loop error: {e}")
             from app.core.self_improvement import run_self_improvement
             from app.core.youtube_monitor import run_youtube_monitoring
             from app.core.pattern_recognition import run_pattern_analysis
