@@ -43,6 +43,14 @@ COMMAND_PATTERNS = [
     (r'what have i got (today|tomorrow|this week)', 'read_calendar'),
     (r'check.*emails?', 'check_email_queue'),
     (r'any.*emails? (waiting|pending|to approve)', 'check_email_queue'),
+    # Autonomous build approval
+    (r'approve build', 'approve_build'),
+    (r'deploy build', 'approve_build'),
+    (r'approve.*autonomous.*build', 'approve_build'),
+    (r'check.*pending.*build', 'check_builds'),
+    (r'what.*build.*waiting', 'check_builds'),
+    (r'any.*build.*staging', 'check_builds'),
+    (r'what.*tony.*built', 'check_builds'),
 ]
 
 
@@ -87,8 +95,67 @@ async def execute_command(command: Dict) -> str:
     
     elif cmd == "check_email_queue":
         return await _check_email_queue()
-    
+
+    elif cmd == "approve_build":
+        return await _approve_build()
+
+    elif cmd == "check_builds":
+        return await _check_pending_builds()
+
     return ""
+
+
+async def _approve_build() -> str:
+    """Promote staging branch to main — deploy Tony's autonomous build."""
+    try:
+        from app.core.tony_self_builder import promote_staging_to_main, get_pending_staging_builds
+        # First check there's something to approve
+        pending = await get_pending_staging_builds()
+        if not pending or pending[0].get("commits_ahead", 0) == 0:
+            return "There's nothing in staging waiting to be approved. Tony hasn't built anything new yet."
+
+        p = pending[0]
+        result = await promote_staging_to_main()
+        if result.get("ok"):
+            files = ", ".join(p.get("files_changed", []))
+            return (
+                f"Done. Tony's autonomous build has been deployed to production.\n\n"
+                f"**Merged:** {result.get('message', '')[:100]}\n"
+                f"**Files:** {files}\n\n"
+                f"Railway will redeploy in about 90 seconds."
+            )
+        else:
+            return f"Couldn't merge staging to main: {result.get('error', 'unknown error')}"
+    except Exception as e:
+        return f"Build approval failed: {e}"
+
+
+async def _check_pending_builds() -> str:
+    """Show what Tony has built autonomously that's waiting in staging."""
+    try:
+        from app.core.tony_self_builder import get_pending_staging_builds
+        pending = await get_pending_staging_builds()
+        if not pending or "error" in pending[0]:
+            err = pending[0].get("error", "unknown") if pending else "no data"
+            return f"Couldn't check staging branch: {err}"
+
+        p = pending[0]
+        ahead = p.get("commits_ahead", 0)
+
+        if ahead == 0:
+            return "Nothing in staging — Tony hasn't built anything new since the last approval."
+
+        files = "\n".join(f"  • {f}" for f in p.get("files_changed", []))
+        latest = p.get("latest_commit", "unknown")
+
+        return (
+            f"Tony has **{ahead} commit{'s' if ahead != 1 else ''}** in staging waiting for your approval.\n\n"
+            f"**Latest build:** {latest}\n\n"
+            f"**Files changed:**\n{files}\n\n"
+            f"Say **approve build** to deploy it, or leave it and I'll keep building."
+        )
+    except Exception as e:
+        return f"Couldn't check pending builds: {e}"
 
 
 async def _approve_email(queue_id: int) -> str:

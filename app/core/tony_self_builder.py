@@ -129,31 +129,55 @@ async def _claude(prompt: str) -> Optional[str]:
 
 
 async def read_own_codebase_context() -> str:
-    """Tony reads key files from his own codebase for context."""
-    context_files = [
-        "app/api/v1/router.py",
-        "app/core/model_router.py",
-        "app/core/memory.py",
-        "app/prompts/tony.py",
-        "requirements.txt",
-    ]
-    
-    context = ""
+    """
+    Tony reads his full codebase for context before generating code.
+    Reuses the same live-inventory approach as tony_agi_loop for consistency.
+    Returns docstrings + function signatures for all 72 core modules + endpoints.
+    """
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for filepath in context_files[:3]:  # Limit to avoid context overflow
-                url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filepath}"
-                r = await client.get(
-                    url,
-                    headers={"Authorization": f"token {GITHUB_TOKEN}"}
-                )
-                if r.status_code == 200:
-                    content = base64.b64decode(r.json()["content"]).decode()
-                    context += f"\n\n# FILE: {filepath}\n{content[:1000]}"
+        from app.core.tony_agi_loop import _list_github_dir, _read_github_file, _extract_module_summary
+        import asyncio
+
+        core_files = await _list_github_dir("app/core")
+        endpoint_files = await _list_github_dir("app/api/v1/endpoints")
+
+        summaries = []
+
+        # Read all core modules concurrently (function sigs + docstrings only)
+        async def _summarise_file(path: str, filename: str) -> str:
+            content = await _read_github_file(path, max_chars=4000)
+            if content:
+                return _extract_module_summary(content, filename)
+            return ""
+
+        core_tasks = [
+            _summarise_file(f"app/core/{fn}", fn)
+            for fn in sorted(core_files) if fn.endswith(".py") and fn != "__init__.py"
+        ]
+        endpoint_tasks = [
+            _summarise_file(f"app/api/v1/endpoints/{fn}", fn)
+            for fn in sorted(endpoint_files) if fn.endswith(".py") and fn != "__init__.py"
+        ]
+
+        all_results = await asyncio.gather(*core_tasks, *endpoint_tasks, return_exceptions=True)
+        summaries = [r for r in all_results if isinstance(r, str) and r]
+
+        # Also read router.py in full — Tony needs to know what's already wired
+        router_content = await _read_github_file("app/api/v1/router.py", max_chars=3000)
+
+        context = "=== TONY'S LIVE CODEBASE ===\n\n"
+        context += f"Core modules ({len(core_files)}), Endpoints ({len(endpoint_files)})\n\n"
+        context += "\n\n".join(summaries)
+        if router_content:
+            context += f"\n\n=== CURRENT ROUTER.PY ===\n{router_content}"
+
+        log_build("codebase_read", f"Read {len(summaries)} module summaries", True)
+        return context
+
     except Exception as e:
         log_build("codebase_read_error", str(e), False)
-    
-    return context
+        # Minimal fallback
+        return "app/core/ contains 72 modules. app/api/v1/endpoints/ contains 26 endpoints."
 
 
 def validate_python_code(code: str, capability_name: str) -> Dict:
@@ -336,36 +360,105 @@ The code MUST:
     return None
 
 
-async def push_to_github(filepath: str, code: str, commit_message: str) -> bool:
-    """Push a file to GitHub."""
+async def push_to_github(filepath: str, code: str, commit_message: str,
+                         branch: str = "staging") -> bool:
+    """
+    Push a file to GitHub.
+    Autonomous builds go to staging by default — never directly to main.
+    Matthew promotes staging to main via approve build command.
+    """
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Get current SHA if file exists
-            url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filepath}"
             headers = {
                 "Authorization": f"token {GITHUB_TOKEN}",
                 "Accept": "application/vnd.github.v3+json"
             }
-            
+            url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filepath}"
+
             sha = None
-            r = await client.get(url, headers=headers)
+            r = await client.get(url, headers=headers, params={"ref": branch})
             if r.status_code == 200:
                 sha = r.json().get("sha")
-            
-            # Push
+
             payload = {
-                "message": commit_message,
+                "message": f"[staging] {commit_message}",
                 "content": base64.b64encode(code.encode()).decode(),
-                "branch": "main"
+                "branch": branch
             }
             if sha:
                 payload["sha"] = sha
-            
+
             r = await client.put(url, headers=headers, json=payload)
-            return r.status_code in (200, 201)
+            success = r.status_code in (200, 201)
+            log_build("pushed_to_staging" if success else "push_failed",
+                      f"{filepath} -> {branch}", success)
+            return success
     except Exception as e:
         log_build("github_push_error", str(e), False)
         return False
+
+
+async def promote_staging_to_main() -> dict:
+    """Merge staging into main. Called when Matthew approves a pending build."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            r = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/branches/staging",
+                headers=headers
+            )
+            if r.status_code != 200:
+                return {"ok": False, "error": "Could not read staging branch"}
+            staging_sha = r.json()["commit"]["sha"]
+            staging_msg = r.json()["commit"]["commit"]["message"]
+
+            r2 = await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/merges",
+                headers=headers,
+                json={
+                    "base": "main",
+                    "head": "staging",
+                    "commit_message": f"feat: approve autonomous build — {staging_msg[:100]}"
+                }
+            )
+            if r2.status_code in (201, 204):
+                log_build("staging_promoted", f"SHA {staging_sha[:8]} merged to main", True)
+                return {"ok": True, "merged_sha": staging_sha[:8], "message": staging_msg}
+            else:
+                return {"ok": False, "error": f"Merge failed: {r2.status_code}"}
+    except Exception as e:
+        log_build("staging_promote_error", str(e), False)
+        return {"ok": False, "error": str(e)}
+
+
+async def get_pending_staging_builds() -> list:
+    """Check what autonomous builds are sitting in staging waiting for approval."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            headers = {
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            r = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/compare/main...staging",
+                headers=headers
+            )
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            commits = data.get("commits", [])
+            files = data.get("files", [])
+            return [{
+                "commits_ahead": data.get("ahead_by", 0),
+                "files_changed": [f["filename"] for f in files],
+                "latest_commit": commits[-1]["commit"]["message"][:100] if commits else "none",
+                "status": data.get("status", "unknown")
+            }]
+    except Exception as e:
+        return [{"error": str(e)}]
 
 
 async def wire_into_router(module_name: str, capability_name: str) -> bool:
