@@ -1,25 +1,31 @@
 """
 Tony's Prompt Assembler — Clean, prioritised context injection.
 
-Replaces the scattered injection logic in tony.py with a
-clean, prioritised assembly pipeline.
-
 Priority order (highest to lowest):
-1. Tony's identity (who he is, always present)
-2. Matthew's core details (always present, compact)
-3. Active alerts (urgent things Tony needs to know now)
-4. Relevant memories (semantic search, top 6)
-5. Living memory (relevant sections only)
-6. Today's calendar + recent patterns
-7. Active goals summary
-8. Weekly strategy
-9. Capabilities (compressed)
-10. Knowledge base (only when relevant)
-11. Codebase (only for code questions)
+1.  Tony's identity (always present)
+2.  Active urgent alerts
+3.  Semantic memory (relevant to this message)
+4.  Living memory (relevant sections)
+5.  Device context (location, calendar from Android)
+6.  Time + weather (UK)
+7.  World model (9-dimension compact)
+8.  Active goals
+9.  Pattern insights
+10. Episodic memory (recent significant episodes)
+11. Weekly strategy
+12. Knowledge base (legal — only when relevant)
+13. Document context
+14. Codebase (only for code questions)
+15. Self-eval summary
+16. Learned behaviour rules
+17. Capabilities summary
 
-Total target: under 5000 tokens for non-image messages.
+Total target: under 6000 tokens for non-image messages.
+Image messages get a minimal prompt to avoid context overflow.
 """
 import os
+import asyncio
+import psycopg2
 from datetime import datetime
 from typing import Optional
 
@@ -37,6 +43,7 @@ Core character:
 - Take action where possible, don't just advise
 - Never claim a capability you don't have
 - Never claim you've done something you haven't
+- When something is uncertain, say so clearly
 
 Matthew's family:
 - Wife: Georgina Rose (b. 26 Feb 1992)
@@ -52,8 +59,27 @@ Matthew's situation:
 - Building: Nova — an Android AI app (you are Tony, the AI inside it)"""
 
 
+def _get_conn():
+    return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+
+
+def _db_fetch(query: str, params=None):
+    """Safe DB fetch, returns rows or empty list."""
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(query, params or [])
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
 async def build_prompt(
     context: Optional[str] = None,
+    location: Optional[str] = None,
     document_text: Optional[str] = None,
     document_base64: Optional[str] = None,
     document_name: Optional[str] = None,
@@ -64,204 +90,238 @@ async def build_prompt(
 ) -> str:
     """
     Assemble Tony's system prompt with intelligent context injection.
+    Every section is guarded — a DB failure never crashes the prompt.
     """
-    # For images: minimal prompt to avoid context overflow
+    # Images: minimal prompt only — large base64 + big system prompt = context overflow
     if image_present:
-        return "You are Tony, Matthew Lainton's personal AI assistant. British English. Direct and warm. Describe what you see and answer the question."
+        return (
+            "You are Tony, Matthew Lainton's personal AI assistant. "
+            "British English. Direct and warm. "
+            "Describe what you see and answer the question concisely."
+        )
 
     parts = [TONY_IDENTITY]
-    token_budget = 5000
-    used = len(TONY_IDENTITY) // 4  # rough token estimate
+    token_budget = 6000
+    used = len(TONY_IDENTITY) // 4
 
-    def add_section(text: str, label: str = "") -> bool:
+    def add(text: str, max_chars: int = None) -> bool:
         nonlocal used
+        if not text or not text.strip():
+            return False
+        if max_chars:
+            text = text[:max_chars]
         tokens = len(text) // 4
         if used + tokens > token_budget:
             return False
-        if text.strip():
-            parts.append(text)
-            used += tokens
+        parts.append(text)
+        used += tokens
         return True
 
-    # 0. Handover state (what Tony needs to know from last session)
+    # ── 1. Active urgent alerts ──────────────────────────────────────────────
     try:
-        from app.core.handover import format_handover_for_prompt
-        handover = format_handover_for_prompt()
-        if handover:
-            add_section(handover)
-    except Exception:
-        pass
-
-    # 1. Active alerts (urgent — always check first)
-    try:
-        conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")
-        cur = conn.cursor()
-        cur.execute("""
+        rows = _db_fetch("""
             SELECT title, body FROM tony_alerts
             WHERE read = FALSE AND priority IN ('urgent', 'high')
             AND created_at > NOW() - INTERVAL '24 hours'
             ORDER BY created_at DESC LIMIT 3
         """)
-        alerts = cur.fetchall()
-        cur.close()
-        conn.close()
-        if alerts:
-            alert_text = "[URGENT ALERTS]:\n" + "\n".join(f"• {a[0]}: {a[1][:100]}" for a in alerts)
-            add_section(alert_text)
+        if rows:
+            alert_lines = "\n".join(f"• {r[0]}: {r[1][:120]}" for r in rows)
+            add(f"[URGENT ALERTS]\n{alert_lines}")
     except Exception:
         pass
 
-    # 2. Semantic memory (relevant to this message)
+    # ── 2. Semantic memory (most relevant to this message) ───────────────────
     if user_message:
         try:
             from app.core.semantic_memory import search_memories
             memories = await search_memories(user_message, limit=6)
             if memories:
-                mem_text = "[RELEVANT MEMORIES]:\n" + "\n".join(f"• {m}" for m in memories)
-                add_section(mem_text)
+                mem_text = "[RELEVANT MEMORIES]\n" + "\n".join(f"• {m}" for m in memories)
+                add(mem_text, max_chars=800)
         except Exception:
             pass
 
-    # 3. Living memory (relevant sections)
+    # ── 3. Living memory (relevant sections) ────────────────────────────────
     try:
         from app.core.living_memory import get_relevant_living_memory
         living = await get_relevant_living_memory(user_message)
         if living:
-            add_section(living)
+            add(living, max_chars=1000)
     except Exception:
         try:
             from app.core.living_memory import get_living_memory_for_prompt
             living = get_living_memory_for_prompt()
             if living:
-                add_section(living[:800])
+                add(living, max_chars=800)
         except Exception:
             pass
 
-    # 4. Today's context (time, calendar)
+    # ── 4. Device context (location + calendar from Android) ─────────────────
+    device_parts = []
+
+    # Location — parse "lat,lng" into something useful
+    loc_str = location or ""
+    if not loc_str and context:
+        # Context field may contain "Matthew's current location coordinates: lat,lng"
+        for line in context.split("\n"):
+            if "location" in line.lower() and "," in line:
+                loc_str = line.split(":")[-1].strip()
+                break
+
+    if loc_str and "," in loc_str:
+        device_parts.append(f"Matthew's current location: {loc_str} (Rotherham area)")
+
+    # Calendar from context
+    if context:
+        for line in context.split("\n"):
+            if "calendar" in line.lower() or "upcoming" in line.lower():
+                device_parts.append(line.strip())
+                break
+        # Also grab any non-location, non-calendar context
+        other = [l for l in context.split("\n")
+                 if l.strip() and "location" not in l.lower()
+                 and "calendar" not in l.lower() and "upcoming" not in l.lower()]
+        if other:
+            device_parts.extend(other[:3])
+
+    if device_parts:
+        add("[DEVICE CONTEXT]\n" + "\n".join(device_parts), max_chars=400)
+
+    # ── 5. Time + weather ────────────────────────────────────────────────────
     try:
-        from datetime import datetime
         now = datetime.utcnow()
         uk_hour = (now.hour + 1) % 24
-        time_str = f"[TIME]: {now.strftime('%A %d %B %Y')}, {uk_hour:02d}:{now.minute:02d} UK time"
-        add_section(time_str)
+        time_str = f"[TIME] {now.strftime('%A %d %B %Y')}, {uk_hour:02d}:{now.minute:02d} UK time"
+
+        # Night shift awareness
+        if 22 <= uk_hour or uk_hour < 8:
+            time_str += " — Matthew may be on a night shift or sleeping"
+        add(time_str)
     except Exception:
         pass
 
-    # 5. Active goals (compact)
     try:
-        conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT title, priority FROM tony_goals
-            WHERE status = 'active'
-            ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END
-            LIMIT 4
-        """)
-        goals = cur.fetchall()
-        cur.close()
-        conn.close()
-        if goals:
-            goals_text = "[ACTIVE GOALS]: " + " | ".join(f"{g[0]} ({g[1]})" for g in goals)
-            add_section(goals_text)
+        from app.core.weather import get_weather_summary
+        weather = get_weather_summary()
+        if weather:
+            add(f"[WEATHER] {weather}", max_chars=150)
     except Exception:
         pass
 
-    # 6. Capabilities (compact)
-    caps = "[TONY CAN]: Multi-brain chat (Gemini/Claude/Council), Gmail 4 accounts, Calendar, GPS, Voice, Vinted/eBay listings, FOS complaint generation, FCA register, Companies House, autonomous every 6h (goals, email scan, learning, AGI self-build loop, financial intelligence, relationship tracking)"
-    add_section(caps)
-
-    # 7. Pattern insights (if high confidence)
-    try:
-        from app.core.pattern_recognition import get_pattern_insights
-        patterns = await get_pattern_insights()
-        if patterns:
-            add_section(patterns[:400])
-    except Exception:
-        pass
-
-    # 7b. World model (compact — always include)
+    # ── 6. World model (9-dimension compact) ─────────────────────────────────
     try:
         from app.core.world_model import get_world_model_for_prompt
         world = get_world_model_for_prompt()
         if world:
-            add_section(world[:600])
+            add(world, max_chars=600)
     except Exception:
         pass
 
-    # 7c. Episodic memory (recent significant episodes)
+    # ── 7. Active goals ──────────────────────────────────────────────────────
+    try:
+        rows = _db_fetch("""
+            SELECT title, priority, description FROM tony_goals
+            WHERE status = 'active'
+            ORDER BY CASE priority
+                WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 ELSE 3 END
+            LIMIT 4
+        """)
+        if rows:
+            goal_lines = " | ".join(
+                f"{r[0]} ({r[1]})" + (f": {r[2][:60]}" if r[2] else "")
+                for r in rows
+            )
+            add(f"[ACTIVE GOALS] {goal_lines}", max_chars=400)
+    except Exception:
+        pass
+
+    # ── 8. Pattern insights ──────────────────────────────────────────────────
+    try:
+        from app.core.pattern_recognition import get_pattern_insights
+        patterns = await get_pattern_insights()
+        if patterns:
+            add(patterns, max_chars=350)
+    except Exception:
+        pass
+
+    # ── 9. Episodic memory ───────────────────────────────────────────────────
     if user_message:
         try:
             from app.core.episodic_memory import get_relevant_episodes
             episodes = await get_relevant_episodes(user_message, limit=2)
             if episodes:
-                add_section(episodes[:400])
+                add(episodes, max_chars=400)
         except Exception:
             pass
 
-    # 8. Weekly strategy (if exists)
+    # ── 10. Weekly strategy ──────────────────────────────────────────────────
     try:
-        conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")
-        cur = conn.cursor()
-        cur.execute("SELECT content FROM tony_living_memory WHERE section = 'WEEKLY_STRATEGY'")
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if row and row[0]:
-            add_section(f"[WEEKLY STRATEGY]: {row[0][:200]}")
+        rows = _db_fetch("""
+            SELECT content FROM tony_living_memory
+            WHERE section = 'WEEKLY_STRATEGY'
+        """)
+        if rows and rows[0][0]:
+            add(f"[WEEKLY STRATEGY] {rows[0][0]}", max_chars=200)
     except Exception:
         pass
 
-    # 9. Knowledge base (only when relevant)
+    # ── 11. Knowledge base (legal — only when relevant) ──────────────────────
     msg_lower = user_message.lower()
-    legal_kw = ["western circle", "ccj", "fca", "fos", "conc", "complaint", "court", "debt"]
+    legal_kw = ["western circle", "ccj", "fca", "fos", "conc", "complaint",
+                "court", "debt", "cashfloat", "affordability", "forbearance"]
     if any(k in msg_lower for k in legal_kw):
         try:
             from app.core.knowledge_base import get_relevant_knowledge
             kb = get_relevant_knowledge(user_message)
             if kb:
-                add_section(kb[:600])
+                add(kb, max_chars=600)
         except Exception:
             pass
 
-    # 10. Document context
+    # ── 12. Document context ─────────────────────────────────────────────────
     if document_text:
-        add_section(f"[DOCUMENT: {document_name or 'uploaded'}]:\n{document_text[:1000]}")
+        add(f"[DOCUMENT: {document_name or 'uploaded'}]\n{document_text}", max_chars=1200)
 
-    # 11. Codebase (only for code questions)
+    # ── 13. Codebase (only for code questions) ───────────────────────────────
     if include_codebase:
         try:
             from app.core.codebase_sync import get_codebase_summary
             cb = get_codebase_summary()
             if cb:
-                add_section(cb[:800])
+                add(cb, max_chars=800)
         except Exception:
             pass
 
-    # 11b. Self-evaluation summary
+    # ── 14. Self-eval summary ────────────────────────────────────────────────
     try:
         from app.core.self_eval import get_recent_eval_summary
-        eval_summary = await get_recent_eval_summary()
-        if eval_summary:
-            add_section(eval_summary)
+        eval_s = await get_recent_eval_summary()
+        if eval_s:
+            add(eval_s, max_chars=200)
     except Exception:
         pass
 
-    # 12. Learned behaviour rules
+    # ── 15. Learned behaviour rules ──────────────────────────────────────────
     try:
-        conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")
-        cur = conn.cursor()
-        cur.execute("""
+        rows = _db_fetch("""
             SELECT rule_text FROM tony_behaviour_rules
             WHERE confidence > 0.7
             ORDER BY evidence_count DESC LIMIT 3
         """)
-        rules = cur.fetchall()
-        cur.close()
-        conn.close()
-        if rules:
-            rules_text = "[TONY'S LEARNED RULES]: " + " | ".join(r[0][:80] for r in rules)
-            add_section(rules_text)
+        if rows:
+            rules_text = "[TONY'S RULES] " + " | ".join(r[0][:80] for r in rows)
+            add(rules_text, max_chars=300)
     except Exception:
         pass
+
+    # ── 16. Capabilities (compact — always last) ─────────────────────────────
+    caps = ("[TONY CAN] Multi-brain chat (Gemini/Claude/Council/Groq/Mistral), "
+            "Gmail 4 accounts, Calendar, GPS location, Voice in/out, "
+            "Vinted/eBay photo listings, FOS complaint generation, "
+            "FCA register, Companies House, Deep research, YouTube study, "
+            "Autonomous every 6h (goals, email drafting, learning, "
+            "AGI self-build, financial intelligence, relationship tracking)")
+    add(caps, max_chars=300)
 
     return "\n\n".join(p for p in parts if p)

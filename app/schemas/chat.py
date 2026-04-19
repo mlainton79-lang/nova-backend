@@ -9,7 +9,8 @@ class ChatRequest(BaseModel):
     provider: str = "gemini"
     message: str
     history: List[HistoryMessage] = []
-    context: Optional[str] = None
+    context: Optional[str] = None          # Location + calendar from device
+    location: Optional[str] = None         # "lat,lng" if sent separately
     document_text: Optional[str] = None
     document_base64: Optional[str] = None
     document_name: Optional[str] = None
