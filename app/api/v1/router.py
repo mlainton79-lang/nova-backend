@@ -246,5 +246,12 @@ try:
 except Exception as e:
     print(f"[KNOWLEDGE] Init failed: {e}")
 
+# Initialise self-eval
+try:
+    from app.core.self_eval import init_eval_tables
+    init_eval_tables()
+except Exception as e:
+    print(f"[SELF_EVAL] Init failed: {e}")
+
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])

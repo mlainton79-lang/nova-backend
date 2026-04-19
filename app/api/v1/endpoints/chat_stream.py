@@ -468,6 +468,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] World model update failed: {e}")
 
+            try:
+                from app.core.self_eval import evaluate_response
+                asyncio.create_task(evaluate_response(request.message, full, provider_key))
+            except Exception as e:
+                print(f"[CHAT_STREAM] Self-eval failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"

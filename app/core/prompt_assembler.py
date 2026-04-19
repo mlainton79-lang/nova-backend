@@ -228,6 +228,15 @@ async def build_prompt(
         except Exception:
             pass
 
+    # 11b. Self-evaluation summary
+    try:
+        from app.core.self_eval import get_recent_eval_summary
+        eval_summary = await get_recent_eval_summary()
+        if eval_summary:
+            add_section(eval_summary)
+    except Exception:
+        pass
+
     # 12. Learned behaviour rules
     try:
         conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")
