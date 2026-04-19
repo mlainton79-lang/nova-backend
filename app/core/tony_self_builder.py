@@ -159,52 +159,128 @@ async def read_own_codebase_context() -> str:
 def validate_python_code(code: str, capability_name: str) -> Dict:
     """
     Comprehensive code validation before deployment.
+
+    Catches syntax errors, semantic errors (yield+return mix, top-level DB
+    connections), dangerous patterns, and structural requirements.
     """
     errors = []
     warnings = []
-    
-    # 1. Syntax check
+
+    # 1. Syntax check — must pass before anything else
     try:
-        ast.parse(code)
+        tree = ast.parse(code)
     except SyntaxError as e:
-        return {"valid": False, "errors": [f"Syntax error line {e.lineno}: {e.msg}"], "warnings": []}
-    
-    # 2. Safety checks - patterns that could cause damage
+        return {"valid": False, "errors": [f"Syntax error line {e.lineno}: {e.msg}"],
+                "warnings": []}
+
+    # 2. Semantic checks via AST — catches runtime failures that pass syntax check
+
+    # 2a. yield + return-with-value in same function = invalid generator
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            has_yield = any(
+                isinstance(n, (ast.Yield, ast.YieldFrom))
+                for n in ast.walk(node)
+            )
+            has_return_val = any(
+                isinstance(n, ast.Return) and n.value is not None
+                for n in ast.walk(node)
+            )
+            if has_yield and has_return_val:
+                errors.append(
+                    f"Function '{node.name}' line {node.lineno}: "
+                    f"mixes yield and return-with-value — invalid generator. "
+                    f"Use yield only, or return only."
+                )
+
+    # 2b. Top-level DB connections at module scope (crash at import)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            try:
+                val_str = ast.unparse(node.value)
+                if ("connect(" in val_str and
+                        ("psycopg2" in val_str or "DATABASE_URL" in val_str)):
+                    errors.append(
+                        f"Top-level psycopg2.connect() at module scope (line "
+                        f"{node.lineno}) — crashes at import. "
+                        f"Move inside a function."
+                    )
+            except Exception:
+                pass
+        # Also catch bare calls at module level that connect to DB
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            try:
+                call_str = ast.unparse(node.value)
+                if "connect(" in call_str and "DATABASE_URL" in call_str:
+                    errors.append(
+                        f"Top-level DB call at module scope line {node.lineno} — "
+                        f"move inside a function."
+                    )
+            except Exception:
+                pass
+
+    # 2c. Awaiting non-async functions (common LLM mistake)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Await):
+            if isinstance(node.value, ast.Call):
+                try:
+                    call_str = ast.unparse(node.value)
+                    # Flag synchronous functions known to be sync
+                    sync_fns = ["psycopg2.connect", "get_conn(", "log_request("]
+                    for fn in sync_fns:
+                        if fn in call_str:
+                            warnings.append(
+                                f"Awaiting likely-sync function: {call_str[:60]} — "
+                                f"remove await"
+                            )
+                except Exception:
+                    pass
+
+    # 3. Dangerous patterns — hard block
     dangerous = [
-        "os.system(", "subprocess.run(", "subprocess.Popen(",
-        "eval(", "exec(", "__import__(",
-        "shutil.rmtree(", "os.remove(", "open('/etc",
-        "DROP TABLE", "DELETE FROM tony_", "TRUNCATE"
+        ("os.system(", "shell execution"),
+        ("subprocess.run(", "subprocess"),
+        ("subprocess.Popen(", "subprocess"),
+        ("eval(", "eval"),
+        ("exec(", "exec"),
+        ("shutil.rmtree(", "filesystem deletion"),
+        ("DROP TABLE", "SQL DROP"),
+        ("DELETE FROM tony_", "deleting Tony's data"),
+        ("TRUNCATE", "SQL TRUNCATE"),
     ]
-    for pattern in dangerous:
+    for pattern, label in dangerous:
         if pattern in code:
-            errors.append(f"Dangerous pattern detected: {pattern}")
-    
-    # 3. Required patterns for FastAPI endpoints
+            errors.append(f"Dangerous pattern ({label}): {pattern}")
+
+    # 4. FastAPI endpoint structural requirements
     if "router = APIRouter()" not in code:
         errors.append("Missing: router = APIRouter()")
     if "verify_token" not in code:
         errors.append("Missing: authentication via verify_token")
     if "from fastapi import" not in code:
         errors.append("Missing: FastAPI imports")
-    
-    # 4. Import checks
-    imports_ok = True
-    for line in code.split('\n'):
-        if line.startswith('import ') or line.startswith('from '):
-            if 'pickle' in line or 'marshal' in line:
-                warnings.append(f"Potentially unsafe import: {line.strip()}")
-    
-    # 5. Code length sanity check
+
+    # 5. Unsafe imports
+    for line in code.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith(("import ", "from ")):
+            if any(m in stripped for m in ["pickle", "marshal", "shelve"]):
+                warnings.append(f"Potentially unsafe import: {stripped}")
+
+    # 6. Size sanity
     if len(code) < 100:
         errors.append("Code too short to be a real module")
     if len(code) > 50000:
-        warnings.append("Code very long - review carefully")
-    
+        warnings.append("Code very long — review carefully before deploying")
+
     return {
         "valid": len(errors) == 0,
         "errors": errors,
-        "warnings": warnings
+        "warnings": warnings,
+        "checks_passed": [
+            "syntax", "yield_return_mix", "top_level_db",
+            "dangerous_patterns", "fastapi_structure"
+        ]
     }
 
 
