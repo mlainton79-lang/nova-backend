@@ -91,6 +91,12 @@ async def autonomous_loop():
                 await run_financial_intelligence()
             except Exception as e:
                 print(f"[MAIN] Financial intelligence error: {e}")
+            # Relationship intelligence - family dates, milestones
+            try:
+                from app.core.relationship_intelligence import run_relationship_intelligence
+                await run_relationship_intelligence()
+            except Exception as e:
+                print(f"[MAIN] Relationship intelligence error: {e}")
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
