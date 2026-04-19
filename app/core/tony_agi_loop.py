@@ -1,178 +1,304 @@
 """
 Tony's AGI Loop — The Continuous Self-Improvement Engine.
 
-This is the highest-level autonomous process Tony runs.
-It's what makes the difference between a tool and a thinking agent.
-
 Every 6 hours Tony:
-1. Reviews his current state honestly
-2. Identifies the single most impactful gap
-3. Researches the best approach
-4. Builds the solution
-5. Deploys it
-6. Moves to the next gap
+1. Takes a live inventory of what he actually has
+2. Reads the build log for recent failures
+3. Checks self-eval scores for genuine quality gaps
+4. Decides what to fix or build based on real evidence
+5. Builds it
+6. Moves to the next real gap
 
-Tony's improvement priorities (in order):
-1. Things that fail — fix what's broken first
-2. Things Matthew asked for — build what was requested  
-3. Things that would generate income — high ROI capabilities
-4. Things that make Tony smarter — deeper reasoning
-5. Things that give Tony more autonomy — reduce reliance on Matthew
-
-Tony tracks everything he builds and why, maintaining
-a genuine record of his own development.
+The decision is grounded in what Tony actually is right now —
+not a static priority list written months ago.
 """
 import os
+import ast
 import asyncio
+import base64
+import httpx
 import psycopg2
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-from app.core.model_router import gemini_json, gemini
+
+from app.core.model_router import gemini_json
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "mlainton79-lang/nova-backend")
+
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
-TONY_IMPROVEMENT_PRIORITIES = [
-    {
-        "name": "Fix broken capabilities",
-        "check": "look at recent eval failures and error logs",
-        "priority": 1
-    },
-    {
-        "name": "Improve response quality",
-        "check": "analyse recent conversation scores below 7",
-        "priority": 2
-    },
-    {
-        "name": "Expand income capabilities",
-        "check": "what selling/income tools would help Matthew most",
-        "priority": 3
-    },
-    {
-        "name": "Deepen autonomy",
-        "check": "what tasks does Matthew still have to do manually",
-        "priority": 4
-    },
-    {
-        "name": "Improve intelligence",
-        "check": "what reasoning gaps are most frequent",
-        "priority": 5
+# ── Live codebase inventory ──────────────────────────────────────────────────
+
+async def _list_github_dir(path: str) -> List[str]:
+    """List files in a GitHub directory."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+                headers={"Authorization": f"token {GITHUB_TOKEN}"}
+            )
+            if r.status_code == 200:
+                return [f["name"] for f in r.json() if f["type"] == "file"]
+    except Exception as e:
+        print(f"[AGI_LOOP] Dir list failed {path}: {e}")
+    return []
+
+
+async def _read_github_file(path: str, max_chars: int = 3000) -> str:
+    """Read a file from GitHub, truncated."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+                headers={"Authorization": f"token {GITHUB_TOKEN}"}
+            )
+            if r.status_code == 200:
+                content = base64.b64decode(r.json()["content"]).decode()
+                return content[:max_chars]
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_module_summary(content: str, filename: str) -> str:
+    """Extract docstring + function/class names from a Python file."""
+    try:
+        tree = ast.parse(content)
+        # Module docstring
+        docstring = ast.get_docstring(tree) or ""
+        # Top-level functions and classes
+        names = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+                    doc = ast.get_docstring(node) or ""
+                    names.append(f"  def {node.name}(): {doc[:80]}")
+                else:
+                    names.append(f"  class {node.name}")
+        summary = f"{filename}: {docstring[:120]}\n" + "\n".join(names[:12])
+        return summary
+    except Exception:
+        return f"{filename}: (could not parse)"
+
+
+async def get_live_inventory() -> Dict:
+    """
+    Read what Tony actually has right now — directly from GitHub.
+    Returns a structured inventory of endpoints and core modules with summaries.
+    """
+    print("[AGI_LOOP] Reading live codebase inventory...")
+
+    # List what exists
+    endpoint_files = await _list_github_dir("app/api/v1/endpoints")
+    core_files = await _list_github_dir("app/core")
+
+    endpoint_names = [f.replace(".py", "") for f in endpoint_files if f.endswith(".py") and f != "__init__.py"]
+    core_names = [f.replace(".py", "") for f in core_files if f.endswith(".py") and f != "__init__.py"]
+
+    # Read summaries for core modules (functions + docstrings, not full content)
+    core_summaries = []
+    for filename in sorted(core_names):
+        content = await _read_github_file(f"app/core/{filename}.py", max_chars=4000)
+        if content:
+            summary = _extract_module_summary(content, filename)
+            core_summaries.append(summary)
+
+    # Read router to see what's actually wired
+    router_content = await _read_github_file("app/api/v1/router.py", max_chars=5000)
+
+    return {
+        "endpoints": endpoint_names,
+        "core_modules": core_names,
+        "core_summaries": core_summaries,
+        "router_snapshot": router_content,
+        "endpoint_count": len(endpoint_names),
+        "core_count": len(core_names),
     }
-]
 
 
-async def assess_current_state() -> Dict:
-    """Tony honestly assesses his current state."""
+# ── DB state ─────────────────────────────────────────────────────────────────
+
+def get_db_state() -> Dict:
+    """Pull relevant DB metrics: failures, eval scores, build history."""
+    state = {
+        "recent_failures": 0,
+        "avg_eval_score": 0.0,
+        "low_score_topics": [],
+        "recent_build_log": [],
+        "last_build_succeeded": None,
+        "failed_build_reasons": [],
+    }
     try:
         conn = get_conn()
         cur = conn.cursor()
-        
-        # Recent failures
-        cur.execute("""
-            SELECT COUNT(*) FROM tony_eval_log 
-            WHERE success = FALSE 
-            AND created_at > NOW() - INTERVAL '24 hours'
-        """)
-        failures = cur.fetchone()[0] if cur.rowcount else 0
-        
-        # Avg conversation score
-        cur.execute("""
-            SELECT AVG(score) FROM tony_learning_log
-            WHERE created_at > NOW() - INTERVAL '7 days'
-            AND score IS NOT NULL
-        """)
-        avg_score = cur.fetchone()[0] or 0
-        
-        # What Tony built autonomously
-        cur.execute("""
-            SELECT COUNT(*) FROM think_sessions
-            WHERE stage = 'autonomous_build_success'
-        """)
-        builds = cur.fetchone()[0] or 0
-        
-        # Recent pattern insights
-        cur.execute("""
-            SELECT content FROM tony_living_memory
-            WHERE section = 'OPEN_LOOPS'
-        """)
-        open_loops = cur.fetchone()
-        
-        # Build log - recent attempts
+
+        # Eval failures in last 24h
         try:
             cur.execute("""
-                SELECT stage, content, success FROM tony_build_log
-                WHERE created_at > NOW() - INTERVAL '24 hours'
-                ORDER BY created_at DESC LIMIT 5
+                SELECT COUNT(*) FROM tony_eval_log
+                WHERE success = FALSE AND created_at > NOW() - INTERVAL '24 hours'
             """)
-            recent_builds = cur.fetchall()
+            state["recent_failures"] = cur.fetchone()[0] or 0
         except Exception:
-            recent_builds = []
-        
+            pass
+
+        # Average conversation score last 7 days
+        try:
+            cur.execute("""
+                SELECT AVG(score), MIN(score) FROM tony_learning_log
+                WHERE created_at > NOW() - INTERVAL '7 days' AND score IS NOT NULL
+            """)
+            row = cur.fetchone()
+            if row and row[0]:
+                state["avg_eval_score"] = round(float(row[0]), 1)
+        except Exception:
+            pass
+
+        # Low-scoring conversation topics
+        try:
+            cur.execute("""
+                SELECT lesson FROM tony_learning_log
+                WHERE score < 7 AND created_at > NOW() - INTERVAL '7 days'
+                ORDER BY score ASC LIMIT 5
+            """)
+            state["low_score_topics"] = [r[0] for r in cur.fetchall() if r[0]]
+        except Exception:
+            pass
+
+        # Recent build log — last 10 entries
+        try:
+            cur.execute("""
+                SELECT stage, content, success, created_at
+                FROM tony_build_log
+                ORDER BY created_at DESC LIMIT 10
+            """)
+            rows = cur.fetchall()
+            state["recent_build_log"] = [
+                {"stage": r[0], "content": r[1][:150], "success": r[2],
+                 "at": str(r[3])[:16]}
+                for r in rows
+            ]
+            # Extract failure reasons
+            state["failed_build_reasons"] = [
+                r[1][:150] for r in rows if not r[2]
+            ]
+            # Last success
+            successes = [r for r in rows if r[2] and r[0] == "build_start"]
+            if successes:
+                state["last_build_succeeded"] = str(successes[0][3])[:16]
+        except Exception:
+            pass
+
+        # Self-eval summary
+        try:
+            cur.execute("""
+                SELECT stage, content FROM think_sessions
+                WHERE stage IN ('agi_build_success', 'autonomous_build_success')
+                ORDER BY id DESC LIMIT 5
+            """)
+            state["recent_successful_builds"] = [r[1][:100] for r in cur.fetchall()]
+        except Exception:
+            state["recent_successful_builds"] = []
+
         cur.close()
         conn.close()
-        
-        return {
-            "recent_failures": failures,
-            "avg_score": float(avg_score or 0),
-            "autonomous_builds": builds,
-            "open_loops": open_loops[0] if open_loops else "",
-            "recent_build_attempts": [
-                {"stage": r[0], "content": r[1][:100], "success": r[2]}
-                for r in recent_builds
-            ]
-        }
     except Exception as e:
-        print(f"[AGI_LOOP] State assessment failed: {e}")
-        return {}
+        print(f"[AGI_LOOP] DB state failed: {e}")
+
+    return state
 
 
-async def decide_what_to_build(state: Dict) -> Optional[Dict]:
+# ── Decision ─────────────────────────────────────────────────────────────────
+
+async def decide_what_to_build(inventory: Dict, db_state: Dict) -> Optional[Dict]:
     """
-    Tony decides what to build next based on honest self-assessment.
-    Uses Pro model for this critical decision.
+    Tony decides what to build or fix next.
+
+    The decision is grounded entirely in what Tony actually has right now
+    and what the evidence shows is genuinely broken or missing.
     """
-    state_summary = f"""
-Recent failures: {state.get('recent_failures', 0)}
-Avg response quality score: {state.get('avg_score', 0):.1f}/10
-Capabilities built autonomously: {state.get('autonomous_builds', 0)}
-Open loops: {state.get('open_loops', 'none')[:200]}
-Recent build attempts: {state.get('recent_build_attempts', [])}
-"""
 
-    prompt = f"""Tony is an AI assistant for Matthew Lainton. Tony is deciding what to build next to improve himself.
+    # Build the full picture for Gemini
+    endpoints_list = "\n".join(f"  - {e}" for e in inventory["endpoints"])
+    core_list = "\n".join(f"  - {m}" for m in inventory["core_modules"])
+    core_detail = "\n\n".join(inventory["core_summaries"][:40])  # All modules summarised
 
-Tony's current state:
-{state_summary}
+    build_log_str = "\n".join(
+        f"  [{r['at']}] {r['stage']}: {'OK' if r['success'] else 'FAIL'} — {r['content']}"
+        for r in db_state["recent_build_log"]
+    )
 
-Tony's stack: FastAPI on Railway, PostgreSQL with pgvector, Python 3.12
+    failed_reasons = "\n".join(f"  - {r}" for r in db_state["failed_build_reasons"]) or "  none"
+    low_scores = "\n".join(f"  - {t}" for t in db_state["low_score_topics"]) or "  none"
+    recent_builds = "\n".join(f"  - {b}" for b in db_state.get("recent_successful_builds", [])) or "  none"
 
-What Matthew needs most right now (from context):
-- Western Circle CCJ case needs active legal correspondence management
-- Income from Vinted/eBay selling needs to be more automated
-- Tony needs to act more autonomously without Matthew having to ask
-- Financial awareness (Open Banking hasn't worked yet)
-- Tony should be able to self-improve more reliably
+    prompt = f"""You are Tony's decision engine. Tony is deciding what single thing to build or fix next.
 
-What should Tony build next? Consider:
-1. What's most broken that needs fixing?
-2. What would have the highest impact on Matthew's life?
-3. What's achievable in a single focused build session?
-4. What builds toward genuine autonomy?
+TONY'S LIVE CODEBASE — what actually exists right now:
+
+Endpoints ({inventory['endpoint_count']}):
+{endpoints_list}
+
+Core modules ({inventory['core_count']}):
+{core_list}
+
+WHAT EACH CORE MODULE DOES (functions + docstrings):
+{core_detail}
+
+EVIDENCE FROM DB:
+Recent failures (last 24h): {db_state['recent_failures']}
+Average eval score (last 7 days): {db_state['avg_eval_score']}/10
+Low-scoring conversation topics:
+{low_scores}
+
+Recent build log:
+{build_log_str}
+
+Recent failed build reasons:
+{failed_reasons}
+
+Recent successful autonomous builds:
+{recent_builds}
+
+INSTRUCTIONS:
+Look at what Tony actually has. Do not suggest building something that already exists.
+Do not suggest rebuilding something that was recently built successfully.
+Base the decision on real evidence: what's failing, what's scoring low, what's genuinely missing.
+
+Priority order:
+1. Fix something that is provably broken right now (build log failures, eval failures)
+2. Improve something that scores badly (low eval topics)
+3. Build something genuinely missing that would help Matthew today
+
+Matthew's context: Western Circle CCJ case, income from selling, two young daughters, night shifts, building Nova.
+
+What is the single most valuable thing Tony should build or fix right now?
+Do not invent something that sounds good. Base it on the evidence above.
 
 Respond in JSON:
 {{
     "capability_name": "short name",
-    "capability_description": "detailed description of what to build",
-    "why_now": "why this is the highest priority right now",
-    "impact": "what this changes for Matthew",
-    "test_endpoint": "/api/v1/endpoint_to_test_after_deploy or null",
-    "estimated_lines": "estimated lines of code",
+    "capability_description": "precise description — what file, what function, what it should do",
+    "why_now": "specific evidence from above that justifies this — quote the failure or low score",
+    "is_fix": true/false,
+    "target_file": "app/api/v1/endpoints/X.py or null if new",
+    "impact": "concrete change for Matthew",
+    "test_endpoint": "/api/v1/endpoint or null",
     "priority_score": 1-10
 }}"""
 
-    return await gemini_json(prompt, task="reasoning", max_tokens=1024)
+    result = await gemini_json(prompt, task="reasoning", max_tokens=1024)
+    if result:
+        print(f"[AGI_LOOP] Decision: {result.get('capability_name')} (score {result.get('priority_score')})")
+        print(f"[AGI_LOOP] Why: {result.get('why_now', '')[:120]}")
+    return result
 
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
 
 async def run_agi_improvement_cycle() -> Dict:
     """
@@ -180,56 +306,70 @@ async def run_agi_improvement_cycle() -> Dict:
     Runs every 6 hours as part of the autonomous loop.
     """
     print("[AGI_LOOP] Starting improvement cycle...")
-    
-    # Assess current state
-    state = await assess_current_state()
-    
-    # Decide what to build
-    decision = await decide_what_to_build(state)
-    
+
+    # Step 1: Read what actually exists
+    inventory = await get_live_inventory()
+    print(f"[AGI_LOOP] Live inventory: {inventory['core_count']} core modules, {inventory['endpoint_count']} endpoints")
+
+    # Step 2: Read what the DB evidence says
+    db_state = get_db_state()
+    print(f"[AGI_LOOP] DB state: {db_state['recent_failures']} failures, avg score {db_state['avg_eval_score']}")
+
+    # Step 3: Make a grounded decision
+    decision = await decide_what_to_build(inventory, db_state)
+
     if not decision:
-        print("[AGI_LOOP] Could not decide what to build")
+        print("[AGI_LOOP] Could not reach a decision")
         return {"ok": False, "reason": "decision_failed"}
-    
+
     capability = decision.get("capability_name", "")
     description = decision.get("capability_description", "")
-    
+    priority = decision.get("priority_score", 0)
+
     if not capability or not description:
-        print("[AGI_LOOP] Invalid decision")
+        print("[AGI_LOOP] Invalid decision — missing name or description")
         return {"ok": False, "reason": "invalid_decision"}
-    
-    print(f"[AGI_LOOP] Decided to build: {capability}")
-    print(f"[AGI_LOOP] Why: {decision.get('why_now', '')}")
-    print(f"[AGI_LOOP] Impact: {decision.get('impact', '')}")
-    
-    # Build it
+
+    # Don't build low-priority things — save the Railway deploy
+    if priority < 6:
+        print(f"[AGI_LOOP] Priority {priority}/10 too low — skipping this cycle")
+        return {"ok": True, "reason": "priority_too_low", "skipped": capability}
+
+    print(f"[AGI_LOOP] Building: {capability}")
+    print(f"[AGI_LOOP] Why now: {decision.get('why_now', '')[:120]}")
+
+    # Step 4: Build it
     from app.core.tony_self_builder import tony_build_capability
     result = await tony_build_capability(
         capability,
         description,
         test_endpoint=decision.get("test_endpoint")
     )
-    
+
     result["decision"] = decision
-    result["state_at_build"] = state
-    
+    result["inventory_at_build"] = {
+        "core_count": inventory["core_count"],
+        "endpoint_count": inventory["endpoint_count"],
+    }
+
+    # Step 5: Log outcome
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        stage = "agi_build_success" if result.get("success") else "agi_build_failed"
+        cur.execute(
+            "INSERT INTO think_sessions (stage, content) VALUES (%s, %s)",
+            (stage, f"{capability}: {decision.get('impact', '')[:200]}")
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+
     if result.get("success"):
-        print(f"[AGI_LOOP] ✓ Built and deployed: {capability}")
-        
-        # Store achievement
-        try:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO think_sessions (stage, content)
-                VALUES ('agi_build_success', %s)
-            """, (f"Built {capability}: {decision.get('impact', '')}",))
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception:
-            pass
+        print(f"[AGI_LOOP] ✓ Built: {capability}")
     else:
-        print(f"[AGI_LOOP] ✗ Build failed: {capability}")
-    
+        print(f"[AGI_LOOP] ✗ Failed: {capability}")
+
     return result
