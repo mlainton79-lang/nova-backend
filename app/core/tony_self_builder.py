@@ -397,9 +397,20 @@ async def tony_build_capability(
         log_build(name, result, ok)
         print(f"[SELF_BUILDER] {name}: {'✓' if ok else '✗'} {result[:80]}")
     
-    # Step 1: Read own codebase for context
+    # Step 1: Read own codebase + architecture for context
     context = await read_own_codebase_context()
-    step("read_codebase", f"Read {len(context)} chars of own code", bool(context))
+    try:
+        from app.core.tony_architect import get_architecture_for_task, analyse_change_impact
+        arch_context = await get_architecture_for_task(capability_name)
+        impact = await analyse_change_impact(capability_description, [f"app/api/v1/endpoints/{capability_name.lower().replace(' ','_')}.py"])
+        context = arch_context + "\n\n" + context
+        if not impact.get("safe_to_proceed", True):
+            step("impact_analysis", f"High risk change: {impact.get('recommendation')}", False)
+            return report
+        step("impact_analysis", f"Risk: {impact.get('risk_level', 'unknown')}, safe to proceed", True)
+    except Exception as e:
+        pass
+    step("read_codebase", f"Read {len(context)} chars of own code + architecture", bool(context))
     
     # Step 2: Generate code with best model
     module_name = capability_name.lower().replace(' ', '_').replace('-', '_')

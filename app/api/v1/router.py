@@ -193,3 +193,10 @@ try:
     init_journal_tables()
 except Exception as e:
     print(f"[ROUTER] Journal init failed: {e}")
+
+# Initialise Tony's architecture model
+try:
+    from app.core.tony_architect import init_architect_tables
+    init_architect_tables()
+except Exception as e:
+    print(f"[ROUTER] Architect init failed: {e}")
