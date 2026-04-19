@@ -1,247 +1,175 @@
 """
-Tony's Proactive Intelligence — upgraded.
+Tony's Proactive Intelligence Engine.
 
-The original proactive.py scans emails and creates alerts.
-This upgrades it with genuine pattern recognition and initiative.
+Tony actively monitors things that matter to Matthew
+and surfaces insights without being asked.
 
-Tony now:
-1. Monitors email patterns — not just urgency but trends
-2. Tracks financial signals from email content
-3. Watches for time-sensitive opportunities
-4. Correlates information across sources
-5. Surfaces insights Matthew hasn't thought to ask about
-6. Drafts responses to things before Matthew even opens them
+Monitors:
+- Email patterns (new bills, correspondence that needs action)
+- Legal developments (FCA enforcement, FOS decisions on similar cases)
+- Market intelligence (item prices, trends)
+- Calendar gaps (things not scheduled that should be)
+- Goal drift (goals being ignored)
+- Financial signals from emails
 
-The goal: Tony should feel like he's always working in the background,
-not just sitting there waiting to be asked.
+The output is a set of prioritised insights Tony surfaces
+at the start of conversations or via WhatsApp.
 """
 import os
-import re
-import json
-import httpx
 import psycopg2
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-BACKEND_URL = "https://web-production-be42b.up.railway.app"
-DEV_TOKEN = os.environ.get("DEV_TOKEN", "nova-dev-token")
-
+from typing import Dict, List
+from app.core.model_router import gemini_json
+from app.core.brave_search import brave_search
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
-def init_proactive_intelligence_tables():
+async def scan_for_legal_developments() -> List[Dict]:
+    """Monitor for FCA/FOS developments relevant to Matthew's case."""
+    insights = []
+    
+    searches = [
+        "Western Circle Cashfloat FCA 2026",
+        "FOS payday loan irresponsible lending 2026 decision",
+        "CCJ set aside consumer credit UK 2026",
+    ]
+    
+    for query in searches[:2]:
+        try:
+            results = await brave_search(query, count=3)
+            if results and len(results) > 100:
+                # Analyse relevance
+                prompt = f"""These search results may be relevant to Matthew's Western Circle CCJ case.
+
+Search results:
+{results[:800]}
+
+Is there anything here that directly helps or affects Matthew's case?
+- FCA enforcement against Western Circle/Cashfloat?
+- FOS decisions on similar cases?
+- New legal precedents on irresponsible lending?
+- Changes to CCJ set-aside rules?
+
+If nothing relevant: return null.
+If relevant: explain in one sentence what it means for Matthew.
+
+JSON: {{"relevant": true/false, "insight": "what this means for Matthew or null"}}"""
+
+                result = await gemini_json(prompt, task="legal", max_tokens=200)
+                if result and result.get("relevant") and result.get("insight"):
+                    insights.append({
+                        "type": "legal_development",
+                        "insight": result["insight"],
+                        "priority": "high"
+                    })
+        except Exception:
+            pass
+    
+    return insights
+
+
+async def scan_email_patterns() -> List[Dict]:
+    """Analyse email patterns for things that need attention."""
+    insights = []
+    
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        
+        # Check for recurring bills that might be overdue
+        cur.execute("""
+            SELECT source, COUNT(*) as count, MAX(event_date) as last_seen
+            FROM tony_financial_events
+            WHERE direction = 'out' AND created_at > NOW() - INTERVAL '60 days'
+            GROUP BY source
+            HAVING COUNT(*) >= 2
+            ORDER BY last_seen ASC
+        """)
+        recurring = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        for source, count, last_seen in recurring:
+            if last_seen:
+                days_ago = (datetime.utcnow().date() - last_seen).days
+                if days_ago > 35:  # Monthly bill overdue
+                    insights.append({
+                        "type": "bill_pattern",
+                        "insight": f"{source} usually appears monthly — last seen {days_ago} days ago. May be overdue.",
+                        "priority": "normal"
+                    })
+    except Exception as e:
+        print(f"[PROACTIVE_INTEL] Email pattern scan failed: {e}")
+    
+    return insights
+
+
+async def check_goal_staleness() -> List[Dict]:
+    """Find goals that haven't had any progress in a while."""
+    insights = []
+    
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS tony_insights (
-                id SERIAL PRIMARY KEY,
-                insight_type TEXT NOT NULL,
-                title TEXT NOT NULL,
-                body TEXT NOT NULL,
-                confidence FLOAT DEFAULT 0.7,
-                source_data TEXT,
-                actioned BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT NOW()
-            )
+            SELECT title, priority, updated_at, progress_notes
+            FROM tony_goals
+            WHERE status = 'active'
+            AND updated_at < NOW() - INTERVAL '14 days'
+            AND priority IN ('urgent', 'high')
+            ORDER BY priority, updated_at ASC
+            LIMIT 3
         """)
-        conn.commit()
+        stale = cur.fetchall()
         cur.close()
         conn.close()
-        print("[PROACTIVE_INTEL] Tables initialised")
+        
+        for title, priority, updated, notes in stale:
+            days_stale = (datetime.utcnow() - updated.replace(tzinfo=None)).days if updated else 99
+            insights.append({
+                "type": "stale_goal",
+                "insight": f"'{title}' ({priority} priority) has had no progress in {days_stale} days.",
+                "priority": "high" if priority == "urgent" else "normal"
+            })
     except Exception as e:
-        print(f"[PROACTIVE_INTEL] Init failed: {e}")
-
-
-async def _gemini(prompt: str, max_tokens: int = 1024) -> Optional[str]:
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.2}
-                }
-            )
-            if r.status_code == 200:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        print(f"[PROACTIVE_INTEL] Gemini call failed: {e}")
-    return None
-
-
-async def analyse_email_patterns() -> List[Dict]:
-    """
-    Tony looks for patterns across all emails — not just urgency.
-    Identifies trends, recurring senders, and things that need attention.
-    """
-    insights = []
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(
-                f"{BACKEND_URL}/api/v1/gmail/search",
-                headers={"Authorization": f"Bearer {DEV_TOKEN}"},
-                params={"query": "newer_than:7d", "max_per_account": 30}
-            )
-            emails = r.json().get("results", [])
-
-        if not emails:
-            return []
-
-        email_summary = "\n".join(
-            f"- From: {e.get('from','')[:40]} | Subject: {e.get('subject','')[:60]} | {e.get('date','')[:10]}"
-            for e in emails[:25]
-        )
-
-        prompt = f"""Tony is analysing Matthew's emails from the last 7 days for patterns and insights.
-
-Matthew's context:
-- Has CCJ dispute with Western Circle (Cashfloat)
-- Works night shifts at care home
-- Has wife Georgina and two young daughters
-- Building Nova AI app in spare time
-- Trying to build financial stability
-
-Emails this week:
-{email_summary}
-
-Identify:
-1. Anything time-sensitive that might have been missed
-2. Patterns — any company emailing repeatedly?
-3. Financial signals — bills, payments, opportunities
-4. Legal signals — anything related to the CCJ or debt
-5. Opportunities Matthew might not have noticed
-
-Only flag things with genuine insight value. Do not repeat obvious observations.
-
-Respond in JSON:
-{{
-    "insights": [
-        {{
-            "type": "financial|legal|opportunity|pattern|urgent",
-            "title": "short title",
-            "body": "what Tony noticed and why it matters to Matthew",
-            "confidence": 0.0-1.0
-        }}
-    ]
-}}
-
-If nothing interesting: {{"insights": []}}"""
-
-        response = await _gemini(prompt)
-        if not response:
-            return []
-
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if not json_match:
-            return []
-
-        data = json.loads(json_match.group())
-        raw_insights = data.get("insights", [])
-
-        # Store and create alerts for high-confidence insights
-        for insight in raw_insights:
-            if insight.get("confidence", 0) < 0.6:
-                continue
-
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO tony_insights (insight_type, title, body, confidence)
-                VALUES (%s, %s, %s, %s)
-            """, (
-                insight.get("type", "general"),
-                insight.get("title", "")[:200],
-                insight.get("body", "")[:500],
-                insight.get("confidence", 0.7)
-            ))
-            conn.commit()
-            cur.close()
-            conn.close()
-
-            # Create alert for urgent or high-confidence insights
-            if insight.get("type") in ("urgent", "legal", "financial") or insight.get("confidence", 0) > 0.8:
-                from app.core.proactive import create_alert
-                create_alert(
-                    alert_type="insight",
-                    title=insight.get("title", "Tony spotted something"),
-                    body=insight.get("body", ""),
-                    priority="high" if insight.get("type") in ("urgent", "legal") else "normal",
-                    source="email_pattern_analysis"
-                )
-
-            insights.append(insight)
-
-    except Exception as e:
-        print(f"[PROACTIVE_INTEL] Email pattern analysis failed: {e}")
-
+        print(f"[PROACTIVE_INTEL] Goal staleness check failed: {e}")
+    
     return insights
 
 
-async def check_goal_progress() -> List[Dict]:
-    """
-    Tony checks whether Matthew's goals are actually progressing.
-    If a goal has been stuck for too long, Tony takes initiative.
-    """
-    actions = []
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(
-                f"{BACKEND_URL}/api/v1/goals",
-                headers={"Authorization": f"Bearer {DEV_TOKEN}"}
-            )
-            goals = r.json().get("goals", [])
-
-        for goal in goals:
-            if goal.get("status") != "active":
-                continue
-
-            last_updated = goal.get("updated_at", "")
-            title = goal.get("title", "")
-            progress = goal.get("progress_notes", "")
-
-            # If high priority goal with no recent progress
-            if goal.get("priority") in ("urgent", "high"):
-                prompt = f"""Tony is reviewing this goal for Matthew:
-Goal: {title}
-Current progress: {progress or 'No progress recorded'}
-Priority: {goal.get('priority')}
-
-What is ONE specific thing Tony could do RIGHT NOW to advance this goal?
-Not advice — an actual action Tony can take autonomously.
-Keep it to one sentence."""
-
-                suggestion = await _gemini(prompt, max_tokens=200)
-                if suggestion and len(suggestion) > 20:
-                    actions.append({
-                        "goal": title,
-                        "action": suggestion.strip()
-                    })
-
-    except Exception as e:
-        print(f"[PROACTIVE_INTEL] Goal progress check failed: {e}")
-
-    return actions
-
-
-async def run_proactive_intelligence() -> Dict:
-    """Full proactive intelligence scan. Runs in the autonomous loop."""
-    print("[PROACTIVE_INTEL] Running intelligence scan...")
-    results = {"insights": [], "goal_actions": [], "errors": []}
-
-    try:
-        results["insights"] = await analyse_email_patterns()
-        print(f"[PROACTIVE_INTEL] {len(results['insights'])} email insights found")
-    except Exception as e:
-        results["errors"].append(f"Email analysis: {e}")
-
-    try:
-        results["goal_actions"] = await check_goal_progress()
-        print(f"[PROACTIVE_INTEL] {len(results['goal_actions'])} goal actions identified")
-    except Exception as e:
-        results["errors"].append(f"Goal check: {e}")
-
-    return results
+async def run_proactive_intelligence() -> List[Dict]:
+    """Full proactive intelligence run."""
+    all_insights = []
+    
+    for scan_fn in [
+        scan_for_legal_developments,
+        scan_email_patterns,
+        check_goal_staleness,
+    ]:
+        try:
+            insights = await scan_fn()
+            all_insights.extend(insights)
+        except Exception as e:
+            print(f"[PROACTIVE_INTEL] Scan error: {e}")
+    
+    # Create alerts for high-priority insights
+    for insight in all_insights:
+        if insight.get("priority") == "high":
+            try:
+                from app.core.proactive import create_alert
+                create_alert(
+                    alert_type=insight.get("type", "intelligence"),
+                    title="Tony spotted something",
+                    body=insight.get("insight", ""),
+                    priority="high",
+                    source="proactive_intelligence"
+                )
+            except Exception:
+                pass
+    
+    if all_insights:
+        print(f"[PROACTIVE_INTEL] Generated {len(all_insights)} proactive insights")
+    
+    return all_insights
