@@ -147,8 +147,8 @@ except Exception as e:
 
 # Initialise knowledge base
 try:
-    from app.core.knowledge_base import init_knowledge_tables
-    init_knowledge_tables()
+    from app.core.knowledge_base import init_knowledge_base
+    init_knowledge_base()
 except Exception as e:
     print(f"[ROUTER] Knowledge base init failed: {e}")
 
@@ -235,6 +235,13 @@ try:
     init_world_model()
 except Exception as e:
     print(f"[WORLD_MODEL] Init failed: {e}")
+
+# Initialise knowledge base
+try:
+    from app.core.knowledge_base import init_knowledge_base
+    init_knowledge_base()
+except Exception as e:
+    print(f"[KNOWLEDGE] Init failed: {e}")
 
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])
