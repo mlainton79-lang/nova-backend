@@ -41,6 +41,8 @@ async def autonomous_loop():
             await run_youtube_monitoring()
             await run_pattern_analysis()
             await run_income_intelligence()
+            from app.core.marketplace_monitor import run_marketplace_intelligence
+            await run_marketplace_intelligence()
             await run_goal_execution()
             await write_daily_reflection()
             from app.core.self_repair import run_self_repair_cycle

@@ -413,6 +413,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] Pattern analysis failed: {e}")
 
+            try:
+                from app.core.goal_detector import detect_and_create_goal
+                asyncio.create_task(detect_and_create_goal(request.message, full))
+            except Exception as e:
+                print(f"[CHAT_STREAM] Goal detection failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"

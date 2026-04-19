@@ -341,4 +341,9 @@ def build_system_prompt(
     except Exception:
         pass
 
-    return "\n\n".join(p for p in parts if p)
+    # Intelligently trim to stay under token budget
+    try:
+        from app.core.context_manager import trim_system_prompt
+        return trim_system_prompt(parts, context or "")
+    except Exception:
+        return "\n\n".join(p for p in parts if p)
