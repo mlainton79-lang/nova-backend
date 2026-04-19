@@ -40,7 +40,8 @@ TRUELAYER_REDIRECT_URI = os.environ.get(
     "https://web-production-be42b.up.railway.app/api/v1/banking/callback"
 )
 
-TRUELAYER_AUTH_URL = "https://auth.truelayer.com"
+# Sandbox uses different auth URL
+TRUELAYER_AUTH_URL = "https://auth.truelayer-sandbox.com"
 TRUELAYER_API_URL = "https://api.truelayer.com"
 
 
