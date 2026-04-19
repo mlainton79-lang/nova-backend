@@ -106,7 +106,35 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
 
     import asyncio as _asyncio
     loop = _asyncio.get_event_loop()
-    system_prompt = await loop.run_in_executor(None, lambda: safe_system_prompt(req, search_results))
+    # Use new intelligent prompt assembler
+    try:
+        from app.core.prompt_assembler import build_prompt
+        from app.core.reasoning import needs_deep_reasoning, reason_through, emotional_check as _ec
+        reasoning_ctx = ""
+        if needs_deep_reasoning(req.message):
+            reasoning_ctx = await reason_through(req.message) or ""
+        emotional = await _ec(req.message)
+        if emotional:
+            reasoning_ctx = f"[EMOTIONAL CONTEXT]: {emotional}\n" + reasoning_ctx
+        code_kw = ["code","function","file","class","bug","error","fix","kotlin","python","api","push","patch"]
+        inc_codebase = any(k in req.message.lower() for k in code_kw)
+        system_prompt = await build_prompt(
+            context=req.context,
+            document_text=req.document_text,
+            document_base64=req.document_base64,
+            document_name=req.document_name,
+            document_mime=req.document_mime,
+            include_codebase=inc_codebase,
+            user_message=req.message,
+            image_present=bool(req.image_base64)
+        )
+        if search_results:
+            system_prompt += f"\n\n[WEB SEARCH]:\n{search_results}"
+        if reasoning_ctx:
+            system_prompt += f"\n\n[TONY'S REASONING]:\n{reasoning_ctx[:600]}"
+    except Exception as e:
+        print(f"[COUNCIL] Prompt assembler failed: {e}")
+        system_prompt = await loop.run_in_executor(None, lambda: safe_system_prompt(req, search_results))
     for ctx in [case_context, gmail_context]:
         if ctx:
             system_prompt += "\n\n" + ctx
@@ -135,6 +163,19 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
     try:
         facts = await extract_and_save_instant_memory(req.message, reply)
         for fact in facts: add_memory("auto", fact)
+    except Exception: pass
+    import asyncio as _ca
+    try:
+        from app.core.world_model import update_world_model
+        _ca.create_task(update_world_model(req.message, reply))
+    except Exception: pass
+    try:
+        from app.core.living_memory import update_from_conversation
+        _ca.create_task(update_from_conversation(req.message, reply))
+    except Exception: pass
+    try:
+        from app.core.learning import log_conversation
+        _ca.create_task(log_conversation(req.message, reply, "council"))
     except Exception: pass
     log_request(provider=result.get("provider", "council"), message=req.message, reply=reply, deciding_brain=result.get("provider"))
     return result
