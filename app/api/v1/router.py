@@ -46,6 +46,8 @@ from app.api.v1.endpoints import whatsapp
 router.include_router(whatsapp.router, tags=["whatsapp"])
 from app.api.v1.endpoints import banking
 router.include_router(banking.router, tags=["banking"])
+from app.api.v1.endpoints import cases
+router.include_router(cases.router, tags=["cases"])
 
 # Initialise tables on startup
 try:
@@ -170,3 +172,10 @@ try:
     init_youtube_tables()
 except Exception as e:
     print(f"[ROUTER] YouTube monitor init failed: {e}")
+
+# Initialise correspondence tables
+try:
+    from app.core.correspondence import init_correspondence_tables
+    init_correspondence_tables()
+except Exception as e:
+    print(f"[ROUTER] Correspondence init failed: {e}")

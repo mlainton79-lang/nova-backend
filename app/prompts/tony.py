@@ -276,6 +276,15 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject accurate self-knowledge - what Tony actually can do right now
+    try:
+        from app.core.self_knowledge import get_capabilities_summary
+        caps = get_capabilities_summary()
+        if caps:
+            parts.append(caps)
+    except Exception:
+        pass
+
     # Inject living memory - Tony's current picture of Matthew
     try:
         from app.core.living_memory import get_living_memory_for_prompt
