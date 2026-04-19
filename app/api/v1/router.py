@@ -215,5 +215,12 @@ try:
 except Exception as e:
     print(f"[ROUTER] Financial intelligence init failed: {e}")
 
+# Initialise learning engine
+try:
+    from app.core.learning import init_learning_tables
+    init_learning_tables()
+except Exception as e:
+    print(f"[ROUTER] Learning init failed: {e}")
+
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])

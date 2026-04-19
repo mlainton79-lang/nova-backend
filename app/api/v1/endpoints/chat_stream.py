@@ -441,6 +441,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] Goal detection failed: {e}")
 
+            try:
+                from app.core.learning import log_conversation
+                asyncio.create_task(log_conversation(request.message, full, provider_key))
+            except Exception as e:
+                print(f"[CHAT_STREAM] Learning log failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
