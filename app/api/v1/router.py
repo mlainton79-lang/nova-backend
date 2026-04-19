@@ -252,5 +252,12 @@ try:
 except Exception as e:
     print(f"[SELF_EVAL] Init failed: {e}")
 
+# Initialise living memory
+try:
+    from app.core.living_memory import init_living_memory_tables
+    init_living_memory_tables()
+except Exception as e:
+    print(f"[LIVING_MEMORY] Init failed: {e}")
+
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])
