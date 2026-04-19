@@ -339,6 +339,19 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         _calendar_search(), _emotional_intelligence(), _reasoning()
     )
 
+    # Run reasoning chain for complex questions before building prompt
+    reasoning_context = ""
+    if not request.image_base64:
+        try:
+            from app.core.reasoning import needs_deep_reasoning, reason_through, emotional_check
+            if needs_deep_reasoning(request.message):
+                reasoning_context = await reason_through(request.message) or ""
+            emotional = await emotional_check(request.message)
+            if emotional:
+                reasoning_context = f"[EMOTIONAL CONTEXT]: {emotional}\n" + reasoning_context
+        except Exception as e:
+            print(f"[CHAT_STREAM] Reasoning failed: {e}")
+
     # Build system prompt with new intelligent assembler
     if request.image_base64:
         sp = "You are Tony, Matthew Lainton's personal AI assistant. British English. Direct and warm. Describe what you see and answer the question."
@@ -359,6 +372,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             )
             if search_results:
                 sp += f"\n\n[WEB SEARCH RESULTS]:\n{search_results}"
+            if reasoning_context:
+                sp += f"\n\n[TONY'S REASONING]:\n{reasoning_context[:600]}"
         except Exception as e:
             print(f"[CHAT_STREAM] Prompt assembler failed: {e}, using fallback")
             sp = await loop.run_in_executor(None, lambda: safe_system_prompt(request, search_results))
