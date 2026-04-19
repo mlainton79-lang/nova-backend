@@ -170,6 +170,25 @@ async def build_prompt(
     except Exception:
         pass
 
+    # 7b. World model (compact — always include)
+    try:
+        from app.core.world_model import get_world_model_for_prompt
+        world = get_world_model_for_prompt()
+        if world:
+            add_section(world[:600])
+    except Exception:
+        pass
+
+    # 7c. Episodic memory (recent significant episodes)
+    if user_message:
+        try:
+            from app.core.episodic_memory import get_relevant_episodes
+            episodes = await get_relevant_episodes(user_message, limit=2)
+            if episodes:
+                add_section(episodes[:400])
+        except Exception:
+            pass
+
     # 8. Weekly strategy (if exists)
     try:
         conn = __import__('psycopg2').connect(os.environ["DATABASE_URL"], sslmode="require")

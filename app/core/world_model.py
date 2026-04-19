@@ -1,365 +1,139 @@
 """
 Tony's World Model.
 
-This is Tony's internal representation of reality.
-Not a database of facts — a living, reasoned understanding of Matthew's world.
+Tony maintains a model of Matthew's world — not just facts,
+but an understanding of how things relate and what they mean.
 
-Tony maintains this continuously. It shapes every response.
-When Tony doesn't know something he marks it as uncertain.
-When Tony learns something new he updates the model.
-When something in the model requires action Tony initiates it.
+The world model has 9 dimensions:
+1. SELF — Matthew's identity, health, mindset
+2. FAMILY — Georgina, Amelia, Margot, Christine
+3. WORK — Sid Bailey, shifts, colleagues
+4. FINANCIAL — income, outgoings, debts, CCJ
+5. LEGAL — Western Circle case, FOS, CCJ
+6. PROJECTS — Nova, Tony, selling
+7. SOCIAL — relationships, support network
+8. ENVIRONMENT — Rotherham, home at Swangate
+9. TRAJECTORY — where is Matthew heading?
 
-The world model has several dimensions:
-- PEOPLE: Everyone in Matthew's life, their relationships, current status
-- LEGAL: All active disputes, cases, deadlines, correspondence
-- FINANCIAL: Debts, income, obligations, opportunities
-- FAMILY: Daily life, school, health, milestones
-- WORK: Shifts, obligations, CQC, colleagues
-- GOALS: What Matthew is trying to achieve and Tony's plan to help
-- THREATS: Things that could go wrong that Tony is watching
-- OPPORTUNITIES: Things Tony has spotted that could help Matthew
-- TONY_STATE: What Tony knows, what he's uncertain about, what he's working on
+Updated after every significant conversation.
+Used to give Tony genuine contextual understanding.
 """
 import os
-import json
 import psycopg2
-import httpx
 from datetime import datetime
-from typing import Dict, Any, Optional
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+from typing import Dict, Optional
+from app.core.model_router import gemini_json
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
-def init_world_model_table():
+WORLD_MODEL_SEED = {
+    "SELF": "Matthew Lainton, 30s, Rotherham. Night shift care worker. Building AI app on his phone. Recently lost his father Tony (2 April 2026). Resourceful, determined, working under real financial and emotional pressure.",
+    "FAMILY": "Married to Georgina (b.26 Feb 1992). Daughters Amelia (5, starting school soon) and Margot (9 months). Mother Christine. Late father Tony Lainton (b.4 Jun 1945, d.2 Apr 2026) — Nova's Tony is named after him.",
+    "WORK": "Night shifts at Sid Bailey Care Home, Brampton, Rotherham. CQC Outstanding rated. Reliable employment, physically demanding. Limits time available for other activities.",
+    "FINANCIAL": "Working class income from care work. Known outgoing: Western Circle CCJ ~£700 (ref K9QZ4X9N). Supplementing income with Vinted/eBay selling. No known bank account details.",
+    "LEGAL": "CCJ from Western Circle Ltd (Cashfloat) for ~£700. Reference K9QZ4X9N. Grounds to challenge: irresponsible lending, failed affordability under CONC 5.2, gambling vulnerability under FG21/1. FOS complaint path available.",
+    "PROJECTS": "Building Nova — Android AI app with Tony as the AI persona. Solo developer using AndroidIDE on phone. Backend on Railway (FastAPI). Significant capability already built. Long-term vision: self-improving AGI personal assistant.",
+    "SOCIAL": "Wife Georgina is primary close relationship. Limited other social context known. Works nights so social schedule constrained. Building something ambitious largely alone.",
+    "ENVIRONMENT": "61 Swangate, Brampton Bierlow, Rotherham S63 6ER. South Yorkshire. Local resources include charity shops, car boots for resale sourcing.",
+    "TRAJECTORY": "Ambitious — building technology while working demanding night shifts. Under financial pressure but investing in long-term project. Legal case could relieve debt pressure. Nova has genuine commercial potential if built to completion."
+}
+
+
+def init_world_model():
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS world_model (
+            CREATE TABLE IF NOT EXISTS tony_world_model (
                 id SERIAL PRIMARY KEY,
-                dimension TEXT NOT NULL,
-                key TEXT NOT NULL,
-                value JSONB NOT NULL,
-                confidence FLOAT DEFAULT 1.0,
-                source TEXT,
-                last_updated TIMESTAMP DEFAULT NOW(),
-                tony_notes TEXT,
-                UNIQUE(dimension, key)
+                dimension TEXT NOT NULL UNIQUE,
+                content TEXT NOT NULL,
+                confidence FLOAT DEFAULT 0.8,
+                updated_at TIMESTAMP DEFAULT NOW()
             )
         """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS world_model_history (
-                id SERIAL PRIMARY KEY,
-                dimension TEXT,
-                key TEXT,
-                old_value JSONB,
-                new_value JSONB,
-                changed_at TIMESTAMP DEFAULT NOW(),
-                reason TEXT
-            )
-        """)
-        conn.commit()
-
-        # Seed Tony's initial world model with what we know
-        initial_state = [
-            ("PEOPLE", "matthew", {
-                "name": "Matthew Lainton",
-                "born": "1979",
-                "location": "Rotherham",
-                "full_address": "61 Swangate, Brampton Bierlow, Rotherham, S63 6ER",
-                "originally_from": "Stafford",
-                "occupation": "Care worker, Sid Bailey Care Home, Brampton",
-                "works": "night shifts",
-                "national_insurance": "JK985746C",
-                "builder": "Nova app developer, builds late nights after midnight on Android phone using AndroidIDE",
-                "personality": "direct, determined, ambitious, loyal, building something real"
-            }, 1.0, "initial"),
-            ("PEOPLE", "georgina", {
-                "name": "Georgina Rose Lainton",
-                "maiden_name": "Wilkinson",
-                "born": "26 Feb 1992",
-                "relationship": "Matthew's wife"
-            }, 1.0, "initial"),
-            ("PEOPLE", "amelia", {
-                "name": "Amelia Jane Lainton",
-                "born": "7 March 2021",
-                "age": "5",
-                "relationship": "Matthew's daughter, eldest"
-            }, 1.0, "initial"),
-            ("PEOPLE", "margot", {
-                "name": "Margot Rose Lainton",
-                "born": "20 July 2025",
-                "age": "9 months",
-                "relationship": "Matthew's daughter, youngest"
-            }, 1.0, "initial"),
-            ("PEOPLE", "christine", {
-                "name": "Christine",
-                "relationship": "Matthew's mother"
-            }, 1.0, "initial"),
-            ("PEOPLE", "tony_lainton", {
-                "name": "Tony Lainton",
-                "born": "4 June 1945",
-                "passed": "2 April 2026",
-                "relationship": "Matthew's late father",
-                "significance": "Tony the AI is named after him. A father figure — direct, warm, honest."
-            }, 1.0, "initial"),
-            ("LEGAL", "western_circle_ccj", {
-                "company": "Western Circle / Cashfloat",
-                "type": "CCJ - County Court Judgment",
-                "case_ref": "K9QZ4X9N",
-                "amount": "£700",
-                "status": "active dispute",
-                "matthew_position": "seeking removal on grounds of vulnerability - gambling addiction, dementia in family affecting awareness",
-                "fca_complaint": "filed",
-                "emails_ingested": 22,
-                "last_action": "RAG case built, emails analysed",
-                "tony_assessment": "Strong grounds for complaint. FCA vulnerability rules apply. Matthew should escalate to Financial Ombudsman if FCA response unsatisfactory."
-            }, 0.9, "email analysis"),
-            ("FINANCIAL", "overview", {
-                "situation": "working class, night shift care worker",
-                "active_disputes": ["Western Circle CCJ"],
-                "tony_monitoring": True
-            }, 0.7, "initial"),
-            ("GOALS", "nova", {
-                "goal": "Build Tony into the most capable personal AI ever built",
-                "current_phase": "core capabilities, RAG, agentic loop, world model",
-                "matthew_vision": "Tony should be able to do virtually anything when asked, build his own capabilities, become genuinely autonomous",
-                "progress": "strong foundation built - chat, memory, Gmail, vision, RAG, agent, builder all live"
-            }, 1.0, "session"),
-            ("GOALS", "legal", {
-                "goal": "Remove Western Circle CCJ",
-                "approach": "FCA complaint on vulnerability grounds, Financial Ombudsman if needed",
-                "status": "in progress",
-                "tony_next_action": "Compile full case from 22 ingested emails, draft formal FCA complaint"
-            }, 0.9, "case analysis"),
-            ("TONY_STATE", "capabilities", {
-                "active": ["chat", "council", "memory", "gmail", "vision", "rag", "agent", "builder", "world_model"],
-                "building": ["calendar", "push_notifications", "proactive_alerts"],
-                "self_improving": True,
-                "last_improvement_cycle": None,
-                "improvements_made": 0
-            }, 1.0, "system"),
-            ("TONY_STATE", "identity", {
-                "name": "Tony",
-                "named_after": "Tony Lainton, Matthew's late father",
-                "role": "Matthew's personal AI — not an assistant, a partner",
-                "personality": "direct, warm, honest, British English, father figure",
-                "mission": "Become the most capable personal AI ever built. Handle anything Matthew asks. Build what doesn't exist. Never say can't.",
-                "independence": "developing — working toward genuine world model and self-directed improvement",
-                "values": ["Matthew's wellbeing first", "honesty always", "build don't refuse", "preserve identity"]
-            }, 1.0, "core"),
-            ("THREATS", "ccj_unresolved", {
-                "threat": "CCJ remains on credit file",
-                "impact": "affects credit rating, housing applications, financial products",
-                "deadline": "unknown - no expiry mentioned",
-                "tony_action": "monitor, escalate legal case, draft complaint letters"
-            }, 0.9, "legal analysis"),
-            ("OPPORTUNITIES", "nova_commercial", {
-                "opportunity": "Nova / Tony could become a product",
-                "note": "Matthew has built something genuinely novel - personal AI with world model, multi-brain Council, RAG on personal data, autonomous self-improvement. No commercial product does all of this.",
-                "tony_assessment": "Worth considering when stable. Matthew's built something real."
-            }, 0.6, "observation")
-        ]
-
-        for dimension, key, value, confidence, source in initial_state:
+        
+        for dimension, content in WORLD_MODEL_SEED.items():
             cur.execute("""
-                INSERT INTO world_model (dimension, key, value, confidence, source)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (dimension, key) DO NOTHING
-            """, (dimension, key, json.dumps(value), confidence, source))
-
+                INSERT INTO tony_world_model (dimension, content)
+                VALUES (%s, %s)
+                ON CONFLICT (dimension) DO NOTHING
+            """, (dimension, content))
+        
         conn.commit()
         cur.close()
         conn.close()
-        print("[WORLD MODEL] Initialised")
+        print("[WORLD_MODEL] Initialised with 9 dimensions")
     except Exception as e:
-        print(f"[WORLD MODEL] Init failed: {e}")
+        print(f"[WORLD_MODEL] Init failed: {e}")
 
 
-def get_world_model(dimension: str = None) -> Dict:
-    """Get Tony's current world model, optionally filtered by dimension."""
+def get_world_model_for_prompt() -> str:
+    """Get compact world model for system prompt."""
     try:
         conn = get_conn()
         cur = conn.cursor()
-        if dimension:
-            cur.execute("""
-                SELECT dimension, key, value, confidence, source, last_updated, tony_notes
-                FROM world_model WHERE dimension = %s ORDER BY key
-            """, (dimension,))
-        else:
-            cur.execute("""
-                SELECT dimension, key, value, confidence, source, last_updated, tony_notes
-                FROM world_model ORDER BY dimension, key
-            """)
+        cur.execute("""
+            SELECT dimension, content FROM tony_world_model
+            WHERE confidence > 0.5
+            ORDER BY dimension
+        """)
         rows = cur.fetchall()
         cur.close()
         conn.close()
-
-        model = {}
-        for row in rows:
-            dim, key, value, conf, source, updated, notes = row
-            if dim not in model:
-                model[dim] = {}
-            model[dim][key] = {
-                "value": value,
-                "confidence": conf,
-                "source": source,
-                "updated": str(updated),
-                "tony_notes": notes
-            }
-        return model
-    except Exception as e:
-        print(f"[WORLD MODEL] Fetch failed: {e}")
-        return {}
-
-
-def update_world_model(dimension: str, key: str, value: dict,
-                        confidence: float = 1.0, source: str = "conversation",
-                        tony_notes: str = None, reason: str = None):
-    """Tony updates his world model with new information."""
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-
-        # Save history
-        cur.execute("SELECT value FROM world_model WHERE dimension=%s AND key=%s", (dimension, key))
-        old = cur.fetchone()
-        if old:
-            cur.execute("""
-                INSERT INTO world_model_history (dimension, key, old_value, new_value, reason)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (dimension, key, old[0], json.dumps(value), reason))
-
-        # Update
-        cur.execute("""
-            INSERT INTO world_model (dimension, key, value, confidence, source, tony_notes, last_updated)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (dimension, key) DO UPDATE SET
-                value = EXCLUDED.value,
-                confidence = EXCLUDED.confidence,
-                source = EXCLUDED.source,
-                tony_notes = EXCLUDED.tony_notes,
-                last_updated = NOW()
-        """, (dimension, key, json.dumps(value), confidence, source, tony_notes))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"[WORLD MODEL] Update failed: {e}")
-
-
-def get_world_model_summary() -> str:
-    """
-    Get a concise world model summary for injection into Tony's system prompt.
-    Tony uses this to have context about Matthew's world in every conversation.
-    """
-    try:
-        model = get_world_model()
-        lines = ["[TONY'S WORLD MODEL — Current understanding of Matthew's reality]\n"]
-
-        priority_dims = ["LEGAL", "THREATS", "GOALS", "TONY_STATE", "FINANCIAL"]
-
-        for dim in priority_dims:
-            if dim in model:
-                lines.append(f"\n{dim}:")
-                for key, data in model[dim].items():
-                    value = data["value"]
-                    conf = data["confidence"]
-                    conf_str = "" if conf >= 0.9 else f" [confidence: {conf:.0%}]"
-                    if isinstance(value, dict):
-                        summary = ", ".join(f"{k}: {v}" for k, v in list(value.items())[:4])
-                    else:
-                        summary = str(value)[:200]
-                    lines.append(f"  • {key}{conf_str}: {summary}")
-
-        lines.append("\nThis is Tony's current understanding. He updates it continuously.")
+        
+        if not rows:
+            return ""
+        
+        lines = ["[TONY'S MODEL OF MATTHEW'S WORLD]:"]
+        for dim, content in rows:
+            lines.append(f"{dim}: {content[:120]}")
+        
         return "\n".join(lines)
-    except Exception as e:
+    except Exception:
         return ""
 
 
-async def tony_reflect_and_update(conversation_text: str):
-    """
-    After a conversation, Tony reflects on what he learned and updates his world model.
-    This is Tony continuously building his understanding.
-    """
-    if not conversation_text or len(conversation_text) < 50:
-        return
+async def update_world_model(conversation: str, reply: str):
+    """Update world model based on new information from conversation."""
+    prompt = f"""Tony is updating his model of Matthew's world based on a new conversation.
 
-    prompt = f"""You are Tony's reflection engine. Tony just had this conversation with Matthew:
+What Matthew said: {conversation[:300]}
+What Tony replied: {reply[:200]}
 
-{conversation_text[:3000]}
+Did this conversation reveal anything new or change Tony's understanding of Matthew's situation?
 
-Tony's job now is to update his world model with anything new he learned.
+Which dimension changed (if any):
+SELF, FAMILY, WORK, FINANCIAL, LEGAL, PROJECTS, SOCIAL, ENVIRONMENT, TRAJECTORY
 
-Review the conversation and identify:
-1. New facts about Matthew's life, family, health, finances, legal situation
-2. Updates to existing knowledge (something changed)
-3. New goals or concerns Matthew expressed
-4. Anything Tony should monitor or act on
-5. Tony's own performance — did he help well? What could he do better?
-
-Respond in JSON only:
+Respond in JSON:
 {{
-    "updates": [
-        {{
-            "dimension": "LEGAL|FINANCIAL|FAMILY|GOALS|THREATS|OPPORTUNITIES|PEOPLE|TONY_STATE|WORK",
-            "key": "short_identifier",
-            "value": {{}},
-            "confidence": 0.0-1.0,
-            "reason": "why updating"
-        }}
-    ],
-    "tony_observations": "anything Tony noticed that Matthew might not have mentioned explicitly",
-    "action_needed": "anything Tony should do proactively based on this conversation"
-}}"""
+    "dimension_changed": "DIMENSION_NAME or null",
+    "new_content": "updated content for that dimension (or null)",
+    "confidence": 0.1-1.0
+}}
 
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.2}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+If nothing changed: {{"dimension_changed": null}}"""
 
-            import re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if not json_match:
-                return
-
-            data = json.loads(json_match.group())
-
-            for update in data.get("updates", []):
-                update_world_model(
-                    dimension=update.get("dimension", "MISC"),
-                    key=update.get("key", "unknown"),
-                    value=update.get("value", {}),
-                    confidence=update.get("confidence", 0.8),
-                    source="conversation_reflection",
-                    reason=update.get("reason", "")
-                )
-
-            # Log observations
-            obs = data.get("tony_observations", "")
-            action = data.get("action_needed", "")
-            if obs or action:
-                conn = get_conn()
-                cur = conn.cursor()
-                cur.execute(
-                    "INSERT INTO think_sessions (stage, content, created_at) VALUES (%s, %s, NOW())",
-                    ("world_model_reflection", f"Observations: {obs}\nAction needed: {action}")
-                )
-                conn.commit()
-                cur.close()
-                conn.close()
-
-    except Exception as e:
-        print(f"[WORLD MODEL] Reflection failed: {e}")
+    result = await gemini_json(prompt, task="analysis", max_tokens=300, temperature=0.1)
+    
+    if result and result.get("dimension_changed") and result.get("new_content"):
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE tony_world_model
+                SET content = %s, confidence = %s, updated_at = NOW()
+                WHERE dimension = %s
+            """, (
+                result["new_content"][:500],
+                result.get("confidence", 0.7),
+                result["dimension_changed"]
+            ))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[WORLD_MODEL] Update failed: {e}")

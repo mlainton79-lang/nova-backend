@@ -91,8 +91,8 @@ except Exception as e:
 
 # Initialise world model
 try:
-    from app.core.world_model import init_world_model_table
-    init_world_model_table()
+    from app.core.world_model import init_world_model
+    init_world_model()
 except Exception as e:
     print(f"[ROUTER] World model init failed: {e}")
 
@@ -221,6 +221,20 @@ try:
     init_learning_tables()
 except Exception as e:
     print(f"[ROUTER] Learning init failed: {e}")
+
+# Initialise episodic memory
+try:
+    from app.core.episodic_memory import init_episodic_tables
+    init_episodic_tables()
+except Exception as e:
+    print(f"[EPISODIC] Init failed: {e}")
+
+# Initialise world model
+try:
+    from app.core.world_model import init_world_model
+    init_world_model()
+except Exception as e:
+    print(f"[WORLD_MODEL] Init failed: {e}")
 
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])

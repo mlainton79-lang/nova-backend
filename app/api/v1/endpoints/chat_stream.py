@@ -447,6 +447,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] Learning log failed: {e}")
 
+            try:
+                from app.core.world_model import update_world_model
+                asyncio.create_task(update_world_model(request.message, full))
+            except Exception as e:
+                print(f"[CHAT_STREAM] World model update failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
