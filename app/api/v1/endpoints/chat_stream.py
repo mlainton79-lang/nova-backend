@@ -219,6 +219,22 @@ def _get_stream_fn(provider_key: str, message: str, history, system_prompt: str,
 async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     provider_key = request.provider.lower().strip()
 
+    # Check for direct action commands first
+    try:
+        from app.core.command_parser import detect_command, execute_command
+        cmd = detect_command(request.message)
+        if cmd:
+            result_text = await execute_command(cmd)
+            if result_text:
+                log_request(provider="command", message=request.message, reply=result_text, ok=True)
+                async def _cmd_stream():
+                    import json
+                    yield "data: " + json.dumps({"type": "chunk", "text": result_text}) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+                return StreamingResponse(_cmd_stream(), media_type="text/event-stream")
+    except Exception as e:
+        print(f"[CHAT_STREAM] Command parse error: {e}")
+
     injected, reason = check_injection(request.message)
     if injected:
         async def err():
