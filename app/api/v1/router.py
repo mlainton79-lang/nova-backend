@@ -44,6 +44,8 @@ from app.api.v1.endpoints import vinted
 router.include_router(vinted.router, tags=["vinted"])
 from app.api.v1.endpoints import whatsapp
 router.include_router(whatsapp.router, tags=["whatsapp"])
+from app.api.v1.endpoints import banking
+router.include_router(banking.router, tags=["banking"])
 
 # Initialise tables on startup
 try:
@@ -147,3 +149,17 @@ try:
     init_knowledge_tables()
 except Exception as e:
     print(f"[ROUTER] Knowledge base init failed: {e}")
+
+# Initialise living memory
+try:
+    from app.core.living_memory import init_living_memory_tables
+    init_living_memory_tables()
+except Exception as e:
+    print(f"[ROUTER] Living memory init failed: {e}")
+
+# Initialise open banking
+try:
+    from app.core.open_banking import init_banking_tables
+    init_banking_tables()
+except Exception as e:
+    print(f"[ROUTER] Banking init failed: {e}")

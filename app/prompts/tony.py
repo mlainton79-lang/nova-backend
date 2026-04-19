@@ -276,6 +276,23 @@ def build_system_prompt(
     except Exception:
         pass
 
+    # Inject living memory - Tony's current picture of Matthew
+    try:
+        from app.core.living_memory import get_living_memory_for_prompt
+        living = get_living_memory_for_prompt()
+        if living:
+            parts.append(living)
+    except Exception:
+        pass
+
+    # Inject financial awareness if banking connected (sync check only)
+    try:
+        from app.core.open_banking import is_configured
+        if is_configured():
+            parts.append("[BANKING]: Connected - financial data available on request")
+    except Exception:
+        pass
+
     # Inject episodic memory — what Tony and Matthew have experienced together
     try:
         from app.core.episodic_memory import format_episodic_block

@@ -397,6 +397,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             except Exception as e:
                 print(f"[CHAT_STREAM] Learning analysis failed: {e}")
 
+            try:
+                from app.core.living_memory import update_from_conversation
+                asyncio.create_task(update_from_conversation(request.message, full))
+            except Exception as e:
+                print(f"[CHAT_STREAM] Living memory update failed: {e}")
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"

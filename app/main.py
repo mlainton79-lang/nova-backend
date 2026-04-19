@@ -32,7 +32,7 @@ async def autonomous_loop():
             print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
         except Exception as e:
             print(f"[AUTONOMOUS] Error: {e}")
-        await asyncio.sleep(48 * 3600)
+        await asyncio.sleep(6 * 3600)  # Every 6 hours not 48
 
 @app.on_event("startup")
 async def startup_event():
