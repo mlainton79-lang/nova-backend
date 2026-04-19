@@ -157,3 +157,30 @@ async def get_relevant_episodes(query: str, limit: int = 3) -> str:
     except Exception as e:
         print(f"[EPISODIC] Get failed: {e}")
         return ""
+
+
+async def process_conversation_for_episode(message: str, reply: str) -> bool:
+    """
+    Create an episodic memory from a single message/reply pair.
+    Called after every conversation — only stores if the exchange is significant enough.
+    Significance threshold: 0.4 (filters out trivial exchanges like "hi" / "ok")
+    """
+    # Quick significance pre-check — don't waste a Gemini call on trivial exchanges
+    trivial_triggers = ["hi", "hello", "ok", "thanks", "cheers", "alright", "bye"]
+    if (len(message.strip()) < 20 and
+            any(message.strip().lower().startswith(t) for t in trivial_triggers)):
+        return False
+
+    episode = await create_episode([
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": reply}
+    ])
+
+    if not episode:
+        return False
+
+    significance = episode.get("significance", 0.0)
+    if significance < 0.4:
+        return False  # Not worth storing — low significance exchange
+
+    return await store_episode(episode)

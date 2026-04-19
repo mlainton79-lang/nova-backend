@@ -226,3 +226,85 @@ Respond in JSON:
     except Exception as e:
         print(f"[LEARNING] Weekly synthesis failed: {e}")
         return {"synthesised": False, "error": str(e)}
+
+
+async def analyse_conversation_for_learning(message: str, reply: str, provider: str = "gemini"):
+    """
+    Deeper learning analysis than log_conversation.
+    Extracts patterns, missed opportunities, and quality signals.
+    Called from chat_stream post-response tasks.
+    Runs concurrently with log_conversation — both fire after every response.
+    """
+    # Skip trivial exchanges — not worth analysing
+    if len(message.strip()) < 10 or len(reply.strip()) < 20:
+        return
+
+    prompt = f"""You are Tony's learning system. Analyse this conversation exchange for patterns.
+
+Matthew said: {message[:200]}
+Tony replied: {reply[:300]}
+
+Identify:
+1. Did Tony use his context (memory, time, family details) or respond generically?
+2. Was the response length appropriate for the message length?
+3. Did Tony take action or just advise?
+4. Any sign of drift from Tony's character (too formal, too generic, too verbose)?
+
+Respond in JSON:
+{{
+    "used_context": true/false,
+    "length_appropriate": true/false,
+    "took_action": true/false,
+    "character_drift": true/false,
+    "drift_description": "what drifted or null",
+    "pattern_tag": "one word category: greeting/legal/technical/emotional/planning/casual",
+    "quality": "good/mediocre/poor",
+    "single_improvement": "one specific thing Tony should do differently next time or null"
+}}"""
+
+    try:
+        from app.core.model_router import gemini_json
+        result = await gemini_json(prompt, task="analysis", max_tokens=200, temperature=0.1)
+        if not result:
+            return
+
+        # Store pattern observation
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO tony_learning_log
+                (message, reply, score, lesson, provider)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                message[:300],
+                reply[:300],
+                8.0 if result.get("quality") == "good" else
+                5.0 if result.get("quality") == "mediocre" else 3.0,
+                result.get("single_improvement", "")[:200] if result.get("single_improvement") else None,
+                provider
+            ))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[LEARNING] Analyse log failed: {e}")
+
+        # Flag character drift immediately if detected
+        if result.get("character_drift") and result.get("drift_description"):
+            try:
+                from app.core.proactive import create_alert
+                create_alert(
+                    alert_type="character_drift",
+                    title="Tony: character drift detected",
+                    body=result["drift_description"][:200],
+                    priority="normal",
+                    source="learning",
+                    expires_hours=48,
+                    dedup_hours=12
+                )
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"[LEARNING] Analyse failed: {e}")
