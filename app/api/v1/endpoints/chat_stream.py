@@ -395,9 +395,64 @@ async def _gather_context(request: ChatRequest) -> dict:
             print(f"[CHAT_STREAM] Reasoning: {e}")
         return ""
 
+    async def _causal():
+        """Causal reasoning for life/financial/legal decisions."""
+        if request.image_base64:
+            return ""
+        causal_kw = ["should i", "what happens if", "if i do", "what would happen",
+                     "consequences", "worth it", "risk of", "what if i",
+                     "western circle", "fos complaint", "ccj", "legal action",
+                     "financial", "sell the", "quit", "leave"]
+        msg_lower = request.message.lower()
+        if not any(k in msg_lower for k in causal_kw):
+            return ""
+        try:
+            from app.core.causal_reasoning import causal_analysis
+            result = await asyncio.wait_for(
+                causal_analysis(request.message), timeout=10.0
+            )
+            if result and result.get("recommendation"):
+                parts = []
+                if result.get("root_causes"):
+                    parts.append("Root causes: " + "; ".join(result["root_causes"][:2]))
+                if result.get("recommendation"):
+                    parts.append(f"Causal recommendation: {result['recommendation']}")
+                if result.get("reasoning"):
+                    parts.append(f"Why: {result['reasoning'][:200]}")
+                return "[CAUSAL ANALYSIS]\n" + "\n".join(parts)
+        except Exception as e:
+            print(f"[CHAT_STREAM] Causal: {e}")
+        return ""
+
+    async def _deep_research():
+        """Deep research for explicit research requests."""
+        if request.image_base64:
+            return ""
+        research_kw = ["research", "find out about", "look into", "investigate",
+                       "what do you know about", "tell me everything about",
+                       "deep dive", "thorough", "comprehensive"]
+        msg_lower = request.message.lower()
+        if not any(k in msg_lower for k in research_kw):
+            return ""
+        # Only fire for messages long enough to be real research requests
+        if len(request.message) < 30:
+            return ""
+        try:
+            from app.core.research import tony_deep_research
+            topic = request.message.replace("research", "").replace("look into", "").strip()
+            result = await asyncio.wait_for(
+                tony_deep_research(topic, depth=2), timeout=15.0
+            )
+            findings = result.get("findings", "")
+            if findings and len(findings) > 100:
+                return f"[DEEP RESEARCH: {result.get('sources_read', 0)} sources]\n{findings[:1500]}"
+        except Exception as e:
+            print(f"[CHAT_STREAM] Deep research: {e}")
+        return ""
+
     results = await asyncio.gather(
         _web_search(), _case_search(), _gmail_search(),
-        _calendar(), _ei(), _reasoning(),
+        _calendar(), _ei(), _reasoning(), _causal(), _deep_research(),
         return_exceptions=True
     )
 
@@ -411,6 +466,8 @@ async def _gather_context(request: ChatRequest) -> dict:
         "calendar": safe(results[3]),
         "ei": safe(results[4], {"adjustment": ""}),
         "reasoning": safe(results[5]),
+        "causal": safe(results[6]),
+        "research": safe(results[7]),
     }
 
 
@@ -551,7 +608,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
 
     # Append gathered context to prompt
     for key, label in [("web", "WEB SEARCH"), ("case", "CASE DOCUMENTS"),
-                       ("gmail", "GMAIL"), ("calendar", "CALENDAR")]:
+                       ("gmail", "GMAIL"), ("calendar", "CALENDAR"),
+                       ("causal", "CAUSAL ANALYSIS"), ("research", "DEEP RESEARCH")]:
         if ctx.get(key):
             sp += f"\n\n[{label}]\n{ctx[key]}"
 

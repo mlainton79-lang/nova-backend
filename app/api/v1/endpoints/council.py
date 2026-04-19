@@ -1,181 +1,280 @@
-import os, httpx
+"""
+Tony's Council endpoint.
+
+Multi-brain deliberation: all providers answer, chair challenges, providers refine,
+chair synthesises the definitive response as Tony.
+
+Council is inherently synchronous in its rounds — can't stream because round 2
+depends on all round 1 responses. Android shows a "Tony is thinking..." state.
+"""
+import asyncio
+import time
+
 from fastapi import APIRouter, Depends
 from app.schemas.chat import ChatRequest, CouncilResponse
 from app.providers.council import run_council
 from app.core.security import verify_token
 from app.core.logger import log_request
 from app.core.injection_filter import check_injection
-from app.core.instant_memory import extract_and_save_instant_memory
-from app.core.memory import add_memory
-from app.core.auto_push import process_auto_push
 
 router = APIRouter()
 
-def safe_system_prompt(req, search_results=""):
-    try:
-        from app.prompts.tony import build_system_prompt
-        code_kw = ["code","function","file","class","bug","error","fix","kotlin","python","api","push","patch"]
-        inc = any(k in req.message.lower() for k in code_kw)
-        sp = build_system_prompt(context=req.context, document_text=req.document_text, document_base64=req.document_base64, document_name=req.document_name, document_mime=req.document_mime, include_codebase=inc)
-        if search_results:
-            sp += f"\n\n{search_results}"
-        return sp
-    except Exception:
-        return "You are Tony, a personal AI assistant. British English only. Be direct and warm."
+
+async def _gather_council_context(req: ChatRequest) -> dict:
+    """Gather all context concurrently — same pattern as chat_stream."""
+    msg_lower = req.message.lower()
+
+    async def _web():
+        try:
+            from app.core.brave_search import should_search, brave_search
+            if should_search(req.message):
+                return await asyncio.wait_for(brave_search(req.message), timeout=3.0)
+        except Exception as e:
+            print(f"[COUNCIL] Web search: {e}")
+        return ""
+
+    async def _case():
+        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
+                   "timeline", "evidence", "claim", "dispute", "ccj", "cashfloat"]
+        if not any(k in msg_lower for k in case_kw):
+            return ""
+        try:
+            from app.core.rag import list_cases, search_case
+            all_cases = list_cases()
+            ready = [c for c in all_cases if c["status"] == "ready"]
+            if not ready:
+                return ""
+            target = next((c for c in ready if c["name"].lower() in msg_lower), ready[0])
+            results = await asyncio.wait_for(
+                search_case(target["id"], req.message, top_k=5), timeout=3.0
+            )
+            if results:
+                lines = [f"[CASE: {target['name']}]"]
+                for r in results:
+                    lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
+                    lines.append(r["content"][:200])
+                    lines.append("---")
+                return "\n".join(lines)
+        except Exception as e:
+            print(f"[COUNCIL] Case search: {e}")
+        return ""
+
+    async def _gmail():
+        email_kw = ["email", "gmail", "inbox", "unread", "from ", "subject",
+                    "sent me", "wrote", "look up", "find", "any emails"]
+        if not any(k in msg_lower for k in email_kw):
+            return ""
+        try:
+            from app.core.gmail_service import get_morning_summary, search_all_accounts
+            search_triggers = ["from ", "find", "search", "look for", "anything from",
+                               "emails from", "show me", "look up"]
+            if any(t in msg_lower for t in search_triggers):
+                results = await asyncio.wait_for(
+                    search_all_accounts(req.message, max_per_account=8), timeout=4.0
+                )
+                if results:
+                    lines = ["[GMAIL SEARCH]"]
+                    for e in results[:8]:
+                        sender = e.get("from", "").split("<")[0].strip()
+                        lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
+                        if e.get("snippet"):
+                            lines.append(f"  {e['snippet'][:100]}")
+                    return "\n".join(lines)
+            else:
+                summary = await asyncio.wait_for(get_morning_summary(), timeout=4.0)
+                return f"[GMAIL]\n{summary}" if summary else ""
+        except Exception as e:
+            print(f"[COUNCIL] Gmail: {e}")
+        return ""
+
+    async def _reasoning():
+        if req.image_base64:
+            return ""
+        try:
+            from app.core.reasoning import needs_deep_reasoning, reason_through, emotional_check
+            parts = []
+            if needs_deep_reasoning(req.message):
+                thought = await asyncio.wait_for(
+                    reason_through(req.message), timeout=8.0
+                )
+                if thought:
+                    parts.append(f"[CHAIN OF THOUGHT]\n{thought}")
+            emotion = await asyncio.wait_for(emotional_check(req.message), timeout=3.0)
+            if emotion:
+                parts.append(f"[EMOTIONAL CONTEXT]: {emotion}")
+            return "\n".join(parts)
+        except Exception as e:
+            print(f"[COUNCIL] Reasoning: {e}")
+        return ""
+
+    results = await asyncio.gather(
+        _web(), _case(), _gmail(), _reasoning(),
+        return_exceptions=True
+    )
+
+    def safe(r, default=""):
+        return r if not isinstance(r, Exception) else default
+
+    return {
+        "web": safe(results[0]),
+        "case": safe(results[1]),
+        "gmail": safe(results[2]),
+        "reasoning": safe(results[3]),
+    }
+
+
+async def _post_response_tasks(message: str, reply: str):
+    """Fire and forget — all post-response work concurrent."""
+    async def _memory():
+        try:
+            from app.core.instant_memory import extract_and_save_instant_memory
+            from app.core.memory import add_memory
+            facts = await extract_and_save_instant_memory(message, reply)
+            for fact in facts:
+                add_memory("auto", fact)
+        except Exception as e:
+            print(f"[COUNCIL POST] Memory: {e}")
+
+    async def _living():
+        try:
+            from app.core.living_memory import update_from_conversation
+            await update_from_conversation(message, reply)
+        except Exception as e:
+            print(f"[COUNCIL POST] Living memory: {e}")
+
+    async def _world():
+        try:
+            from app.core.world_model import update_world_model
+            await update_world_model(message, reply)
+        except Exception as e:
+            print(f"[COUNCIL POST] World model: {e}")
+
+    async def _learning():
+        try:
+            from app.core.learning import log_conversation
+            await log_conversation(message, reply, "council")
+        except Exception as e:
+            print(f"[COUNCIL POST] Learning: {e}")
+
+    async def _goals():
+        try:
+            from app.core.goal_detector import detect_and_create_goal
+            await detect_and_create_goal(message, reply)
+        except Exception as e:
+            print(f"[COUNCIL POST] Goals: {e}")
+
+    async def _self_eval():
+        try:
+            from app.core.self_eval import evaluate_response
+            await evaluate_response(message, reply, "council")
+        except Exception as e:
+            print(f"[COUNCIL POST] Self-eval: {e}")
+
+    await asyncio.gather(
+        _memory(), _living(), _world(), _learning(), _goals(), _self_eval(),
+        return_exceptions=True
+    )
+
 
 @router.post("/council", response_model=CouncilResponse)
 async def council(req: ChatRequest, _=Depends(verify_token)):
+    start = time.time()
+
     injected, reason = check_injection(req.message)
     if injected:
         log_request(provider="council", message=req.message, reply="", ok=False, error=reason)
-        return CouncilResponse(ok=False, provider="council", reply="I cannot process that message.", error=reason)
-
-    # Pre-processing: all context gathered with unified 5s budget
-    import asyncio as _pre_asyncio
-    import time as _ctime
-    _cstart = _ctime.time()
-    def _cleft(): return max(0, 5.0 - (_ctime.time() - _cstart))
-
-    search_results = ""
-    case_context = ""
-    gmail_context = ""
-
-    # Web search
-    try:
-        from app.core.brave_search import should_search, brave_search
-        if should_search(req.message) and _cleft() > 1.0:
-            search_results = await _pre_asyncio.wait_for(brave_search(req.message), timeout=1.5)
-    except Exception:
-        pass
-
-    # Case RAG
-    try:
-        from app.core.rag import list_cases, search_case
-        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
-                   "what did they say", "timeline", "evidence", "claim", "dispute", "ccj"]
-        if any(k in req.message.lower() for k in case_kw) and _cleft() > 1.5:
-            all_cases = list_cases()
-            ready = [c for c in all_cases if c["status"] == "ready"]
-            if ready:
-                target = ready[0]
-                for c in ready:
-                    if c["name"].lower() in req.message.lower():
-                        target = c; break
-                results = await _pre_asyncio.wait_for(
-                    search_case(target["id"], req.message, top_k=5), timeout=2.0)
-                if results:
-                    lines = [f"[CASE: {target['name']} — answer only from these excerpts]"]
-                    for r in results:
-                        lines.append(f"[{r['date'][:16]}] {r['sender'][:40]} — {r['subject'][:50]}")
-                        lines.append(r["content"][:200])
-                        lines.append("---")
-                    case_context = "\n".join(lines)
-    except Exception:
-        pass
-
-    # Gmail
-    try:
-        msg_lower = req.message.lower()
-        email_kw = ["email", "gmail", "inbox", "unread", "message", "mail", "from ",
-                    "subject", "sent me", "wrote to", "morning", "look up", "find",
-                    "search", "emails from", "victoria", "adler"]
-        if any(k in msg_lower for k in email_kw) and _cleft() > 1.0:
-            from app.core.gmail_service import get_morning_summary, search_all_accounts
-            search_triggers = ["from ", "find", "search", "look for", "anything from",
-                              "emails from", "show me", "look up", "victoria", "adler"]
-
-            async def _gc():
-                if any(t in msg_lower for t in search_triggers):
-                    results = await search_all_accounts(req.message, max_per_account=8)
-                    if results:
-                        lines = ["[GMAIL SEARCH]"]
-                        for e in results[:8]:
-                            sender = e.get("from","").split("<")[0].strip()
-                            lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
-                            if e.get("snippet"):
-                                lines.append(f"  {e['snippet'][:100]}")
-                        return "\n".join(lines)
-                else:
-                    s = await get_morning_summary()
-                    return f"[GMAIL]\n{s}" if s else ""
-                return ""
-            gmail_context = await _pre_asyncio.wait_for(_gc(), timeout=min(2.0, _cleft()))
-    except Exception:
-        pass
-
-
-    import asyncio as _asyncio
-    loop = _asyncio.get_event_loop()
-    # Use new intelligent prompt assembler
-    try:
-        from app.core.prompt_assembler import build_prompt
-        from app.core.reasoning import needs_deep_reasoning, reason_through, emotional_check as _ec
-        reasoning_ctx = ""
-        if needs_deep_reasoning(req.message):
-            reasoning_ctx = await reason_through(req.message) or ""
-        emotional = await _ec(req.message)
-        if emotional:
-            reasoning_ctx = f"[EMOTIONAL CONTEXT]: {emotional}\n" + reasoning_ctx
-        code_kw = ["code","function","file","class","bug","error","fix","kotlin","python","api","push","patch"]
-        inc_codebase = any(k in req.message.lower() for k in code_kw)
-        system_prompt = await build_prompt(
-            context=req.context,
-            document_text=req.document_text,
-            document_base64=req.document_base64,
-            document_name=req.document_name,
-            document_mime=req.document_mime,
-            include_codebase=inc_codebase,
-            user_message=req.message,
-            image_present=bool(req.image_base64)
+        return CouncilResponse(
+            ok=False, provider="council",
+            reply="I cannot process that message.", error=reason
         )
-        if search_results:
-            system_prompt += f"\n\n[WEB SEARCH]:\n{search_results}"
-        if reasoning_ctx:
-            system_prompt += f"\n\n[TONY'S REASONING]:\n{reasoning_ctx[:600]}"
-    except Exception as e:
-        print(f"[COUNCIL] Prompt assembler failed: {e}")
-        system_prompt = await loop.run_in_executor(None, lambda: safe_system_prompt(req, search_results))
-    for ctx in [case_context, gmail_context]:
-        if ctx:
-            system_prompt += "\n\n" + ctx
 
-    # Handle image in council mode - describe image first then include in council
+    # Gather all context concurrently
+    ctx = await _gather_council_context(req)
+
+    # Build system prompt
+    if req.image_base64:
+        system_prompt = (
+            "You are Tony, Matthew Lainton's personal AI assistant. "
+            "British English. Direct and warm."
+        )
+    else:
+        try:
+            from app.core.prompt_assembler import build_prompt
+            code_kw = ["code", "function", "file", "class", "bug", "error", "fix",
+                       "kotlin", "python", "api", "push", "patch", "nova", "build"]
+            inc_codebase = any(k in req.message.lower() for k in code_kw)
+            system_prompt = await build_prompt(
+                context=req.context,
+                location=req.location if hasattr(req, "location") else None,
+                document_text=req.document_text,
+                document_base64=req.document_base64,
+                document_name=req.document_name,
+                document_mime=req.document_mime,
+                include_codebase=inc_codebase,
+                user_message=req.message,
+                image_present=False
+            )
+        except Exception as e:
+            print(f"[COUNCIL] Prompt assembler: {e}")
+            system_prompt = (
+                "You are Tony, Matthew Lainton's personal AI. "
+                "British English. Direct, warm, honest."
+            )
+
+    # Append gathered context
+    for key, label in [("web", "WEB SEARCH"), ("case", "CASE DOCUMENTS"), ("gmail", "GMAIL")]:
+        if ctx.get(key):
+            system_prompt += f"\n\n[{label}]\n{ctx[key]}"
+
+    if ctx.get("reasoning"):
+        system_prompt += (
+            f"\n\n[TONY'S REASONING — use to inform response, don't repeat verbatim]\n"
+            f"{ctx['reasoning'][:800]}"
+        )
+
+    # Vision preprocessing for Council — describe image then inject
     message_for_council = req.message
     if req.image_base64:
         try:
             from app.core.vision import tony_see
-            image_description = await tony_see(
+            description = await tony_see(
                 req.image_base64,
-                prompt=f"Describe this image in detail for context: {req.message}",
+                prompt=f"Describe this image in detail: {req.message}",
                 mime_type="image/jpeg"
             )
-            if image_description:
-                message_for_council = req.message + "\n\n[Image Tony can see: " + image_description + "]"
+            if description:
+                message_for_council = (
+                    f"{req.message}\n\n[Image Tony can see: {description}]"
+                )
         except Exception as e:
-            print(f"[COUNCIL] Vision preprocessing failed: {e}")
+            print(f"[COUNCIL] Vision: {e}")
 
-    result = await run_council(message_for_council, req.history, system_prompt, debug=req.debug or False)
+    # Run council — inherently multi-round, can't stream
+    result = await run_council(
+        message_for_council, req.history, system_prompt, debug=req.debug or False
+    )
+
     reply = result.get("reply", "")
+
+    # Auto-push code changes if Tony suggested any
     try:
-        reply, push_results = await process_auto_push(reply)
+        from app.core.auto_push import process_auto_push
+        reply, _ = await process_auto_push(reply)
         result["reply"] = reply
-    except Exception: pass
-    try:
-        facts = await extract_and_save_instant_memory(req.message, reply)
-        for fact in facts: add_memory("auto", fact)
-    except Exception: pass
-    import asyncio as _ca
-    try:
-        from app.core.world_model import update_world_model
-        _ca.create_task(update_world_model(req.message, reply))
-    except Exception: pass
-    try:
-        from app.core.living_memory import update_from_conversation
-        _ca.create_task(update_from_conversation(req.message, reply))
-    except Exception: pass
-    try:
-        from app.core.learning import log_conversation
-        _ca.create_task(log_conversation(req.message, reply, "council"))
-    except Exception: pass
-    log_request(provider=result.get("provider", "council"), message=req.message, reply=reply, deciding_brain=result.get("provider"))
+    except Exception:
+        pass
+
+    # Fire post-response tasks without blocking
+    asyncio.create_task(_post_response_tasks(req.message, reply))
+
+    latency = int((time.time() - start) * 1000)
+    log_request(
+        provider=result.get("provider", "council"),
+        message=req.message,
+        reply=reply[:500],
+        latency_ms=latency,
+        ok=result.get("ok", True),
+        deciding_brain=result.get("provider")
+    )
+
     return result
