@@ -153,6 +153,32 @@ def _db_fetch(query: str, params=None):
         return []
 
 
+
+def _get_active_bans() -> list:
+    """Get list of active banned topics. Cached per-request would be better but this is fine."""
+    try:
+        import os, psycopg2
+        conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT topic FROM tony_topic_bans
+            WHERE active = TRUE AND expires_at > NOW()
+        """)
+        bans = [row[0].lower() for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return bans
+    except Exception:
+        return []
+
+
+def _has_banned_topic(text: str, bans: list) -> bool:
+    if not text or not bans:
+        return False
+    tl = text.lower()
+    return any(b in tl for b in bans)
+
+
 async def build_prompt(
     context: Optional[str] = None,
     location: Optional[str] = None,
@@ -267,19 +293,29 @@ async def build_prompt(
     if user_message:
         try:
             from app.core.semantic_memory import search_memories
-            memories = await search_memories(user_message, limit=6)
+            memories = await search_memories(user_message, limit=10)
             if memories:
-                mem_text = "[RELEVANT MEMORIES]\n" + "\n".join(f"• {m}" for m in memories)
-                add(mem_text, max_chars=800)
-        except Exception:
-            pass
+                # Filter out memories mentioning banned topics
+                active_bans = _get_active_bans()
+                if active_bans:
+                    memories = [m for m in memories if not _has_banned_topic(m, active_bans)]
+                memories = memories[:6]
+                if memories:
+                    mem_text = "[RELEVANT MEMORIES]\n" + "\n".join(f"• {m}" for m in memories)
+                    add(mem_text, max_chars=800)
+        except Exception as e:
+            print(f"[PROMPT_ASSEMBLER] Memory: {e}")
 
     # ── 3. Living memory (relevant sections) ────────────────────────────────
     try:
         from app.core.living_memory import get_relevant_living_memory
         living = await get_relevant_living_memory(user_message)
         if living:
-            add(living, max_chars=1000)
+            active_bans = _get_active_bans()
+            if active_bans and _has_banned_topic(living, active_bans):
+                living = None  # drop entirely if contains banned content
+            if living:
+                add(living, max_chars=1000)
     except Exception:
         try:
             from app.core.living_memory import get_living_memory_for_prompt

@@ -69,6 +69,29 @@ def init_proactive_tables():
         print(f"[PROACTIVE] Init failed: {e}")
 
 
+def _is_topic_banned(text: str) -> bool:
+    """Check if any banned topic appears in this text. Used to suppress alert creation."""
+    if not text:
+        return False
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT topic FROM tony_topic_bans
+            WHERE active = TRUE AND expires_at > NOW()
+        """)
+        bans = [row[0].lower() for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        tl = text.lower()
+        for ban in bans:
+            if ban in tl:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def create_alert(alert_type: str, title: str, body: str,
                   priority: str = "normal", source: str = None,
                   expires_hours: int = 48,
@@ -78,6 +101,12 @@ def create_alert(alert_type: str, title: str, body: str,
     Deduplicates by title — same title within dedup_hours window = skip.
     This prevents the same CCJ/legal alert firing every 6 hours.
     """
+    # BAN CHECK: suppress alert if content matches any active topic ban
+    combined = f"{title} {body} {source or ''}"
+    if _is_topic_banned(combined):
+        print(f"[PROACTIVE] Alert suppressed by topic ban: {title[:60]}")
+        return None
+
     import asyncio
     try:
         conn = get_conn()
