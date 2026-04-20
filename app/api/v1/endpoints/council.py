@@ -180,6 +180,17 @@ async def _post_response_tasks(message: str, reply: str):
 async def council(req: ChatRequest, _=Depends(verify_token)):
     start = time.time()
 
+    # Topic ban detection — same as chat_stream
+    try:
+        from app.core.topic_bans import detect_topic_ban, store_ban, check_and_clear_if_user_raises_topic
+        banned_topic = detect_topic_ban(req.message)
+        if banned_topic:
+            store_ban(None, banned_topic, req.message[:200])
+            print(f"[COUNCIL] Ban stored for topic: {banned_topic}")
+        check_and_clear_if_user_raises_topic(req.message, None)
+    except Exception as e:
+        print(f"[COUNCIL] Topic ban detection: {e}")
+
     injected, reason = check_injection(req.message)
     if injected:
         log_request(provider="council", message=req.message, reply="", ok=False, error=reason)

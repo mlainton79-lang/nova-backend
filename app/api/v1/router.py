@@ -89,6 +89,7 @@ _inits = [
     ("app.core.email_agent",            "init_email_agent_tables",    "Email agent"),
     ("app.core.financial_intelligence", "init_financial_tables",      "Financial intel"),
     ("app.core.codebase_sync",          "init_codebase_table",        "Codebase"),
+    ("app.core.topic_bans",             "init_topic_bans_table",      "Topic bans"),
 ]
 
 for module_path, fn_name, label in _inits:

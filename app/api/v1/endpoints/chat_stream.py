@@ -570,6 +570,18 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         print(f"[CHAT_STREAM] Command parse: {e}")
 
     # Injection check
+    # Topic ban detection — check if Matthew is asking to drop a topic
+    try:
+        from app.core.topic_bans import detect_topic_ban, store_ban, check_and_clear_if_user_raises_topic
+        banned_topic = detect_topic_ban(request.message)
+        if banned_topic:
+            store_ban(None, banned_topic, request.message[:200])
+            print(f"[CHAT_STREAM] Ban stored for topic: {banned_topic}")
+        # Also: if Matthew brings up a previously banned topic, clear that ban
+        check_and_clear_if_user_raises_topic(request.message, None)
+    except Exception as e:
+        print(f"[CHAT_STREAM] Topic ban detection: {e}")
+
     injected, reason = check_injection(request.message)
     if injected:
         async def _blocked():
