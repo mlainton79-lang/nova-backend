@@ -70,7 +70,7 @@ async def detect_capability_gap(user_message: str) -> Optional[Dict]:
     # Get what Tony already can do
     try:
         from app.core.capabilities import get_capabilities
-        existing = get_capabilities(status="built")
+        existing = get_capabilities(status="active")
         existing_list = "\n".join(
             f"- {c.get('name', '')}: {c.get('description', '')[:80]}"
             for c in (existing or [])
