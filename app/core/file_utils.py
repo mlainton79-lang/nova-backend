@@ -23,11 +23,18 @@ TEXT_EXTENSIONS = {
     "Dockerfile", "Makefile", "Procfile", "requirements.txt",
 }
 
-# Files to skip entirely
+# Files to skip entirely — aggressive filtering for project backups
 SKIP_PATTERNS = {
     "__MACOSX", ".DS_Store", "node_modules", ".git/",
     "build/", "dist/", ".gradle/", ".idea/", "__pycache__",
-    "target/", ".venv/", "venv/", "env/",
+    "target/", ".venv/", "venv/", "env/", ".next/",
+    "backups_", "backup_", ".cache/", ".tmp/", "tmp/",
+    "generated/", "intermediates/", ".mypy_cache", ".pytest_cache",
+    "Thumbs.db", "desktop.ini", "AndroidManifest.xml.bak",
+    "captures/", "outputs/", "apk/", ".log",
+    # Kotlin/Android build output
+    "/build/", "/dist/", "assets/", "res/drawable/",
+    "res/mipmap", "res/values-",
 }
 
 # Binary extensions we never try to read as text
@@ -40,8 +47,8 @@ BINARY_EXTENSIONS = {
     ".pyc", ".pyo",
 }
 
-MAX_ZIP_ENTRIES = 200
-MAX_ZIP_TOTAL_BYTES = 10 * 1024 * 1024  # 10MB text total
+MAX_ZIP_ENTRIES = 2000   # raised — Nova's own backup has 682 entries
+MAX_ZIP_TOTAL_BYTES = 25 * 1024 * 1024  # 25MB text total
 MAX_FILE_BYTES = 500 * 1024  # 500KB per text file
 
 
