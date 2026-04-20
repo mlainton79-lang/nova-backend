@@ -1,0 +1,30 @@
+# Dockerfile for Tony's daily deep-work cron service.
+# Runs once daily at 01:00 UTC on Railway.
+# Handles heavy jobs that would otherwise block the web service:
+# - Weekly learning synthesis
+# - Memory consolidation
+# - Strategic weekly assessment
+# - Journal reflection
+# - Deep pattern analysis
+# - Self-repair audit
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System deps for psycopg2 and cryptography
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code
+COPY app/ ./app/
+COPY think_worker.py .
+
+# Run the worker
+CMD ["python", "think_worker.py"]

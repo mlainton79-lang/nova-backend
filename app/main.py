@@ -10,97 +10,50 @@ import asyncio
 from datetime import datetime
 
 async def autonomous_loop():
-    """Tony runs autonomously every 48h - no cron job needed."""
-    await asyncio.sleep(300)  # 5 min after startup
+    """
+    Tony's fast 6-hour loop. Runs inside the web service.
+    Handles time-sensitive work only — must not block chat:
+    - Goal check-ins
+    - Email scans and drafting
+    - Proactive alerts
+    - Goal execution
+    - WhatsApp notifications
+
+    Heavy deep-work tasks (learning synthesis, memory consolidation,
+    strategic advisor, meta-cognition, code intelligence, etc.) run
+    in the separate think_worker cron service at 01:00 UTC daily.
+    """
+    await asyncio.sleep(300)  # 5 min after startup to let things settle
     while True:
         try:
-            print(f"[AUTONOMOUS] Starting loop at {datetime.utcnow().isoformat()}")
-            from app.core.goals import tony_work_on_goals
-            from app.core.proactive import run_proactive_scan
-            from app.core.tony_mission import run_autonomous_improvement
-            from app.core.email_drafter import scan_and_draft_replies
-            from app.core.learning import run_weekly_learning_synthesis
-            from app.core.proactive_intelligence import run_proactive_intelligence
-            from app.core.whatsapp import check_and_notify_urgent_alerts
-            from app.core.proactive_scheduler import run_proactive_scheduling
-            await tony_work_on_goals()
-            await run_proactive_scan()
-            await run_proactive_intelligence()
-            await run_proactive_scheduling()
-            await check_and_notify_urgent_alerts()
-            # Email agent - scan for Western Circle + other actionable emails
-            try:
-                from app.core.email_agent import scan_for_actionable_emails
-                await scan_for_actionable_emails()
-            except Exception as e:
-                print(f"[MAIN] Email agent scan error: {e}")
-            await scan_and_draft_replies()
-            await run_weekly_learning_synthesis()
-            await run_autonomous_improvement()  # Legacy
-            # AGI improvement cycle - Tony builds new capabilities
-            try:
-                from app.core.tony_agi_loop import run_agi_improvement_cycle
-                await run_agi_improvement_cycle()
-            except Exception as e:
-                print(f"[MAIN] AGI loop error: {e}")
-            from app.core.self_improvement import run_self_improvement
-            from app.core.youtube_monitor import run_youtube_monitoring
-            from app.core.pattern_recognition import run_pattern_analysis
-            from app.core.income_engine import run_income_intelligence
-            from app.core.goal_executor import run_goal_execution
-            from app.core.tony_journal import write_daily_reflection
-            await run_self_improvement()
-            await run_youtube_monitoring()
-            await run_pattern_analysis()
-            await run_income_intelligence()
-            from app.core.marketplace_monitor import run_marketplace_intelligence
-            await run_marketplace_intelligence()
-            await run_goal_execution()
-            from app.core.anticipation_engine import run_anticipation_engine
-            await run_anticipation_engine()
-            await write_daily_reflection()
-            from app.core.self_repair import run_self_repair_cycle
-            await run_self_repair_cycle()
-            # Code intelligence - Tony improves his own functions
-            try:
-                from app.core.code_intelligence import run_code_intelligence_cycle
-                await run_code_intelligence_cycle()
-            except Exception as e:
-                print(f"[MAIN] Code intelligence error: {e}")
-            # Memory consolidation
-            try:
-                from app.core.memory_consolidator import run_memory_consolidation
-                await run_memory_consolidation()
-            except Exception as e:
-                print(f"[MAIN] Memory consolidation error: {e}")
-            # Meta-cognition - Tony thinks about his own thinking
-            try:
-                from app.core.meta_cognition import run_meta_cognition
-                await run_meta_cognition()
-            except Exception as e:
-                print(f"[MAIN] Meta-cognition error: {e}")
-            # Strategic advisor - weekly life assessment
-            try:
-                from app.core.strategic_advisor import run_strategic_advisor
-                await run_strategic_advisor()
-            except Exception as e:
-                print(f"[MAIN] Strategic advisor error: {e}")
-            # Financial intelligence from emails
-            try:
-                from app.core.financial_intelligence import run_financial_intelligence
-                await run_financial_intelligence()
-            except Exception as e:
-                print(f"[MAIN] Financial intelligence error: {e}")
-            # Relationship intelligence - family dates, milestones
-            try:
-                from app.core.relationship_intelligence import run_relationship_intelligence
-                await run_relationship_intelligence()
-            except Exception as e:
-                print(f"[MAIN] Relationship intelligence error: {e}")
-            print("[AUTONOMOUS] Loop complete. Sleeping 48h.")
+            print(f"[AUTONOMOUS] Fast loop starting at {datetime.utcnow().isoformat()}")
+
+            # Fast proactive work only — no heavy jobs
+            tasks = [
+                ("tony_work_on_goals", "app.core.goals", "tony_work_on_goals"),
+                ("run_proactive_scan", "app.core.proactive", "run_proactive_scan"),
+                ("run_proactive_intelligence", "app.core.proactive_intelligence", "run_proactive_intelligence"),
+                ("run_proactive_scheduling", "app.core.proactive_scheduler", "run_proactive_scheduling"),
+                ("check_urgent_alerts", "app.core.whatsapp", "check_and_notify_urgent_alerts"),
+                ("scan_for_actionable_emails", "app.core.email_agent", "scan_for_actionable_emails"),
+                ("scan_and_draft_replies", "app.core.email_drafter", "scan_and_draft_replies"),
+                ("run_goal_execution", "app.core.goal_executor", "run_goal_execution"),
+                ("run_anticipation_engine", "app.core.anticipation_engine", "run_anticipation_engine"),
+            ]
+
+            for name, module_path, fn_name in tasks:
+                try:
+                    import importlib
+                    mod = importlib.import_module(module_path)
+                    fn = getattr(mod, fn_name)
+                    await fn()
+                except Exception as e:
+                    print(f"[AUTONOMOUS] {name} failed: {e}")
+
+            print("[AUTONOMOUS] Fast loop complete. Sleeping 6h.")
         except Exception as e:
-            print(f"[AUTONOMOUS] Error: {e}")
-        await asyncio.sleep(6 * 3600)  # Every 6 hours not 48
+            print(f"[AUTONOMOUS] Loop error: {e}")
+        await asyncio.sleep(6 * 3600)  # Every 6 hours
 
 @app.on_event("startup")
 async def startup_event():
