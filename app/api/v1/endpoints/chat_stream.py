@@ -569,6 +569,31 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     except Exception as e:
         print(f"[CHAT_STREAM] Command parse: {e}")
 
+    # Capability gap detection — if Matthew wants something Tony doesn't have yet,
+    # start building it in the background and acknowledge immediately
+    try:
+        from app.core.gap_detector import detect_capability_gap, start_autonomous_build
+        gap = await detect_capability_gap(request.message)
+        if gap and gap.get("capability_name"):
+            request_id = await start_autonomous_build(
+                gap["capability_name"], gap["description"], request.message
+            )
+            if request_id > 0:
+                ack = (
+                    f"Not something I can do yet, but I'll build it now. "
+                    f"Going to work on: {gap['description']}. "
+                    f"Give me a few minutes — I'll tell you when it's live. "
+                    f"Carry on, ask me something else if you want."
+                )
+                log_request(provider="gap_detector", message=request.message,
+                            reply=ack, ok=True)
+                async def _gap_stream():
+                    yield "data: " + json.dumps({"type": "chunk", "text": ack}) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+                return StreamingResponse(_gap_stream(), media_type="text/event-stream")
+    except Exception as e:
+        print(f"[CHAT_STREAM] Gap detection: {e}")
+
     # Injection check
     # Topic ban detection — check if Matthew is asking to drop a topic
     try:

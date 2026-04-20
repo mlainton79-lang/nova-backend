@@ -195,6 +195,32 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
     except Exception as e:
         print(f"[COUNCIL] Command detection: {e}")
 
+    # Capability gap detection — does Matthew want something Tony doesn't have?
+    # If so, kick off the build in background and tell him to carry on.
+    try:
+        from app.core.gap_detector import detect_capability_gap, start_autonomous_build
+        gap = await detect_capability_gap(req.message)
+        if gap and gap.get("capability_name"):
+            request_id = await start_autonomous_build(
+                gap["capability_name"],
+                gap["description"],
+                req.message
+            )
+            if request_id > 0:
+                reply = (
+                    f"Not something I can do yet, but I'll build it now. "
+                    f"Going to work on: {gap['description']}. "
+                    f"Give me a few minutes — I'll tell you when it's live. "
+                    f"Carry on, ask me something else if you want."
+                )
+                log_request(provider="council", message=req.message, reply=reply[:500], ok=True)
+                return CouncilResponse(
+                    ok=True, provider="council", reply=reply,
+                    latency_ms=int((time.time() - start) * 1000)
+                )
+    except Exception as e:
+        print(f"[COUNCIL] Gap detection: {e}")
+
     # Topic ban detection — same as chat_stream
     try:
         from app.core.topic_bans import detect_topic_ban, store_ban, check_and_clear_if_user_raises_topic
