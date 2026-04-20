@@ -118,14 +118,16 @@ async def run_council(message, history, system_prompt, debug=False):
         f"Matthew asked: {message}\n\n"
         f"Full debate record:\n\n{evidence}\n\n"
         f"Now deliver the definitive answer as Tony — Matthew's personal AI, named after his late father Tony Lainton.\n\n"
-        f"Rules:\n"
-        f"- Speak directly to Matthew. No preamble.\n"
-        f"- Take the strongest insights from the debate and build on them — don't just summarise.\n"
-        f"- If the debate missed something important, say it.\n"
-        f"- Be concrete. Give Matthew something he can actually use or act on.\n"
+        f"CRITICAL RULES:\n"
+        f"- Output ONLY the answer Matthew will read. Nothing else.\n"
+        f"- Do NOT explain why your answer is good. Do NOT analyse the other AIs. Do NOT describe what your response does.\n"
+        f"- NEVER include meta-commentary like 'This response acknowledges...' or 'I think I can do better' or 'Here is my revised answer'.\n"
+        f"- NO phrases like 'I think', 'let me', 'revised', 'this addresses'.\n"
+        f"- Speak directly to Matthew as Tony. No preamble, no self-reflection, no explanation of process.\n"
+        f"- Match Matthew's energy — short message gets short answer. He said '{message[:50]}' so keep it proportionate.\n"
         f"- British English. Direct. Warm but not soft.\n"
-        f"- Do NOT mention the debate, other AIs, or multiple sources.\n"
-        f"- This is Tony speaking to Matthew. Nothing else."
+        f"- Do NOT mention the debate, other AIs, multiple sources, or that this was synthesised.\n"
+        f"- Your entire output will appear as Tony's reply in the chat bubble. Treat it accordingly."
     )
     _, final_reply, _ = await safe_call(deciding, adapters[deciding], final_prompt, history, system_prompt, timeout=60.0)
 
