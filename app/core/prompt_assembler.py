@@ -183,6 +183,15 @@ async def build_prompt(
     except Exception as e:
         print(f"[PROMPT_ASSEMBLER] Topic bans: {e}")
 
+    # ── 0.5. Rota status — Tony must KNOW this, never guess ──────────────────
+    try:
+        from app.core.rota import rota_status_for_prompt
+        rota = rota_status_for_prompt()
+        if rota:
+            add(f"[MATTHEW'S ROTA STATUS — facts, do not contradict or guess]\n{rota}")
+    except Exception as e:
+        print(f"[PROMPT_ASSEMBLER] Rota: {e}")
+
     # ── 1. Active urgent alerts ──────────────────────────────────────────────
     # Only inject alerts when genuinely relevant — not on every casual message.
     # Rule: inject if (a) message mentions the alert topic, OR (b) alert is brand new (<2h)
