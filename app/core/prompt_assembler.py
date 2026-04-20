@@ -302,17 +302,11 @@ async def build_prompt(
             f"{now_uk.strftime('%A %d %B %Y')}, {uk_hour:02d}:{now_uk.minute:02d} UK time — {part}."
         )
 
-        # Opener guidance by time of day
-        if part == "morning":
-            time_str += " Morning context: 'Morning.' / 'You up early?' / 'Alright.'"
-        elif part == "afternoon":
-            time_str += " Afternoon context: 'Alright.' / 'Busy day?' / 'Alright. What's up?' — NOT 'not asleep yet' or 'still up'."
-        elif part == "evening":
-            time_str += " Evening context: 'Alright.' / 'Girls settled?' / 'Quiet one tonight?'"
-        elif part == "late evening / night":
-            time_str += " Late evening context: 'Still up?' / 'Not asleep yet?' is fine here."
-        else:
-            time_str += " Small hours — Matthew is probably up late working on Nova. 'You still at it?' / 'Burning the midnight oil.' is fine."
+        # Hard constraint: late-night openers only after 21:00
+        if part == "afternoon":
+            time_str += " (Do NOT use 'still up', 'not asleep yet' — those are late-night only.)"
+        elif part == "morning":
+            time_str += " (Do NOT use 'still up', 'burning the midnight oil' — wrong time of day.)"
 
         add(time_str)
     except Exception as e:
