@@ -53,6 +53,8 @@ from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])
 from app.api.v1.endpoints import codebase
 router.include_router(codebase.router, tags=["codebase"])
+from app.api.v1.endpoints import admin_clear
+router.include_router(admin_clear.router, tags=["admin"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:

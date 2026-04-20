@@ -51,6 +51,14 @@ COMMAND_PATTERNS = [
     (r'what.*build.*waiting', 'check_builds'),
     (r'any.*build.*staging', 'check_builds'),
     (r'what.*tony.*built', 'check_builds'),
+    # Clear topic permanently
+    (r'get rid of (.+)', 'clear_topic'),
+    (r'clear (.+) from (?:your|my) brain', 'clear_topic'),
+    (r'clear (?:the )?(.+) topic', 'clear_topic'),
+    (r'forget (.+) permanently', 'clear_topic'),
+    (r'permanently forget (.+)', 'clear_topic'),
+    (r'wipe (.+) from (?:your|my) memory', 'clear_topic'),
+    (r'remove (.+) from (?:your|my) memory', 'clear_topic'),
 ]
 
 
@@ -101,6 +109,9 @@ async def execute_command(command: Dict) -> str:
 
     elif cmd == "check_builds":
         return await _check_pending_builds()
+
+    elif cmd == "clear_topic":
+        return await _clear_topic(args[0])
 
     return ""
 
@@ -273,3 +284,71 @@ async def _check_email_queue() -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Couldn't check emails: {e}"
+
+
+
+async def _clear_topic(topic: str) -> str:
+    """Permanently wipe a topic from Tony's active recall."""
+    topic = topic.strip().rstrip(".,!?").strip()
+    if not topic:
+        return "Tell me specifically what to clear."
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # Mark all matching alerts read + expired
+        cur.execute("""
+            UPDATE tony_alerts
+            SET read = TRUE, expires_at = NOW() - INTERVAL '1 hour'
+            WHERE (title ILIKE %s OR body ILIKE %s OR source ILIKE %s)
+            AND (read = FALSE OR expires_at > NOW())
+        """, (f"%{topic}%", f"%{topic}%", f"%{topic}%"))
+        alerts_cleared = cur.rowcount
+
+        # Add 30-day topic ban
+        cur.execute("""
+            INSERT INTO tony_topic_bans
+            (chat_session_id, topic, phrase_that_triggered, expires_at)
+            VALUES (NULL, %s, %s, NOW() + INTERVAL '30 days')
+        """, (topic, f"Matthew: clear {topic}"))
+
+        # Demote semantic memories
+        memories_demoted = 0
+        try:
+            cur.execute("""
+                UPDATE tony_semantic_memory
+                SET importance = 0
+                WHERE content ILIKE %s
+            """, (f"%{topic}%",))
+            memories_demoted = cur.rowcount
+        except Exception:
+            pass
+
+        # Mark goals dormant
+        goals_dormant = 0
+        try:
+            cur.execute("""
+                UPDATE tony_goals
+                SET status = 'dormant'
+                WHERE (title ILIKE %s OR description ILIKE %s)
+                AND status != 'completed'
+            """, (f"%{topic}%", f"%{topic}%"))
+            goals_dormant = cur.rowcount
+        except Exception:
+            pass
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return (
+            f"Done. Wiped '{topic}' from active memory.\n"
+            f"- {alerts_cleared} alerts cleared\n"
+            f"- {memories_demoted} memories demoted\n"
+            f"- {goals_dormant} goals marked dormant\n"
+            f"- 30-day ban added so it won't resurface\n\n"
+            f"Won't bring it up again unless you do."
+        )
+    except Exception as e:
+        return f"Couldn't clear that — DB error: {e}"
