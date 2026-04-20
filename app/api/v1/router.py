@@ -51,6 +51,8 @@ from app.api.v1.endpoints import banking
 router.include_router(banking.router, tags=["banking"])
 from app.api.v1.endpoints import email_agent
 router.include_router(email_agent.router, tags=["email_agent"])
+from app.api.v1.endpoints import codebase
+router.include_router(codebase.router, tags=["codebase"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
@@ -86,6 +88,7 @@ _inits = [
     ("app.core.tony_architect",         "init_architect_tables",      "Architect"),
     ("app.core.email_agent",            "init_email_agent_tables",    "Email agent"),
     ("app.core.financial_intelligence", "init_financial_tables",      "Financial intel"),
+    ("app.core.codebase_sync",          "init_codebase_table",        "Codebase"),
 ]
 
 for module_path, fn_name, label in _inits:
