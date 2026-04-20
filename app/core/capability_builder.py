@@ -230,12 +230,12 @@ CODE:
 
 
 def validate_code(code: str) -> dict:
-    """Syntax check and basic safety validation."""
+    """Syntax check, safety, AND name/import validation."""
     issues = []
     
     # Syntax check
     try:
-        ast.parse(code)
+        tree = ast.parse(code)
     except SyntaxError as e:
         return {"valid": False, "error": f"Syntax error: {e}"}
     
@@ -252,6 +252,64 @@ def validate_code(code: str) -> dict:
     # Must have auth
     if "verify_token" not in code:
         issues.append("Missing auth - endpoints must use verify_token")
+    
+    # Check for undefined names (missing imports) — the #1 cause of Tony's autonomous builds failing
+    # Walk the AST, collect imported names + defined names, then check all Name references
+    imported = set()
+    defined = set()
+    used = set()
+    
+    # Python builtins + FastAPI common names that are always available
+    builtins_available = {
+        'True', 'False', 'None', 'print', 'len', 'range', 'str', 'int', 'float',
+        'bool', 'list', 'dict', 'tuple', 'set', 'type', 'isinstance', 'hasattr',
+        'getattr', 'setattr', 'Exception', 'ValueError', 'KeyError', 'TypeError',
+        'self', 'cls', 'open', 'sorted', 'min', 'max', 'sum', 'any', 'all',
+        'zip', 'map', 'filter', 'enumerate', 'iter', 'next', '__name__',
+        'abs', 'round', 'bytes', 'repr', 'id', 'hash',
+    }
+    imported.update(builtins_available)
+    
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add((alias.asname or alias.name).split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+            # Args are local
+            if hasattr(node, 'args'):
+                for arg in node.args.args:
+                    defined.add(arg.arg)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined.add(target.id)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            used.add(node.id)
+    
+    undefined = used - imported - defined
+    if undefined:
+        # Common undefined names that signal missing imports
+        import_hints = {
+            'os': 'import os', 'sys': 'import sys', 're': 'import re',
+            'json': 'import json', 'asyncio': 'import asyncio',
+            'datetime': 'from datetime import datetime',
+            'timedelta': 'from datetime import timedelta',
+            'httpx': 'import httpx', 'requests': 'import requests',
+            'psycopg2': 'import psycopg2', 'ast': 'import ast',
+        }
+        missing_imports = [n for n in undefined if n in import_hints]
+        if missing_imports:
+            hints = [f"{n} (add: {import_hints[n]})" for n in missing_imports]
+            issues.append(f"Used but not imported: {', '.join(hints)}")
+        else:
+            # Other undefined names
+            other = [n for n in undefined if not n.startswith('_')][:5]
+            if other:
+                issues.append(f"Undefined names: {', '.join(other)}")
     
     if issues:
         return {"valid": False, "error": "; ".join(issues)}
