@@ -1,89 +1,95 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.security import verify_token
+import httpx
 import psycopg2
 import os
-import httpx
 from pydantic import BaseModel
 
 router = APIRouter()
 
-# Assuming these are set in your environment variables
-SUPRSEND_API_KEY = os.environ.get("SUPRSEND_API_KEY", "")
-SUPRSEND_API_SECRET = os.environ.get("SUPRSEND_API_SECRET", "")
-PUSHOVER_API_KEY = os.environ.get("PUSHOVER_API_KEY", "")
-PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN", "")
+# Assuming EmailEngine API details
 EMAILENGINE_API_KEY = os.environ.get("EMAILENGINE_API_KEY", "")
 EMAILENGINE_API_SECRET = os.environ.get("EMAILENGINE_API_SECRET", "")
 
-# Connect to DB
+# Assuming Pushover API details
+PUSHOVER_API_KEY = os.environ.get("PUSHOVER_API_KEY", "")
+PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN", "")
+
+# Database connection
 def get_db():
     conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
     return conn
 
-# Suprsend and Pushover notification models
-class Notification(BaseModel):
-    title: str
-    message: str
+class ProactiveAlertsConfig(BaseModel):
+    emailengine_api_key: str
+    emailengine_api_secret: str
+    pushover_api_key: str
+    pushover_api_token: str
 
-# Test endpoint
 @router.get("/proactive_alerts/test")
 async def test_proactive_alerts(_=Depends(verify_token)):
     return {"status": "OK"}
 
-# Endpoint to trigger a notification (example)
-@router.post("/proactive_alerts/notify")
-async def send_notification(notification: Notification, _=Depends(verify_token)):
-    try:
-        # Using Suprsend for email notifications
-        suprsend_url = "https://api.suprsend.com/notifications"
-        headers = {
-            "Authorization": f"Bearer {SUPRSEND_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(suprsend_url, headers=headers, json=notification.dict())
-            if response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to send notification via Suprsend")
+@router.post("/proactive_alerts/config")
+async def set_proactive_alerts_config(config: ProactiveAlertsConfig, _=Depends(verify_token)):
+    # Save config to DB
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO proactive_alerts_config (emailengine_api_key, emailengine_api_secret, pushover_api_key, pushover_api_token) VALUES (%s, %s, %s, %s)", 
+                 (config.emailengine_api_key, config.emailengine_api_secret, config.pushover_api_key, config.pushover_api_token))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"message": "Config saved"}
 
-        # Using Pushover for push notifications
-        pushover_url = "https://api.pushover.net/1/messages.json"
-        pushover_headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        pushover_data = {
+@router.get("/proactive_alerts/events")
+async def get_events(_=Depends(verify_token)):
+    # Fetch events from EmailEngine
+    headers = {
+        "Authorization": f"Bearer {EMAILENGINE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = httpx.get(f"https://api.emailengine.com/events?api_key={EMAILENGINE_API_KEY}", headers=headers)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Failed to fetch events")
+    events = response.json()
+    return events
+
+@router.post("/proactive_alerts/send-notification")
+async def send_notification(event: dict, _=Depends(verify_token)):
+    # Send push notification via Pushover
+    data = {
+        "token": PUSHOVER_API_TOKEN,
+        "user": PUSHOVER_API_KEY,
+        "message": event.get("subject", ""),
+        "title": event.get("subject", ""),
+    }
+    response = httpx.post("https://api.pushover.net/1/messages.json", data=data)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Failed to send notification")
+    return {"message": "Notification sent"}
+
+# Monitor emails and events, send push notifications
+@router.get("/proactive_alerts/monitor")
+async def monitor_emails(_=Depends(verify_token)):
+    # Fetch new emails from EmailEngine
+    headers = {
+        "Authorization": f"Bearer {EMAILENGINE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = httpx.get(f"https://api.emailengine.com/inbox?api_key={EMAILENGINE_API_KEY}", headers=headers)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Failed to fetch emails")
+    emails = response.json()
+    for email in emails:
+        # Send push notification for new email
+        data = {
             "token": PUSHOVER_API_TOKEN,
             "user": PUSHOVER_API_KEY,
-            "title": notification.title,
-            "message": notification.message
+            "message": email.get("subject", ""),
+            "title": email.get("subject", ""),
         }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(pushover_url, headers=pushover_headers, data=pushover_data)
-            if response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to send notification via Pushover")
-
-        return {"message": "Notification sent successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Monitor emails and events (example with EmailEngine)
-@router.get("/proactive_alerts/monitor-emails")
-async def monitor_emails(_=Depends(verify_token)):
-    try:
-        emailengine_url = "https://api.emailengine.com/v1/events"
-        headers = {
-            "Authorization": f"Bearer {EMAILENGINE_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.get(emailengine_url, headers=headers)
-            if response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to fetch emails via EmailEngine")
-            events = response.json()
-            # Process events and trigger notifications as needed
-            for event in events:
-                # Example: Send notification for new email
-                notification = Notification(title="New Email", message="You have a new email")
-                # Call send_notification endpoint or similar logic here
-        return {"message": "Emails monitored"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        response = httpx.post("https://api.pushover.net/1/messages.json", data=data)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail="Failed to send notification")
+    return {"message": "Emails monitored and notifications sent"}
