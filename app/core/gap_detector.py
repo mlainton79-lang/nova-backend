@@ -128,13 +128,38 @@ Respond ONLY with valid JSON:
             r.raise_for_status()
             response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-        import re
-        match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
-        if not match:
+        # Log what Gemini actually said — for debugging
+        print(f"[GAP_DETECTOR] Raw response: {response[:500]}")
+
+        # Strip markdown fences if present
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            # Remove opening ```json or ``` and closing ```
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+
+        # Try to find the JSON object — from first { to last }
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        if first < 0 or last < 0 or last <= first:
+            print(f"[GAP_DETECTOR] No JSON object found in response")
             return None
 
-        data = json.loads(match.group())
+        json_text = cleaned[first:last+1]
+        try:
+            data = json.loads(json_text)
+        except json.JSONDecodeError as je:
+            print(f"[GAP_DETECTOR] JSON parse failed: {je}")
+            return None
+
+        print(f"[GAP_DETECTOR] Parsed: is_gap={data.get('is_gap')}, name={data.get('capability_name')}")
+
         if not data.get("is_gap"):
+            return None
+
+        if not data.get("capability_name") or not data.get("description"):
+            print(f"[GAP_DETECTOR] Gap detected but name/description missing — skipping")
             return None
 
         return {
@@ -143,7 +168,9 @@ Respond ONLY with valid JSON:
             "rationale": data.get("rationale", "")
         }
     except Exception as e:
-        print(f"[GAP_DETECTOR] Detection failed: {e}")
+        print(f"[GAP_DETECTOR] Detection failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
