@@ -274,7 +274,7 @@ Priority order:
 2. Improve something that scores badly (low eval topics)
 3. Build something genuinely missing that would help Matthew today
 
-Matthew's context: Western Circle CCJ case, income from selling, two young daughters, night shifts, building Nova.
+Matthew's context: Night shifts at care home, building Nova, two young daughters, income from selling.
 
 What is the single most valuable thing Tony should build or fix right now?
 Do not invent something that sounds good. Base it on the evidence above.

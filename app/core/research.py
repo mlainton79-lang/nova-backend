@@ -153,8 +153,6 @@ async def tony_research_for_goal(goal_title: str, goal_description: str) -> str:
     """Tony researches specifically to advance one of Matthew's goals."""
     # Identify the best search query for this goal
     query_map = {
-        "ccj": "UK CCJ removal vulnerability grounds FCA complaint process 2024",
-        "western circle": "Western Circle Cashfloat FCA complaints CCJ removal UK consumer rights",
         "nova": "best practices agentic AI world model personal assistant 2026",
         "vinted": "Vinted seller tips UK pricing research 2024",
         "ebay": "eBay seller API listing automation Python 2024"

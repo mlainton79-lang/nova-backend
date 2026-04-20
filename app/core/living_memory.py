@@ -14,7 +14,7 @@ Sections:
 3. OPEN_LOOPS — things mentioned but not resolved
 4. RECENT_EVENTS — significant things that happened recently
 5. FINANCIAL — financial situation and trajectory
-6. LEGAL — legal situation (Western Circle, CCJ)
+6. LEGAL — legal situation (if any active)
 7. FAMILY — family context (Georgina, Amelia, Margot)
 8. WORK — work context (Sid Bailey)
 9. HEALTH — physical and mental wellbeing signals
@@ -37,16 +37,16 @@ SECTIONS = [
 ]
 
 SEED_DATA = {
-    "LIFE_SUMMARY": "Matthew Lainton, Rotherham. Night shift care worker at Sid Bailey (CQC Outstanding). Building Nova/Tony AI app solo on his phone while working nights. Married to Georgina, daughters Amelia (5) and Margot (9mo). Recently lost his father Tony (2 April 2026). Dealing with Western Circle CCJ (~£700). Resourceful, determined, under real pressure.",
-    "CURRENT_FOCUS": "Building Nova — Tony AI assistant. Western Circle CCJ resolution. Vinted/eBay selling income. Managing family life with two young daughters while working nights.",
-    "OPEN_LOOPS": "Western Circle CCJ not yet resolved. FOS complaint not yet filed. Open Banking not yet active. Amelia school registration may be needed.",
+    "LIFE_SUMMARY": "Matthew Lainton, Rotherham. Night shift care worker at Sid Bailey (CQC Outstanding). Building Nova/Tony AI app solo on his phone while working nights. Married to Georgina, daughters Amelia (5) and Margot (9mo). Recently lost his father Tony (2 April 2026). Resourceful, determined, under real pressure.",
+    "CURRENT_FOCUS": "Building Nova — Tony AI assistant. Vinted/eBay selling income. Managing family life with two young daughters while working nights.",
+    "OPEN_LOOPS": "Open Banking not yet active. Amelia school registration may be needed.",
     "RECENT_EVENTS": "Lost father Tony on 2 April 2026. Nova has been significantly expanded with autonomous capabilities. Multiple development sessions.",
-    "FINANCIAL": "Income from care work (night shifts). Supplementing with Vinted/eBay. Known outgoing: Western Circle CCJ ~£700. Financial situation under pressure but stable.",
-    "LEGAL": "CCJ from Western Circle Ltd (Cashfloat), ref K9QZ4X9N, ~£700. Grounds: irresponsible lending (CONC 5.2), gambling vulnerability (FG21/1), Consumer Duty breach. FOS complaint path available and recommended.",
+    "FINANCIAL": "Income from care work (night shifts). Supplementing with Vinted/eBay. Financial situation under pressure but stable.",
+    "LEGAL": "No active legal matters currently tracked.",
     "FAMILY": "Wife Georgina (b.26 Feb 1992). Daughter Amelia Jane (b.7 Mar 2021, approaching 5, school age soon). Daughter Margot Rose (b.20 Jul 2025, ~9 months). Mother Christine.",
     "WORK": "Night shifts at Sid Bailey Care Home, Brampton. CQC Outstanding. Reliable employment. Nights constrain available time for other activities.",
     "HEALTH": "Night shift worker — sleep disruption is a background factor. Building something ambitious under financial pressure. No specific health concerns noted.",
-    "GOALS": "1. Resolve Western Circle CCJ (urgent). 2. Build Nova/Tony into genuinely autonomous AI (high). 3. Increase income from selling (normal). 4. Amelia school prep (normal).",
+    "GOALS": "1. Build Nova/Tony into genuinely autonomous AI (high). 2. Increase income from selling (normal). 3. Amelia school prep (normal).",
     "WEEKLY_STRATEGY": "Not yet assessed."
 }
 
@@ -105,7 +105,7 @@ async def get_relevant_living_memory(query: str) -> str:
     query_lower = query.lower()
     section_keywords = {
         "FINANCIAL": ["money", "pay", "bill", "debt", "afford", "income", "financial"],
-        "LEGAL": ["western circle", "ccj", "fca", "fos", "legal", "court", "complaint"],
+        "LEGAL": ["fca", "fos", "legal", "court", "complaint", "lawyer", "solicitor"],
         "FAMILY": ["georgina", "amelia", "margot", "family", "kids", "wife", "daughter"],
         "WORK": ["shift", "care home", "work", "sid bailey"],
         "HEALTH": ["tired", "sleep", "health", "feeling", "stress", "wellbeing"],

@@ -30,7 +30,7 @@ def compress_living_memory(memory: Dict, query: str) -> str:
     
     # Include based on keywords
     conditional = {
-        "LEGAL": ["western circle", "ccj", "fca", "fos", "court", "legal", "complaint"],
+        "LEGAL": ["fca", "fos", "court", "legal", "complaint", "lawyer", "solicitor"],
         "FINANCIAL": ["money", "pay", "bill", "debt", "afford", "bank", "income"],
         "FAMILY": ["georgina", "amelia", "margot", "kids", "family", "wife", "daughter"],
         "WORK": ["shift", "care home", "work", "sid bailey", "cqc"],
@@ -61,7 +61,7 @@ def get_compressed_capabilities() -> str:
 def should_include_knowledge(query: str) -> bool:
     """Only include knowledge base when actually relevant."""
     keywords = [
-        "western circle", "ccj", "fca", "fos", "conc", "irresponsible",
+        "fca", "fos", "conc",
         "vinted", "ebay", "sell", "listing", "cqc", "care home", "rights",
         "employment", "ombudsman"
     ]

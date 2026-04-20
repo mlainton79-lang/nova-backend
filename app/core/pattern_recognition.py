@@ -113,7 +113,7 @@ async def analyse_message_for_patterns(message: str, hour: int, day: int):
 
     # Topic patterns
     topics = {
-        "legal": ["western circle", "ccj", "fca", "fos", "court", "complaint"],
+        "legal": ["fca", "fos", "court", "complaint", "lawyer", "solicitor"],
         "financial": ["money", "pay", "bill", "debt", "afford"],
         "work": ["shift", "care home", "work", "night", "tired"],
         "family": ["georgina", "amelia", "margot", "kids", "family"],

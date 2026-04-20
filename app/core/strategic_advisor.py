@@ -90,7 +90,7 @@ Produce a strategic assessment. Think like a trusted advisor who genuinely cares
 
 Consider:
 1. Financial trajectory — where is Matthew heading? Is it improving?
-2. Legal situation — Western Circle CCJ — what's the most important next step?
+2. Any active legal or financial matters — what's the most important next step?
 3. Income — is the Vinted/eBay side showing promise? What would double it?
 4. Nova/Tony — how is this project progressing toward its potential?
 5. Family — anything coming up that needs preparation?

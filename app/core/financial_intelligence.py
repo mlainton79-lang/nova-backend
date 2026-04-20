@@ -17,7 +17,6 @@ Over time Tony builds:
 - Known outgoings (bills, debts)
 - Trend analysis (is money situation improving?)
 - Specific alerts (low balance indicators, missed payments)
-- Western Circle debt tracking
 
 This gives Tony genuine financial awareness without needing
 direct bank access.
@@ -76,7 +75,7 @@ FINANCIAL_EMAIL_KEYWORDS = [
     "vinted", "ebay", "paypal", "sold", "purchase",
     "universal credit", "pip", "hmrc", "tax credit",
     "direct debit", "standing order", "overdue", "reminder",
-    "cashfloat", "western circle", "ccj"
+    # no hardcoded topics; debts are tracked generically from transactions
 ]
 
 
@@ -222,7 +221,7 @@ Estimated:
 - Money out: £{outgoings:.2f}
 - From selling (Vinted/eBay): £{selling:.2f}
 
-Matthew's context: Night shift care worker in Rotherham, has Western Circle CCJ (~£700), wife and 2 young daughters.
+Matthew's context: Night shift care worker in Rotherham, wife and 2 young daughters.
 
 Provide financial intelligence:
 

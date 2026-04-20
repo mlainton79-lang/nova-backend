@@ -8,7 +8,7 @@ Examples:
 - It's 19:00 and Matthew has a shift at 20:00 — Tony checks in
 - Amelia has school tomorrow — Tony reminds about packed lunch
 - It's payday week — Tony checks finances are in order
-- Western Circle deadline approaching — Tony flags it
+- Tracked case deadline approaching — Tony flags it
 - Matthew hasn't messaged in 48h — Tony checks if something's wrong
 - Weekend approaching — Tony suggests what to list on Vinted
 

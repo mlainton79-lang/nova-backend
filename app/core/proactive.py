@@ -8,7 +8,7 @@ This is the difference between an assistant and an agent.
 
 Monitors:
 - Emails — new important ones flagged immediately
-- Legal deadlines — CCJ, complaints, response windows
+- Legal deadlines (if any cases tracked), complaints, response windows
 - World model changes — anything that crossed a threshold
 - Goals — progress or blockers
 - Opportunities — things Tony spotted that could help
@@ -99,7 +99,7 @@ def create_alert(alert_type: str, title: str, body: str,
     """
     Tony creates an alert for Matthew.
     Deduplicates by title — same title within dedup_hours window = skip.
-    This prevents the same CCJ/legal alert firing every 6 hours.
+    This prevents the same legal alert firing every 6 hours.
     """
     # BAN CHECK: suppress alert if content matches any active topic ban
     combined = f"{title} {body} {source or ''}"
@@ -226,7 +226,6 @@ async def tony_scan_emails_for_urgency() -> List[Dict]:
 {summary}
 
 Matthew's context:
-- Has an active CCJ dispute with Western Circle
 - Works nights at a care home
 - Has two young daughters
 - Is building Nova app late at night
@@ -282,7 +281,7 @@ If nothing is urgent, return: {{"urgent_items": []}}"""
 
 async def tony_check_legal_deadlines():
     """
-    Tony monitors the Western Circle case and any legal deadlines.
+    Tony monitors any active tracked cases and legal deadlines.
     Flags anything approaching.
     """
     try:

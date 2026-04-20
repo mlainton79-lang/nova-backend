@@ -7,7 +7,7 @@ from typing import Optional
 from app.core.security import verify_token
 from app.core.correspondence import (
     analyse_incoming_letter, draft_response_letter,
-    prepare_fos_complaint, get_case, init_correspondence_tables
+    get_case, init_correspondence_tables
 )
 
 router = APIRouter()
@@ -36,12 +36,6 @@ async def draft_response(req: ResponseRequest, _=Depends(verify_token)):
     """Tony drafts a response letter."""
     letter = await draft_response_letter(req.case_name, req.incoming_analysis, req.specific_instruction)
     return {"ok": bool(letter), "letter": letter}
-
-
-@router.get("/cases/fos-complaint")
-async def generate_fos_complaint(_=Depends(verify_token)):
-    """Tony generates the full FOS complaint for the Western Circle case."""
-    return await prepare_fos_complaint()
 
 
 @router.get("/cases/{case_name}")

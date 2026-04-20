@@ -13,7 +13,7 @@ Chain of thought process:
 6. RESPOND: Clear, direct, actionable
 
 Used for:
-- Legal questions (Western Circle, FOS, CCJ)
+- Legal questions (FOS, consumer rights, general UK law)
 - Financial decisions
 - Technical decisions about Nova
 - Life decisions Matthew is thinking through
@@ -32,7 +32,7 @@ COMPLEX_TRIGGERS = [
     "should i", "what should", "help me decide", "what do you think",
     "is it worth", "would you recommend", "what's the best",
     "how should i", "advice", "what would happen", "if i",
-    "legal", "fos", "ccj", "court", "western circle", "complaint",
+    "legal", "fos", "court", "complaint", "lawyer", "solicitor",
     "financial", "money", "debt", "afford", "invest", "buy", "sell",
     "nova", "build", "architecture", "design", "approach",
     "worried", "not sure", "confused", "don't know what"

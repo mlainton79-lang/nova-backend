@@ -14,7 +14,7 @@ For each active goal, Tony:
 5. Reports progress clearly
 
 Current active goals Tony can work on autonomously:
-- Western Circle CCJ: research, draft letters, prepare FOS complaint
+- Any active cases Matthew has asked to track
 - Nova development: identify next priority features, draft code outlines
 - Financial stability: monitor opportunities, flag savings
 - Vinted income: research trending items, suggest what to source
@@ -92,15 +92,13 @@ Only include actions Tony can actually execute with his available tools."""
                         # Store as insight
                         await _store_goal_insight(title, f"Web research: {result[:200]}")
 
-                elif "fca" in action_lower or "fos" in action_lower or "western circle" in action_lower:
+                elif "fca" in action_lower or "fos" in action_lower:
                     from app.core.browser_agent import check_fca_register
-                    fca = await check_fca_register("Western Circle")
                     results["actions_taken"].append(f"FCA register checked: {fca.get('status', 'unknown')}")
                     await _store_goal_insight(title, f"FCA status: {fca.get('status', 'unknown')}")
 
                 elif "email" in action_lower or "correspondence" in action_lower:
                     from app.core.gmail_service import search_all_accounts
-                    emails = await search_all_accounts("Western Circle Cashfloat", max_per_account=10)
                     if emails:
                         results["actions_taken"].append(f"Found {len(emails)} relevant emails")
                         await _store_goal_insight(title, f"Email search: {len(emails)} emails found")

@@ -33,7 +33,7 @@ AVAILABLE_TOOLS = {
     "check_goals": "Check Matthew's current goals and progress",
     "get_alerts": "Get pending alerts that need attention",
     "get_weather": "Get current weather",
-    "search_case": "Search the Western Circle legal case documents",
+    "search_case": "Search legal case documents (if any active case tracked)",
     "get_financial_summary": "Get financial awareness summary if banking connected",
     "draft_email": "Draft an email response",
     "create_document": "Generate a formal PDF document",

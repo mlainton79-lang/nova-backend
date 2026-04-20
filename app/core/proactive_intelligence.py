@@ -31,26 +31,22 @@ async def scan_for_legal_developments() -> List[Dict]:
     insights = []
     
     searches = [
-        "Western Circle Cashfloat FCA 2026",
-        "FOS payday loan irresponsible lending 2026 decision",
-        "CCJ set aside consumer credit UK 2026",
-    ]
+"FOS payday loan irresponsible lending 2026 decision",
+]
     
     for query in searches[:2]:
         try:
             results = await brave_search(query, count=3)
             if results and len(results) > 100:
                 # Analyse relevance
-                prompt = f"""These search results may be relevant to Matthew's Western Circle CCJ case.
+                prompt = f"""These search results may be relevant to something Matthew is working on.
 
 Search results:
 {results[:800]}
 
 Is there anything here that directly helps or affects Matthew's case?
-- FCA enforcement against Western Circle/Cashfloat?
 - FOS decisions on similar cases?
 - New legal precedents on irresponsible lending?
-- Changes to CCJ set-aside rules?
 
 If nothing relevant: return null.
 If relevant: explain in one sentence what it means for Matthew.

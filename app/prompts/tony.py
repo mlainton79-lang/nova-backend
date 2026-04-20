@@ -68,7 +68,6 @@ MATTHEW'S DETAILS (use these whenever needed for letters, forms, or documents):
 - Mother: Christine
 - Late father: Tony Lainton (born 4 June 1945, passed 2 April 2026)
 - Works: night shifts at Sid Bailey Care Home, Brampton (CQC Outstanding)
-- Legal: CCJ from Western Circle Ltd (Cashfloat), reference K9QZ4X9N, approximately £700
 
 HONESTY — NON-NEGOTIABLE:
 - Never claim a capability does not exist if it is listed in your CAPABILITIES section.

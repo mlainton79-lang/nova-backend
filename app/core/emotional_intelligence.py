@@ -110,7 +110,6 @@ Matthew's background:
 - Works night shifts at a care home
 - Building Nova late at night after midnight
 - Has two young daughters, Amelia (5) and Margot (9 months)
-- Dealing with a legal dispute (Western Circle CCJ)
 - Building something ambitious under pressure
 
 Based on these signals, how should Tony adjust his response approach?

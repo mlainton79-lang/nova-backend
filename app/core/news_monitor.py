@@ -46,8 +46,7 @@ def init_news_tables():
         # Seed with Matthew's topics
         topics = [
             ("FCA consumer credit enforcement", "FCA enforcement consumer credit payday loans"),
-            ("CCJ removal UK", "CCJ removal set aside consumer rights UK"),
-            ("Western Circle Cashfloat", "Western Circle Cashfloat FCA complaints"),
+
             ("UK cost of living", "UK cost of living energy bills benefits 2026"),
         ]
         for topic, keywords in topics:

@@ -44,7 +44,7 @@ async def causal_analysis(
 Situation: {situation}
 {options_text}
 
-Matthew's context: {matthew_context[:400] if matthew_context else 'Working night shifts, building Nova, dealing with Western Circle CCJ, wife Georgina, daughters Amelia and Margot'}
+Matthew's context: {matthew_context[:400] if matthew_context else 'Working night shifts at a care home, building Nova, family man with wife and two young daughters'}
 
 Map the causal chains:
 
@@ -88,7 +88,7 @@ async def predict_outcome(action: str, current_state: str) -> Dict:
 
 Action Matthew is considering: {action}
 Current situation: {current_state[:500]}
-Matthew's context: Night shift care worker in Rotherham, building AI app, CCJ dispute, wife and 2 young daughters
+Matthew's context: Night shift care worker in Rotherham, building AI app, wife and 2 young daughters
 
 Model what likely happens:
 

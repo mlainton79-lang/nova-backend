@@ -20,7 +20,7 @@ Tony uses this for:
 - Income tracking ("your last 3 shifts paid on X dates")
 - Bill detection ("direct debit for £X due in 3 days")
 - Financial health alerts ("balance below £100")
-- Western Circle payments tracking
+- Automatic categorisation of outgoing payments
 """
 import os
 import httpx

@@ -46,7 +46,6 @@ NOT: questions, general conversation, greetings.
 YES: personal details, plans, feelings, preferences, numbers, dates, names.
 
 Examples of good extractions:
-- "Matthew has a CCJ reference K9QZ4X9N from Western Circle"
 - "Matthew prefers Vinted over eBay for clothes"
 - "Amelia starts school in September 2026"
 

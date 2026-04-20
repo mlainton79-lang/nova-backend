@@ -5,8 +5,7 @@ Tony can navigate websites, fill forms, and take actions.
 Uses Playwright via subprocess — keeps main app clean.
 
 Current capabilities:
-- Submit FOS complaint online
-- Check FCA register for Western Circle status
+- Check FCA register
 - Search Companies House
 - Check credit reference agency info
 - Fill government forms
@@ -147,39 +146,3 @@ JSON response:
     results["assessment"] = assessment
 
     return results
-
-
-async def submit_fos_complaint_online(complaint_data: Dict) -> Dict:
-    """
-    Guide for submitting FOS complaint online.
-    Returns step-by-step instructions with pre-filled data.
-    Tony can't automate this without Playwright, but can pre-fill everything.
-    """
-    return {
-        "url": "https://www.financial-ombudsman.org.uk/make-a-complaint",
-        "method": "online_form",
-        "pre_filled_data": {
-            "complainant_name": "Matthew Lainton",
-            "complainant_address": "61 Swangate, Brampton Bierlow, Rotherham, S63 6ER",
-            "complainant_phone": "07735589035",
-            "company_name": "Western Circle Ltd",
-            "company_trading_name": "Cashfloat",
-            "product_type": "Consumer credit / payday loan",
-            "complaint_date": "As soon as possible",
-            "reference": "K9QZ4X9N",
-            "amount": "£700 approximately",
-            "complaint_summary": complaint_data.get("summary", "Irresponsible lending, failure to assess affordability, failure to recognise and act on vulnerability (gambling addiction), breach of FCA CONC 5.2, FG21/1, and Consumer Duty"),
-            "outcome_sought": "CCJ removal and compensation for distress caused by irresponsible lending"
-        },
-        "instructions": [
-            "1. Open the FOS complaint form at the URL above",
-            "2. Select 'Credit, loans and credit cards' as product type",
-            "3. Enter Western Circle Ltd / Cashfloat as the company",
-            "4. Fill in your details as shown",
-            "5. In the complaint box, paste the complaint Tony has generated",
-            "6. Upload any correspondence with Western Circle",
-            "7. State outcome: CCJ set aside and compensation",
-            "8. Submit — you'll get a reference number immediately"
-        ],
-        "important": "FOS is free. Western Circle must cooperate. Decisions are binding on them if you accept."
-    }

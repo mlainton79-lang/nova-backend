@@ -295,7 +295,7 @@ async def _gather_context(request: ChatRequest) -> dict:
         return ""
 
     async def _case_search():
-        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
+        case_kw = ["case", "complaint", "legal",
                    "timeline", "evidence", "claim", "dispute", "ccj"]
         if not any(k in msg_lower for k in case_kw):
             return ""
@@ -401,7 +401,7 @@ async def _gather_context(request: ChatRequest) -> dict:
             return ""
         causal_kw = ["should i", "what happens if", "if i do", "what would happen",
                      "consequences", "worth it", "risk of", "what if i",
-                     "western circle", "fos complaint", "ccj", "legal action",
+                     "fos complaint", "legal action",
                      "financial", "sell the", "quit", "leave"]
         msg_lower = request.message.lower()
         if not any(k in msg_lower for k in causal_kw):

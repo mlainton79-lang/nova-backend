@@ -1,19 +1,10 @@
 """
 Tony's Correspondence Management Engine.
 
-Tony doesn't just draft letters — he manages entire correspondence threads.
-
-For the Western Circle case:
-1. Tony reads all emails from Western Circle
-2. Understands their position and arguments
-3. Knows the legal grounds (CONC rules, FCA, FOS)
-4. Drafts targeted responses to their specific points
-5. Tracks the full correspondence timeline
-6. Identifies when to escalate to FOS
-7. Prepares the actual FOS complaint when ready
-
-This is Tony acting as Matthew's legal correspondent.
-Not a lawyer — but armed with the right knowledge and context.
+Generic correspondence management — Tony can help Matthew manage any
+letter/email thread if Matthew asks him to track one. No cases are
+pre-installed. Tony is not a lawyer — he helps with drafting and
+tracking, using general knowledge of UK consumer rights where relevant.
 """
 import os
 import json
@@ -69,23 +60,8 @@ def init_correspondence_tables():
             )
         """)
         
-        # Seed Western Circle case
-        cur.execute("""
-            INSERT INTO tony_cases (
-                case_name, case_type, opponent, our_position,
-                their_position, legal_grounds, next_action, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (case_name) DO NOTHING
-        """, (
-            "Western Circle CCJ",
-            "ccj",
-            "Western Circle Ltd (Cashfloat)",
-            "CCJ should be set aside on grounds of irresponsible lending. Western Circle failed affordability checks (CONC 5.2), failed vulnerability obligations (FG21/1), and breached Consumer Duty. Matthew had gambling addiction at time of lending which constitutes vulnerability under FCA rules.",
-            "Affordability checks were sufficient. Debt is valid.",
-            ["CONC 5.2 - affordability assessment", "FG21/1 - vulnerable customer guidance", "CONC 7.3 - forbearance", "Consumer Duty PS22/9", "FOS jurisdiction over regulated credit"],
-            "File FOS complaint or apply to court to set aside CCJ (Form N244)",
-            "active"
-        ))
+        # No cases are seeded by default. Cases are added only when Matthew
+        # explicitly asks Tony to track one.
         conn.commit()
         cur.close()
         conn.close()
@@ -209,82 +185,3 @@ async def get_case(case_name: str) -> Optional[Dict]:
     except Exception as e:
         print(f"[CORRESPONDENCE] Get case failed: {e}")
     return None
-
-
-async def prepare_fos_complaint() -> Dict:
-    """
-    Tony prepares a complete FOS complaint for the Western Circle case.
-    Pulls all correspondence, builds the chronology, writes the complaint.
-    """
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT direction, from_party, subject, body, date_sent
-            FROM tony_correspondence
-            WHERE case_name = 'Western Circle CCJ'
-            ORDER BY date_sent ASC
-        """)
-        correspondence = cur.fetchall()
-        cur.close()
-        conn.close()
-    except Exception:
-        correspondence = []
-
-    corr_text = ""
-    if correspondence:
-        corr_text = "\n\n".join(
-            f"[{r[0].upper()}] {r[2]} ({r[4]})\n{r[3][:300]}"
-            for r in correspondence
-        )
-
-    prompt = f"""Tony is preparing a formal FOS (Financial Ombudsman Service) complaint on behalf of Matthew Lainton against Western Circle Ltd (Cashfloat).
-
-Matthew's details:
-- Full name: Matthew Lainton
-- Address: 61 Swangate, Brampton Bierlow, Rotherham, S63 6ER
-- Phone: 07735589035
-- Reference: K9QZ4X9N (CCJ reference)
-- Approximate amount: £700
-
-Grounds for complaint:
-1. Irresponsible lending — Western Circle failed adequate affordability assessment (CONC 5.2)
-2. Vulnerability — Matthew had a gambling addiction at the time of lending, constituting vulnerability under FG21/1
-3. Western Circle acknowledged vulnerability but maintained checks were sufficient — this acknowledgment is an admission
-4. Failure to apply forbearance and due consideration (CONC 7.3)
-5. Consumer Duty breach (PS22/9) — failure to act in consumer's best interests
-6. The resulting CCJ is direct evidence of lending failure
-
-Correspondence history:
-{corr_text if corr_text else 'No correspondence on file yet — complaint based on known facts'}
-
-Write a complete, detailed FOS complaint that:
-- Opens with clear statement of complaint
-- Gives chronological account of events
-- References each FCA rule violation specifically
-- Explains what outcome we're seeking (CCJ removal, compensation consideration)
-- Is written in first person from Matthew's perspective
-- Is professional, factual, and compelling
-- Complete — do not truncate
-
-Write the full complaint now:"""
-
-    complaint_text = await gemini(prompt, task="legal", max_tokens=8192, temperature=0.2)
-
-    # Generate PDF
-    if complaint_text:
-        from app.core.document_generator import tony_generate_custom_pdf
-        pdf = await tony_generate_custom_pdf(
-            title="FOS Complaint — Western Circle Ltd (Cashfloat)",
-            content=complaint_text,
-            recipient_name="Financial Ombudsman Service",
-            recipient_address="Exchange Tower\nHarbour Exchange\nLondon\nE14 9SR"
-        )
-        return {
-            "ok": True,
-            "complaint_text": complaint_text,
-            "pdf": pdf,
-            "next_step": "Submit at financial-ombudsman.org.uk/make-a-complaint or post to: Financial Ombudsman Service, Exchange Tower, London, E14 9SR"
-        }
-
-    return {"ok": False, "error": "Failed to generate complaint"}

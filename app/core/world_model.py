@@ -8,8 +8,8 @@ The world model has 9 dimensions:
 1. SELF — Matthew's identity, health, mindset
 2. FAMILY — Georgina, Amelia, Margot, Christine
 3. WORK — Sid Bailey, shifts, colleagues
-4. FINANCIAL — income, outgoings, debts, CCJ
-5. LEGAL — Western Circle case, FOS, CCJ
+4. FINANCIAL — income, outgoings, debts
+5. LEGAL — legal situation (if any active)
 6. PROJECTS — Nova, Tony, selling
 7. SOCIAL — relationships, support network
 8. ENVIRONMENT — Rotherham, home at Swangate
@@ -32,8 +32,8 @@ WORLD_MODEL_SEED = {
     "SELF": "Matthew Lainton, 30s, Rotherham. Night shift care worker. Building AI app on his phone. Recently lost his father Tony (2 April 2026). Resourceful, determined, working under real financial and emotional pressure.",
     "FAMILY": "Married to Georgina (b.26 Feb 1992). Daughters Amelia (5, starting school soon) and Margot (9 months). Mother Christine. Late father Tony Lainton (b.4 Jun 1945, d.2 Apr 2026) — Nova's Tony is named after him.",
     "WORK": "Night shifts at Sid Bailey Care Home, Brampton, Rotherham. CQC Outstanding rated. Reliable employment, physically demanding. Limits time available for other activities.",
-    "FINANCIAL": "Working class income from care work. Known outgoing: Western Circle CCJ ~£700 (ref K9QZ4X9N). Supplementing income with Vinted/eBay selling. No known bank account details.",
-    "LEGAL": "CCJ from Western Circle Ltd (Cashfloat) for ~£700. Reference K9QZ4X9N. Grounds to challenge: irresponsible lending, failed affordability under CONC 5.2, gambling vulnerability under FG21/1. FOS complaint path available.",
+    "FINANCIAL": "Working class income from care work. Supplementing income with Vinted/eBay selling. No known bank account details.",
+    "LEGAL": "No active legal matters currently tracked.",
     "PROJECTS": "Building Nova — Android AI app with Tony as the AI persona. Solo developer using AndroidIDE on phone. Backend on Railway (FastAPI). Significant capability already built. Long-term vision: self-improving AGI personal assistant.",
     "SOCIAL": "Wife Georgina is primary close relationship. Limited other social context known. Works nights so social schedule constrained. Building something ambitious largely alone.",
     "ENVIRONMENT": "61 Swangate, Brampton Bierlow, Rotherham S63 6ER. South Yorkshire. Local resources include charity shops, car boots for resale sourcing.",

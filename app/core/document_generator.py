@@ -5,7 +5,6 @@ Tony can create properly formatted PDFs and letters.
 Use cases:
 - FCA complaint letter
 - FOS complaint letter  
-- Formal letters to Western Circle
 - Vinted/eBay item descriptions
 - Any document Matthew needs
 
@@ -152,7 +151,6 @@ Context and requirements:
 Matthew's details:
 - Name: Matthew Lainton
 - Location: Rotherham, South Yorkshire
-- Case reference (if legal): K9QZ4X9N (Western Circle CCJ)
 
 Generate the complete letter body. Be formal, professional, and firm. British English throughout.
 Do not include the date, sender address, or recipient address — those are handled separately.

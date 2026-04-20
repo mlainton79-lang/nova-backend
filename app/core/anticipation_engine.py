@@ -10,7 +10,7 @@ Examples of genuine anticipation:
 - It's 19:30 on a Sunday → Matthew has a night shift in 30 mins → 
   Tony checks if he's acknowledged it and sends a reminder
   
-- Matthew mentioned Western Circle 3 days ago → no follow-up →
+- Matthew mentioned something important days ago → no follow-up →
   Tony checks if there's been any email response and surfaces it
 
 - Amelia's birthday is in 14 days → Tony noticed nothing has been planned →
@@ -120,24 +120,9 @@ If nothing urgent: {{"urgent_unresolved": []}}"""
 
 async def anticipate_from_email_patterns() -> List[Dict]:
     """Check if any emails need a response that Tony hasn't flagged yet."""
-    insights = []
-    try:
-        from app.core.gmail_service import search_all_accounts
-        
-        # Look for emails that might need responses
-        emails = await search_all_accounts("western circle cashfloat", max_per_account=5)
-        
-        if emails:
-            recent = [e for e in emails if e.get('date', '') > (datetime.utcnow() - timedelta(days=7)).isoformat()[:10]]
-            if recent:
-                insights.append({
-                    "type": "email_response_needed",
-                    "message": f"There's a recent email from Western Circle/Cashfloat. Tony can draft a response.",
-                    "priority": "high"
-                })
-    except Exception as e:
-        print(f"[ANTICIPATION] Email anticipation failed: {e}")
-    return insights
+    # No hardcoded topic search. Email anticipation is now driven by patterns Matthew
+    # actively engages with in conversation, not hardcoded search terms.
+    return []
 
 
 async def run_anticipation_engine() -> List[Dict]:

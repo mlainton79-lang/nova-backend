@@ -48,15 +48,6 @@ def init_goals_table():
         # Seed with Matthew's known goals
         known_goals = [
             (
-                "Remove Western Circle CCJ",
-                "CCJ from Western Circle / Cashfloat. Amount ~£700. Case ref K9QZ4X9N. Grounds: vulnerability due to gambling addiction and family dementia. 22 emails ingested and analysed.",
-                "legal", "active", "urgent",
-                "22 emails ingested into RAG. FCA complaint grounds identified.",
-                "Compile full case from emails, draft formal FCA complaint letter, send to Financial Conduct Authority",
-                "Case emails ingested but RAG search needs verifying",
-                None
-            ),
-            (
                 "Build Tony into the most capable personal AI",
                 "Nova app - Tony as autonomous AI agent with world model, multi-brain council, self-improvement loop",
                 "technology", "active", "high",
@@ -69,8 +60,8 @@ def init_goals_table():
                 "Financial stability for family",
                 "Ensure Georgina, Amelia and Margot are secure. Resolve debts. Build income streams.",
                 "financial", "active", "high",
-                "Western Circle CCJ is primary financial threat being addressed",
-                "Resolve CCJ first, then look at income opportunities",
+                "No blockers currently tracked.",
+                "Look at income opportunities and reduce outgoings where possible.",
                 None, None
             ),
             (

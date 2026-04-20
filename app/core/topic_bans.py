@@ -3,8 +3,8 @@ Topic bans — Matthew can tell Tony to stop bringing up a subject,
 and Tony honours it for the rest of the conversation session.
 
 Usage:
-  Matthew says: "don't bring up the CCJ again", "forget Western Circle for now"
-  detect_topic_ban() returns "CCJ" or "Western Circle"
+  Matthew says: "don't bring up X again", "forget Y for now"
+  detect_topic_ban() returns the topic name Matthew referenced
   store_ban(chat_session_id, topic)
   get_active_bans(chat_session_id) returns the list for injection into prompt
 

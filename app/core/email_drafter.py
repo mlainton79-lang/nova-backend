@@ -5,7 +5,7 @@ Tony reads Matthew's inbox and prepares draft replies before being asked.
 When an email needs a response, Tony drafts it using full context from
 the world model, memory, and the email thread — then surfaces it as an alert.
 
-Matthew sees: "Tony has drafted a reply to Western Circle. Review it."
+Matthew sees: "Tony has drafted a reply. Review it."
 Matthew can send it unchanged or edit it first.
 
 Drafts are stored in the DB. The alert tells Matthew they exist.
@@ -191,7 +191,7 @@ async def _get_world_context() -> str:
         from app.core.world_model import get_world_model_summary
         return get_world_model_summary()
     except Exception:
-        return "Matthew Lainton, Rotherham. Active CCJ dispute with Western Circle (Cashfloat). Works at Sid Bailey Care Home. Wife Georgina, daughters Amelia (5) and Margot (9 months)."
+        return "Matthew Lainton, Rotherham. Works at Sid Bailey Care Home. Wife Georgina, daughters Amelia (5) and Margot (9 months)."
 
 
 async def _needs_reply(email: Dict) -> Optional[Dict]:

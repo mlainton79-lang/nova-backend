@@ -163,7 +163,6 @@ RECENT THOUGHTS:
 
 Matthew Lainton's context:
 - Works nights at a care home
-- Has a legal dispute with Western Circle (CCJ)
 - Has two young daughters (Amelia 5, Margot 9 months)
 - Building Nova as a personal AI
 - Wants Tony to be autonomous and powerful

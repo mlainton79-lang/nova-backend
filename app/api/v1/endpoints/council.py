@@ -34,8 +34,8 @@ async def _gather_council_context(req: ChatRequest) -> dict:
         return ""
 
     async def _case():
-        case_kw = ["case", "western circle", "westerncircle", "complaint", "legal",
-                   "timeline", "evidence", "claim", "dispute", "ccj", "cashfloat"]
+        case_kw = ["case", "complaint", "legal",
+                   "timeline", "evidence", "claim", "dispute", ]
         if not any(k in msg_lower for k in case_kw):
             return ""
         try:

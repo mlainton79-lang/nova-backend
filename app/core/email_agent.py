@@ -3,12 +3,6 @@ Tony's Email Agent.
 
 Tony reads correspondence, drafts responses, and with approval — sends them.
 
-For the Western Circle case specifically:
-- Tony reads every email from them
-- Drafts legally grounded responses
-- Queues them for Matthew's approval (one tap to send)
-- Tracks the full correspondence timeline
-- Knows when to escalate vs respond directly
 
 For general email:
 - Identifies emails needing responses
@@ -155,59 +149,6 @@ async def queue_email_for_approval(
         return -1
 
 
-async def process_western_circle_email(email: Dict) -> Optional[int]:
-    """
-    Tony reads a Western Circle email and drafts a response.
-    Queues for Matthew's approval.
-    """
-    from app.core.correspondence import analyse_incoming_letter, draft_response_letter
-
-    body = email.get("body", email.get("snippet", ""))
-    if not body:
-        return None
-
-    # Analyse their position
-    analysis = await analyse_incoming_letter(
-        "Western Circle CCJ",
-        body,
-        "Western Circle Ltd (Cashfloat)"
-    )
-
-    if not analysis:
-        return None
-
-    # Draft response
-    response_letter = await draft_response_letter(
-        "Western Circle CCJ",
-        analysis,
-        "Reference the specific points they raised and counter with FCA CONC rules"
-    )
-
-    if not response_letter:
-        return None
-
-    # Find their email address from the email
-    from_addr = email.get("from", "")
-    # Extract email from "Name <email>" format
-    import re
-    email_match = re.search(r'<([^>]+)>', from_addr)
-    to_addr = email_match.group(1) if email_match else from_addr
-
-    subject = email.get("subject", "Re: Your correspondence")
-    if not subject.startswith("Re:"):
-        subject = f"Re: {subject}"
-
-    return await queue_email_for_approval(
-        account="mlainton79@gmail.com",
-        to=to_addr,
-        subject=subject,
-        body=response_letter,
-        reason=f"Tony's legal response. Their key argument: {analysis.get('tony_assessment', '')[:100]}",
-        priority="high",
-        original_message_id=email.get("id", "")
-    )
-
-
 async def scan_for_actionable_emails() -> List[Dict]:
     """
     Scan all accounts for emails that need responses.
@@ -218,18 +159,9 @@ async def scan_for_actionable_emails() -> List[Dict]:
     try:
         from app.core.gmail_service import search_all_accounts
 
-        # Western Circle correspondence
-        wc_emails = await search_all_accounts(
-            "from:cashfloat OR from:westerncircle", max_per_account=5
-        )
-        for email in wc_emails[:2]:
-            queue_id = await process_western_circle_email(email)
-            if queue_id and queue_id > 0:
-                actionable.append({
-                    "type": "western_circle_response",
-                    "queue_id": queue_id,
-                    "subject": email.get("subject", "")
-                })
+        # No hardcoded topic search. Email scanning is driven by active cases
+        # that Matthew has explicitly asked Tony to track.
+        pass
 
     except Exception as e:
         print(f"[EMAIL_AGENT] Scan failed: {e}")

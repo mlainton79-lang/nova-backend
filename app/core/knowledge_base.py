@@ -3,9 +3,9 @@ Tony's Knowledge Base.
 
 Static knowledge Tony always has access to.
 Seeded with domains most relevant to Matthew's life:
-- UK consumer credit law (Western Circle case)
+- UK consumer credit law (generic)
 - FOS complaint process
-- CCJ set-aside grounds
+- General court / debt dispute processes
 - Employment rights (care work)
 - Vinted/eBay selling rules
 - Universal Credit rules
@@ -25,7 +25,7 @@ def get_conn():
 KNOWLEDGE_ENTRIES = [
     # UK Consumer Credit Law
     ("consumer_credit_law", "CONC 5.2 Affordability", 
-     "Under FCA CONC 5.2, lenders must carry out a reasonable creditworthiness assessment before lending. They must consider the consumer's ability to make repayments. Failure to do so is grounds for complaint and potentially makes the debt unenforceable. Western Circle/Cashfloat were subject to FCA enforcement."),
+     "Under FCA CONC 5.2, lenders must carry out a reasonable creditworthiness assessment before lending. They must consider the consumer's ability to make repayments. Failure to do so is grounds for complaint and potentially makes the debt unenforceable."),
     
     ("consumer_credit_law", "FG21/1 Vulnerability",
      "FCA Guidance FG21/1 requires firms to identify and treat vulnerable customers fairly. Gambling addiction is explicitly recognised as a vulnerability. If a borrower had a gambling addiction at the time of lending and the lender failed to identify and accommodate this, it constitutes a serious breach."),
@@ -98,7 +98,7 @@ def get_relevant_knowledge(query: str) -> str:
     query_lower = query.lower()
     
     domain_keywords = {
-        "consumer_credit_law": ["conc", "affordability", "fca", "lending", "credit", "western circle", "cashfloat", "irresponsible", "vulnerability", "gambling"],
+        "consumer_credit_law": ["conc", "affordability", "fca", "lending", "credit", "irresponsible", "vulnerability"],
         "fos_process": ["fos", "ombudsman", "complaint", "ccj", "set aside", "court", "n244"],
         "selling_platforms": ["vinted", "ebay", "selling", "listing", "fees", "platform"],
         "employment_rights": ["employment", "rights", "wage", "shift", "work", "care home", "cqc"],
