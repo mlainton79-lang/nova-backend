@@ -55,8 +55,78 @@ async def autonomous_loop():
             print(f"[AUTONOMOUS] Loop error: {e}")
         await asyncio.sleep(6 * 3600)  # Every 6 hours
 
+async def _one_time_ccj_cleanup():
+    """
+    One-off cleanup: wipe Western Circle / CCJ from Tony's active memory.
+    Matthew has asked repeatedly to stop mentioning it. The prompt rules weren't enough.
+    Runs once per process startup. Idempotent — safe to run every boot.
+    """
+    import os
+    import psycopg2
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+        cur = conn.cursor()
+
+        # Mark Western Circle / CCJ / Cashfloat alerts as read + expired
+        for topic in ["western circle", "ccj", "cashfloat"]:
+            try:
+                cur.execute("""
+                    UPDATE tony_alerts
+                    SET read = TRUE, expires_at = NOW() - INTERVAL '1 hour'
+                    WHERE (title ILIKE %s OR body ILIKE %s OR source ILIKE %s)
+                """, (f"%{topic}%", f"%{topic}%", f"%{topic}%"))
+                print(f"[STARTUP CLEANUP] Cleared {cur.rowcount} {topic} alerts")
+            except Exception as e:
+                print(f"[STARTUP CLEANUP] Alert clear {topic} failed: {e}")
+
+            try:
+                cur.execute("""
+                    INSERT INTO tony_topic_bans
+                    (chat_session_id, topic, phrase_that_triggered, expires_at)
+                    SELECT NULL, %s, 'one-time startup cleanup — Matthew asked repeatedly', NOW() + INTERVAL '30 days'
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM tony_topic_bans
+                        WHERE topic ILIKE %s AND active = TRUE
+                        AND expires_at > NOW() + INTERVAL '7 days'
+                    )
+                """, (topic, topic))
+            except Exception as e:
+                print(f"[STARTUP CLEANUP] Ban {topic} failed: {e}")
+
+            try:
+                cur.execute("""
+                    UPDATE tony_semantic_memory
+                    SET importance = 0
+                    WHERE content ILIKE %s AND importance > 0
+                """, (f"%{topic}%",))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Demoted {cur.rowcount} {topic} memories")
+            except Exception:
+                pass
+
+            try:
+                cur.execute("""
+                    UPDATE tony_goals
+                    SET status = 'dormant'
+                    WHERE (title ILIKE %s OR description ILIKE %s)
+                    AND status NOT IN ('completed', 'dormant')
+                """, (f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Dormant {cur.rowcount} {topic} goals")
+            except Exception:
+                pass
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("[STARTUP CLEANUP] CCJ/Western Circle cleanup complete")
+    except Exception as e:
+        print(f"[STARTUP CLEANUP] Failed: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
+    asyncio.create_task(_one_time_ccj_cleanup())
     asyncio.create_task(autonomous_loop())
     print("[STARTUP] Tony autonomous loop started")
 

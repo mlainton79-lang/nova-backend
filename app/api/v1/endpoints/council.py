@@ -180,6 +180,21 @@ async def _post_response_tasks(message: str, reply: str):
 async def council(req: ChatRequest, _=Depends(verify_token)):
     start = time.time()
 
+    # Check for action commands first — don't waste Council on things we can do directly
+    try:
+        from app.core.command_parser import detect_command, execute_command
+        cmd = detect_command(req.message)
+        if cmd:
+            reply = await execute_command(cmd)
+            if reply:
+                log_request(provider="council", message=req.message, reply=reply[:500], ok=True)
+                return CouncilResponse(
+                    ok=True, provider="council", reply=reply,
+                    latency_ms=int((time.time() - start) * 1000)
+                )
+    except Exception as e:
+        print(f"[COUNCIL] Command detection: {e}")
+
     # Topic ban detection — same as chat_stream
     try:
         from app.core.topic_bans import detect_topic_ban, store_ban, check_and_clear_if_user_raises_topic
