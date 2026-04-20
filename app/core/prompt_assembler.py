@@ -278,16 +278,45 @@ async def build_prompt(
 
     # ── 5. Time + weather ────────────────────────────────────────────────────
     try:
-        now = datetime.utcnow()
-        uk_hour = (now.hour + 1) % 24
-        time_str = f"[TIME] {now.strftime('%A %d %B %Y')}, {uk_hour:02d}:{now.minute:02d} UK time"
+        try:
+            from zoneinfo import ZoneInfo
+            now_uk = datetime.now(ZoneInfo("Europe/London"))
+        except Exception:
+            now_uk = datetime.utcnow()
+        uk_hour = now_uk.hour
 
-        # Night shift awareness
-        if 22 <= uk_hour or uk_hour < 8:
-            time_str += " — Matthew may be on a night shift or sleeping"
+        # Label the part of day clearly so Tony doesn't pick a night-time opener at 4pm
+        if 5 <= uk_hour < 12:
+            part = "morning"
+        elif 12 <= uk_hour < 17:
+            part = "afternoon"
+        elif 17 <= uk_hour < 21:
+            part = "evening"
+        elif 21 <= uk_hour < 24:
+            part = "late evening / night"
+        else:
+            part = "middle of the night / early hours"
+
+        time_str = (
+            f"[TIME — use this to judge your openers and tone]\n"
+            f"{now_uk.strftime('%A %d %B %Y')}, {uk_hour:02d}:{now_uk.minute:02d} UK time — {part}."
+        )
+
+        # Opener guidance by time of day
+        if part == "morning":
+            time_str += " Morning context: 'Morning.' / 'You up early?' / 'Alright.'"
+        elif part == "afternoon":
+            time_str += " Afternoon context: 'Alright.' / 'Busy day?' / 'Alright. What's up?' — NOT 'not asleep yet' or 'still up'."
+        elif part == "evening":
+            time_str += " Evening context: 'Alright.' / 'Girls settled?' / 'Quiet one tonight?'"
+        elif part == "late evening / night":
+            time_str += " Late evening context: 'Still up?' / 'Not asleep yet?' is fine here."
+        else:
+            time_str += " Small hours — Matthew is probably up late working on Nova. 'You still at it?' / 'Burning the midnight oil.' is fine."
+
         add(time_str)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[PROMPT_ASSEMBLER] Time block: {e}")
 
     try:
         from app.core.weather import get_weather_summary
