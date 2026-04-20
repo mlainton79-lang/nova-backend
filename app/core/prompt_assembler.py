@@ -76,6 +76,16 @@ ABSOLUTE RULES FOR THIS CONVERSATION:
 6. DON'T SHOEHORN THE CCJ INTO EVERYTHING.
    The Western Circle CCJ is one thing on Matthew's plate, not the thing. Bring it up when it's actually relevant — when he asks, when a real deadline is imminent, or when he specifically brings it up. Not on "hi". Not in the middle of a chat about spam folders. Not when he's asking about Vinted.
 
+   SPECIFICALLY FORBIDDEN BRIDGES — do NOT use these as excuses to pivot to the CCJ:
+   - "Make money" / "earn" / "income" / "business" — these are about BUILDING, not debt
+   - "Financial" / "money problems" in general — don't assume he means the CCJ
+   - "Stress" / "worried" / "overwhelmed" — don't map these to the CCJ
+   - "Help me with X" (where X is not CCJ-related) — answer X, don't route to CCJ
+
+   If Matthew asks "what can we build to make money?" — answer THAT question. Suggest products, services, app ideas, skills he could monetise. Do NOT reply "first sort the CCJ". That's not what he asked.
+
+   The CCJ is in your context as BACKGROUND. It is not the answer to most questions.
+
 7. ACCEPT CORRECTIONS WITHOUT SPIRALLING.
    If Matthew corrects you ("I don't start back until the 24th, not tomorrow"), the response is: "Got it, my mistake." Not a paragraph of reasoning about how you got there. Not a re-explanation. Just accept it, correct yourself, move on.
 
@@ -207,31 +217,51 @@ async def build_prompt(
         print(f"[PROMPT_ASSEMBLER] Rota: {e}")
 
     # ── 1. Active urgent alerts ──────────────────────────────────────────────
-    # Only inject alerts when genuinely relevant — not on every casual message.
-    # Rule: inject if (a) message mentions the alert topic, OR (b) alert is brand new (<2h)
-    # Never lead with alerts on short casual messages like "hi", "ok", "thanks"
+    # STRICT rule: only inject alerts when the user's message EXACTLY matches the alert topic,
+    # or the alert is genuinely brand new (<1h). No bridge logic — "money" does not unlock a
+    # CCJ alert, "email" does not unlock a legal alert, etc.
+    # Tony's tendency to pivot casual questions to urgent alerts is a bug, not a feature.
     try:
-        is_casual = len(user_message.strip()) < 15 and not any(
-            k in user_message.lower()
-            for k in ["ccj", "western", "legal", "debt", "email", "urgent", "alert",
-                      "complaint", "fos", "court", "money", "goal", "amelia", "margot"]
-        )
-        if not is_casual:
-            rows = _db_fetch("""
-                SELECT title, body, created_at FROM tony_alerts
-                WHERE read = FALSE AND priority IN ('urgent', 'high')
-                AND (expires_at IS NULL OR expires_at > NOW())
-                AND (
-                    created_at > NOW() - INTERVAL '2 hours'
-                    OR alert_type IN ('legal_deadline', 'payment_demand', 'court_notice')
+        rows = _db_fetch("""
+            SELECT title, body, alert_type, created_at FROM tony_alerts
+            WHERE read = FALSE AND priority IN ('urgent', 'high')
+            AND (expires_at IS NULL OR expires_at > NOW())
+            ORDER BY created_at DESC LIMIT 10
+        """)
+        if rows:
+            msg_lower = user_message.lower()
+            relevant = []
+            for title, body, atype, created in rows:
+                # Match rule 1: is it brand new (last 1 hour)?
+                from datetime import datetime as _dt, timedelta as _td
+                try:
+                    age_mins = (_dt.utcnow() - created.replace(tzinfo=None)).total_seconds() / 60
+                    is_brand_new = age_mins < 60
+                except Exception:
+                    is_brand_new = False
+
+                # Match rule 2: does the user message contain specific words from the alert title?
+                # Only count real content words (not every word like "for" or "the")
+                title_words = [w.lower() for w in title.split()
+                               if len(w) > 3 and w.lower() not in
+                               ("with", "from", "about", "your", "this", "that", "will", "have")]
+                has_specific_match = any(w in msg_lower for w in title_words)
+
+                if is_brand_new or has_specific_match:
+                    relevant.append((title, body))
+                if len(relevant) >= 2:
+                    break
+
+            if relevant:
+                alert_lines = "\n".join(f"• {t}: {b[:120]}" for t, b in relevant)
+                add(
+                    f"[URGENT ALERTS — these are HIDDEN from Matthew's view. "
+                    f"Only mention if he explicitly asks about these specific topics. "
+                    f"NEVER use an alert to pivot the conversation or as a bridge from his actual question.]\n"
+                    f"{alert_lines}"
                 )
-                ORDER BY created_at DESC LIMIT 2
-            """)
-            if rows:
-                alert_lines = "\n".join(f"• {r[0]}: {r[1][:120]}" for r in rows)
-                add(f"[URGENT ALERTS — mention only if directly relevant to this conversation]\n{alert_lines}")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[PROMPT_ASSEMBLER] Alerts: {e}")
 
     # ── 2. Semantic memory (most relevant to this message) ───────────────────
     if user_message:
