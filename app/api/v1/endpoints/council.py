@@ -275,9 +275,29 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         except Exception as e:
             print(f"[COUNCIL] Vision: {e}")
 
+    # Filter conversation history through active topic bans.
+    # Previous Tony responses may contain banned content that would otherwise
+    # poison the new response via conversation history.
+    filtered_history = req.history
+    try:
+        from app.core.prompt_assembler import _get_active_bans, _has_banned_topic
+        active_bans = _get_active_bans()
+        if active_bans and req.history:
+            filtered_history = []
+            for h in req.history:
+                content = h.get("content", "") if isinstance(h, dict) else str(h)
+                # Skip history entries that mention banned topics
+                if _has_banned_topic(content, active_bans):
+                    continue
+                filtered_history.append(h)
+            if len(filtered_history) < len(req.history):
+                print(f"[COUNCIL] Filtered {len(req.history) - len(filtered_history)} history entries containing banned topics")
+    except Exception as e:
+        print(f"[COUNCIL] History ban filter: {e}")
+
     # Run council — inherently multi-round, can't stream
     result = await run_council(
-        message_for_council, req.history, system_prompt, debug=req.debug or False
+        message_for_council, filtered_history, system_prompt, debug=req.debug or False
     )
 
     reply = result.get("reply", "")

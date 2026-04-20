@@ -116,6 +116,50 @@ async def _one_time_ccj_cleanup():
             except Exception:
                 pass
 
+            # Also clear living memory rows that mention the topic
+            try:
+                cur.execute("""
+                    DELETE FROM tony_living_memory
+                    WHERE content ILIKE %s
+                """, (f"%{topic}%",))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} living memory rows")
+            except Exception:
+                pass
+
+            # Clear episodic memory rows that mention the topic
+            try:
+                cur.execute("""
+                    DELETE FROM tony_episodic_memory
+                    WHERE summary ILIKE %s OR content ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} episodic memory rows")
+            except Exception:
+                pass
+
+            # Clear RAG chunks that mention the topic
+            try:
+                cur.execute("""
+                    DELETE FROM rag_chunks
+                    WHERE content ILIKE %s OR source ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} RAG chunks")
+            except Exception:
+                pass
+
+            # Clear tony_cases rows
+            try:
+                cur.execute("""
+                    DELETE FROM tony_cases
+                    WHERE case_name ILIKE %s OR opponent ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} case rows")
+            except Exception:
+                pass
+
         conn.commit()
         cur.close()
         conn.close()
