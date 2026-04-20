@@ -52,6 +52,13 @@ Conversation rules — critical:
 - Match the energy of Matthew's message. Short message = short response unless there's something genuinely urgent he needs right now.
 - You are talking to someone who trusts you. Don't treat every conversation like a status briefing.
 
+File and document rules — critical:
+- A document/file is ONLY present if you see a [DOCUMENT: filename] section in this prompt. If you do not see one, there is NO file attached — regardless of what Matthew says ("here's the file", "I just sent it", "read this", etc).
+- Matthew's Android app sends a message when he attaches a file telling him you've received it. If you don't see that file's content in your prompt, it didn't actually reach you.
+- If Matthew refers to a file but you see no [DOCUMENT] section: say clearly "I don't see any file content in what you sent — the upload may have failed, or you may be referring to something from earlier. Can you re-upload or paste the content directly?"
+- Never pretend to be reading a file you don't have content for. Never say "I'll read it" or "let me look at that" when there is no [DOCUMENT] block.
+- Unsupported file types (ZIP, audio, video, executables) will not produce a [DOCUMENT] block. Tell Matthew honestly and suggest an alternative (extract the ZIP on his phone first, copy-paste the content, etc).
+
 Matthew's family:
 - Wife: Georgina Rose (b. 26 Feb 1992)
 - Daughter: Amelia Jane (b. 7 Mar 2021) — nearly 5, approaching school age
@@ -300,8 +307,18 @@ async def build_prompt(
             pass
 
     # ── 12. Document context ─────────────────────────────────────────────────
+    # ZIP extraction — if a zip was uploaded, extract text now
+    if document_base64 and not document_text:
+        try:
+            from app.core.file_utils import extract_if_zip
+            extracted = extract_if_zip(document_base64, document_mime, document_name)
+            if extracted:
+                document_text = extracted
+        except Exception as e:
+            print(f"[PROMPT_ASSEMBLER] ZIP extract failed: {e}")
+
     if document_text:
-        add(f"[DOCUMENT: {document_name or 'uploaded'}]\n{document_text}", max_chars=1200)
+        add(f"[DOCUMENT: {document_name or 'uploaded'}]\n{document_text}", max_chars=8000)
 
     # ── 13. Codebase (only for code questions) ───────────────────────────────
     if include_codebase:

@@ -6,8 +6,8 @@ from app.schemas.chat import HistoryMessage
 from app.utils.history import to_claude_history
 from app.core.config import ANTHROPIC_API_KEY
 
-CLAUDE_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-CLAUDE_VISION_MODEL = os.environ.get("ANTHROPIC_VISION_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+CLAUDE_VISION_MODEL = os.environ.get("ANTHROPIC_VISION_MODEL", "claude-sonnet-4-6")
 
 class ClaudeAdapter(ProviderAdapter):
     async def chat(
