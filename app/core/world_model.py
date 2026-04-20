@@ -37,7 +37,7 @@ WORLD_MODEL_SEED = {
     "PROJECTS": "Building Nova — Android AI app with Tony as the AI persona. Solo developer using AndroidIDE on phone. Backend on Railway (FastAPI). Significant capability already built. Long-term vision: self-improving AGI personal assistant.",
     "SOCIAL": "Wife Georgina is primary close relationship. Limited other social context known. Works nights so social schedule constrained. Building something ambitious largely alone.",
     "ENVIRONMENT": "61 Swangate, Brampton Bierlow, Rotherham S63 6ER. South Yorkshire. Local resources include charity shops, car boots for resale sourcing.",
-    "TRAJECTORY": "Ambitious — building technology while working demanding night shifts. Under financial pressure but investing in long-term project. Legal case could relieve debt pressure. Nova has genuine commercial potential if built to completion."
+    "TRAJECTORY": "Ambitious — building technology while working demanding night shifts. Under financial pressure but investing in long-term project. Nova has genuine commercial potential if built to completion."
 }
 
 
@@ -59,7 +59,9 @@ def init_world_model():
             cur.execute("""
                 INSERT INTO tony_world_model (dimension, content)
                 VALUES (%s, %s)
-                ON CONFLICT (dimension) DO NOTHING
+                ON CONFLICT (dimension) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    updated_at = NOW()
             """, (dimension, content))
         
         conn.commit()

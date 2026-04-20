@@ -1,61 +1,8 @@
 import os
+import psycopg2
 from fastapi import FastAPI, Request
-from app.api.v1.router import router as v1_router
 
-app = FastAPI(title="Nova Backend", version="1.0.0")
-
-app.include_router(v1_router, prefix="/api/v1")
-
-import asyncio
-from datetime import datetime
-
-async def autonomous_loop():
-    """
-    Tony's fast 6-hour loop. Runs inside the web service.
-    Handles time-sensitive work only — must not block chat:
-    - Goal check-ins
-    - Email scans and drafting
-    - Proactive alerts
-    - Goal execution
-    - WhatsApp notifications
-
-    Heavy deep-work tasks (learning synthesis, memory consolidation,
-    strategic advisor, meta-cognition, code intelligence, etc.) run
-    in the separate think_worker cron service at 01:00 UTC daily.
-    """
-    await asyncio.sleep(300)  # 5 min after startup to let things settle
-    while True:
-        try:
-            print(f"[AUTONOMOUS] Fast loop starting at {datetime.utcnow().isoformat()}")
-
-            # Fast proactive work only — no heavy jobs
-            tasks = [
-                ("tony_work_on_goals", "app.core.goals", "tony_work_on_goals"),
-                ("run_proactive_scan", "app.core.proactive", "run_proactive_scan"),
-                ("run_proactive_intelligence", "app.core.proactive_intelligence", "run_proactive_intelligence"),
-                ("run_proactive_scheduling", "app.core.proactive_scheduler", "run_proactive_scheduling"),
-                ("check_urgent_alerts", "app.core.whatsapp", "check_and_notify_urgent_alerts"),
-                ("scan_for_actionable_emails", "app.core.email_agent", "scan_for_actionable_emails"),
-                ("scan_and_draft_replies", "app.core.email_drafter", "scan_and_draft_replies"),
-                ("run_goal_execution", "app.core.goal_executor", "run_goal_execution"),
-                ("run_anticipation_engine", "app.core.anticipation_engine", "run_anticipation_engine"),
-            ]
-
-            for name, module_path, fn_name in tasks:
-                try:
-                    import importlib
-                    mod = importlib.import_module(module_path)
-                    fn = getattr(mod, fn_name)
-                    await fn()
-                except Exception as e:
-                    print(f"[AUTONOMOUS] {name} failed: {e}")
-
-            print("[AUTONOMOUS] Fast loop complete. Sleeping 6h.")
-        except Exception as e:
-            print(f"[AUTONOMOUS] Loop error: {e}")
-        await asyncio.sleep(6 * 3600)  # Every 6 hours
-
-async def _one_time_ccj_cleanup():
+def _one_time_ccj_cleanup_sync():
     """
     One-off cleanup: wipe Western Circle / CCJ from Tony's active memory.
     Matthew has asked repeatedly to stop mentioning it. The prompt rules weren't enough.
@@ -65,6 +12,7 @@ async def _one_time_ccj_cleanup():
     import psycopg2
     try:
         conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+        conn.autocommit = True  # so failed statements (e.g. table-not-exist) don't abort subsequent ones
         cur = conn.cursor()
 
         # Mark Western Circle / CCJ / Cashfloat alerts as read + expired
@@ -160,6 +108,72 @@ async def _one_time_ccj_cleanup():
             except Exception:
                 pass
 
+            # Clear living memory rows containing banned topic (will be re-seeded clean)
+            try:
+                cur.execute("""
+                    DELETE FROM tony_living_memory
+                    WHERE content ILIKE %s
+                """, (f"%{topic}%",))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} living_memory rows (will re-seed clean)")
+            except Exception as e:
+                print(f"[STARTUP CLEANUP] living_memory delete {topic}: {e}")
+
+            # Clear world_model rows
+            try:
+                cur.execute("""
+                    DELETE FROM tony_world_model
+                    WHERE content ILIKE %s
+                """, (f"%{topic}%",))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} world_model rows")
+            except Exception as e:
+                print(f"[STARTUP CLEANUP] world_model delete {topic}: {e}")
+
+            # Delete goals (not just dormant)
+            try:
+                cur.execute("""
+                    DELETE FROM tony_goals
+                    WHERE title ILIKE %s OR description ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] DELETED {cur.rowcount} {topic} goals")
+            except Exception:
+                pass
+
+            # Delete correspondence emails
+            try:
+                cur.execute("""
+                    DELETE FROM tony_correspondence
+                    WHERE body ILIKE %s OR subject ILIKE %s OR from_party ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} correspondence rows")
+            except Exception:
+                pass
+
+            # Delete Gmail cache rows
+            try:
+                cur.execute("""
+                    DELETE FROM tony_email_cache
+                    WHERE subject ILIKE %s OR body ILIKE %s OR from_addr ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} cached email rows")
+            except Exception:
+                pass
+
+            # Delete tony_email_queue drafts  
+            try:
+                cur.execute("""
+                    DELETE FROM tony_email_queue
+                    WHERE subject ILIKE %s OR body ILIKE %s
+                """, (f"%{topic}%", f"%{topic}%"))
+                if cur.rowcount > 0:
+                    print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} {topic} email queue drafts")
+            except Exception:
+                pass
+
         conn.commit()
         cur.close()
         conn.close()
@@ -168,9 +182,72 @@ async def _one_time_ccj_cleanup():
         print(f"[STARTUP CLEANUP] Failed: {e}")
 
 
+# CRITICAL: run CCJ cleanup BEFORE router imports so seeds re-init with clean data
+try:
+    _one_time_ccj_cleanup_sync()
+except Exception as _cleanup_err:
+    print(f"[STARTUP] Pre-router cleanup failed: {_cleanup_err}")
+
+from app.api.v1.router import router as v1_router
+
+app = FastAPI(title="Nova Backend", version="1.0.0")
+
+app.include_router(v1_router, prefix="/api/v1")
+
+import asyncio
+from datetime import datetime
+
+async def autonomous_loop():
+    """
+    Tony's fast 6-hour loop. Runs inside the web service.
+    Handles time-sensitive work only — must not block chat:
+    - Goal check-ins
+    - Email scans and drafting
+    - Proactive alerts
+    - Goal execution
+    - WhatsApp notifications
+
+    Heavy deep-work tasks (learning synthesis, memory consolidation,
+    strategic advisor, meta-cognition, code intelligence, etc.) run
+    in the separate think_worker cron service at 01:00 UTC daily.
+    """
+    await asyncio.sleep(300)  # 5 min after startup to let things settle
+    while True:
+        try:
+            print(f"[AUTONOMOUS] Fast loop starting at {datetime.utcnow().isoformat()}")
+
+            # Fast proactive work only — no heavy jobs
+            tasks = [
+                ("tony_work_on_goals", "app.core.goals", "tony_work_on_goals"),
+                ("run_proactive_scan", "app.core.proactive", "run_proactive_scan"),
+                ("run_proactive_intelligence", "app.core.proactive_intelligence", "run_proactive_intelligence"),
+                ("run_proactive_scheduling", "app.core.proactive_scheduler", "run_proactive_scheduling"),
+                ("check_urgent_alerts", "app.core.whatsapp", "check_and_notify_urgent_alerts"),
+                ("scan_for_actionable_emails", "app.core.email_agent", "scan_for_actionable_emails"),
+                ("scan_and_draft_replies", "app.core.email_drafter", "scan_and_draft_replies"),
+                ("run_goal_execution", "app.core.goal_executor", "run_goal_execution"),
+                ("run_anticipation_engine", "app.core.anticipation_engine", "run_anticipation_engine"),
+            ]
+
+            for name, module_path, fn_name in tasks:
+                try:
+                    import importlib
+                    mod = importlib.import_module(module_path)
+                    fn = getattr(mod, fn_name)
+                    await fn()
+                except Exception as e:
+                    print(f"[AUTONOMOUS] {name} failed: {e}")
+
+            print("[AUTONOMOUS] Fast loop complete. Sleeping 6h.")
+        except Exception as e:
+            print(f"[AUTONOMOUS] Loop error: {e}")
+        await asyncio.sleep(6 * 3600)  # Every 6 hours
+
+
+
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(_one_time_ccj_cleanup())
+    # Cleanup now runs synchronously at import time (see below) — no task needed here
     asyncio.create_task(autonomous_loop())
     print("[STARTUP] Tony autonomous loop started")
 

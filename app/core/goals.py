@@ -97,7 +97,10 @@ def init_goals_table():
                 INSERT INTO tony_goals
                 (title, description, category, status, priority, progress_notes, next_action, blockers, target_date)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (title) DO NOTHING
+                ON CONFLICT (title) DO UPDATE SET
+                    description = EXCLUDED.description,
+                    status = EXCLUDED.status,
+                    updated_at = NOW()
             """, (title, desc, cat, status, priority, progress, next_action, blockers, target))
 
         conn.commit()

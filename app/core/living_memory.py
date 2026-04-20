@@ -64,10 +64,15 @@ def init_living_memory_tables():
             )
         """)
         for section, content in SEED_DATA.items():
+            # DO UPDATE so every boot overwrites old seed content with the current code's seed.
+            # This matters when we clean hardcoded content — previous boots' rows would otherwise
+            # persist forever despite the code change.
             cur.execute("""
-                INSERT INTO tony_living_memory (section, content)
-                VALUES (%s, %s)
-                ON CONFLICT (section) DO NOTHING
+                INSERT INTO tony_living_memory (section, content, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (section) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    updated_at = NOW()
             """, (section, content))
         conn.commit()
         cur.close()
