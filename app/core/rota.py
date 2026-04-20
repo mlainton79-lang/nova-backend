@@ -145,7 +145,8 @@ def rota_status_for_prompt() -> str:
             preview.append(f"{label}: off")
     lines.append("Upcoming: " + " | ".join(preview))
 
-    # Next shift start
+    # Next shift — only mention if tonight or tomorrow (imminent, relevant to conversation)
+    # Further-away shifts shouldn't pollute casual chat
     nxt = next_shift_start(now)
     if nxt and not is_currently_on_shift(now):
         days_away = (nxt.date() - today).days
@@ -153,8 +154,7 @@ def rota_status_for_prompt() -> str:
             lines.append(f"Next shift: tonight at 20:00.")
         elif days_away == 1:
             lines.append(f"Next shift: tomorrow at 20:00.")
-        else:
-            lines.append(f"Next shift: {nxt.strftime('%A %d %B')} at 20:00.")
+        # Don't mention shifts 2+ days away in casual context — it's not relevant right now
 
     return "\n".join(lines)
 
