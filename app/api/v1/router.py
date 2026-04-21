@@ -17,8 +17,6 @@ from app.api.v1.endpoints import capabilities
 router.include_router(capabilities.router, tags=["capabilities"])
 from app.api.v1.endpoints import agent
 router.include_router(agent.router, tags=["agent"])
-from app.api.v1.endpoints import post_to_vinted
-router.include_router(post_to_vinted.router, tags=["post_to_vinted"])
 
 from app.api.v1.endpoints import proactive_alerts
 router.include_router(proactive_alerts.router, tags=["proactive_alerts"])

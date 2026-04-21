@@ -49,6 +49,30 @@ def init_gap_tables():
                 success BOOLEAN
             )
         """)
+
+        # One-shot idempotent cleanup for the broken auto-built post_to_vinted
+        # capability (hallucinated Vinted signing protocol, non-functional).
+        # File + router wiring already removed in this commit; these UPDATEs
+        # purge the associated DB rows so the registry and request history
+        # reflect reality. Idempotent — on subsequent deploys the WHERE
+        # clauses match zero rows and both statements no-op.
+        cur.execute(
+            "UPDATE capabilities SET status = 'removed' "
+            "WHERE name = 'post_to_vinted' AND status != 'removed' RETURNING id"
+        )
+        cap_removed = cur.rowcount
+        cur.execute(
+            "UPDATE tony_capability_requests SET status = 'removed' "
+            "WHERE capability_name = 'post_to_vinted' AND status != 'removed' "
+            "RETURNING id"
+        )
+        req_removed = cur.rowcount
+        print(
+            f"[GAP_DETECTOR] post_to_vinted cleanup: "
+            f"capabilities rows marked removed={cap_removed}, "
+            f"request rows marked removed={req_removed}"
+        )
+
         cur.close()
         conn.close()
         print("[GAP_DETECTOR] Tables initialised")
