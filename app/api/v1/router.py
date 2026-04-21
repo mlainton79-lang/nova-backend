@@ -58,6 +58,8 @@ from app.api.v1.endpoints import codebase
 router.include_router(codebase.router, tags=["codebase"])
 from app.api.v1.endpoints import admin_clear
 router.include_router(admin_clear.router, tags=["admin"])
+from app.api.v1.endpoints import evals
+router.include_router(evals.router, tags=["evals"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
