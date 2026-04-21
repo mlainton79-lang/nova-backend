@@ -64,6 +64,8 @@ from app.api.v1.endpoints import tasks
 router.include_router(tasks.router, tags=["tasks"])
 from app.api.v1.endpoints import skills
 router.include_router(skills.router, tags=["skills"])
+from app.api.v1.endpoints import video
+router.include_router(video.router, tags=["video"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
