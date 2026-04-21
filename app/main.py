@@ -263,9 +263,13 @@ async def startup_event():
     # Background task queue worker — lets Tony run long-horizon tasks
     try:
         from app.core.task_queue import worker_loop
+        from app.core.task_handlers import register_all_handlers, schedule_daily_evals
+        register_all_handlers()
         asyncio.create_task(worker_loop(poll_interval_seconds=10))
+        # Queue a daily eval run if one isn't already scheduled
+        schedule_daily_evals()
     except Exception as e:
-        print(f"[STARTUP] Task queue worker failed to start: {e}")
+        print(f"[STARTUP] Task queue setup failed: {e}")
     print("[STARTUP] Tony autonomous loop started")
 
     # Migrate existing memories to semantic index on first run
