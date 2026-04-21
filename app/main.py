@@ -264,10 +264,14 @@ async def startup_event():
     try:
         from app.core.task_queue import worker_loop
         from app.core.task_handlers import register_all_handlers, schedule_daily_evals
+        from app.core.scheduled_briefings import register_brief_handler, schedule_todays_briefs
         register_all_handlers()
+        register_brief_handler()
         asyncio.create_task(worker_loop(poll_interval_seconds=10))
         # Queue a daily eval run if one isn't already scheduled
         schedule_daily_evals()
+        # Queue today's scheduled briefs if not already done
+        schedule_todays_briefs()
     except Exception as e:
         print(f"[STARTUP] Task queue setup failed: {e}")
     print("[STARTUP] Tony autonomous loop started")
