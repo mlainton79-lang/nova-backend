@@ -1,0 +1,5 @@
+# Extend Nixpacks autodetect — add ffmpeg for photo-to-video generation.
+# The "..." syntax preserves all auto-detected packages and just appends.
+# Source: https://nixpacks.com/docs/guides/configuring-builds
+[phases.setup]
+nixPkgs = ["...", "ffmpeg"]
