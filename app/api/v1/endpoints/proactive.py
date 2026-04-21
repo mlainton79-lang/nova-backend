@@ -157,6 +157,20 @@ async def get_briefing(_=Depends(verify_token)):
     }
 
 
+@router.get("/proactive/briefing/smart")
+async def get_smart_briefing(_=Depends(verify_token)):
+    """
+    Intelligent briefing — LLM-synthesised single paragraph in Tony's voice.
+    Falls back gracefully if anything upstream fails.
+    """
+    try:
+        from app.core.intelligent_briefing import get_intelligent_briefing
+        return await get_intelligent_briefing()
+    except Exception as e:
+        return {"ok": False, "error": str(e),
+                "briefing": "Tony's briefing engine had an issue. What do you need?"}
+
+
 @router.get("/proactive/alerts")
 async def get_alerts(_=Depends(verify_token)):
     """Get all unread alerts."""
