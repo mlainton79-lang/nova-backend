@@ -186,6 +186,27 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
         )
 
     provider_key = request.provider.lower().strip()
+
+    # Smart model routing — if user specified 'auto' or 'smart', pick optimal provider
+    if provider_key in ("auto", "smart", ""):
+        try:
+            from app.core.model_router_smart import choose_provider
+            has_image = bool(getattr(request, "image_base64", None))
+            has_doc = bool(request.document_text or request.document_base64)
+            doc_len = len(request.document_text or "") if request.document_text else 0
+            choice = choose_provider(
+                request.message,
+                preferred=None,
+                has_image=has_image,
+                has_document=has_doc,
+                document_length=doc_len,
+            )
+            provider_key = choice["provider"]
+            print(f"[SMART_ROUTER] Chose {provider_key}: {choice['rationale']}")
+        except Exception as e:
+            print(f"[SMART_ROUTER] Failed (using gemini): {e}")
+            provider_key = "gemini"
+
     if provider_key == "council":
         return ChatResponse(
             ok=True, provider="council",
