@@ -203,10 +203,45 @@ async def handle_diary_write(task_id: int, payload: Dict) -> Dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+
+async def handle_skill_learn(task_id: int, payload: Dict) -> Dict:
+    """Run skill opportunity detection. If proposal generated, alert Matthew."""
+    try:
+        update_progress(task_id, "Analysing patterns", 10)
+        from app.core.skill_learner import detect_skill_opportunity, save_proposal
+
+        data = await detect_skill_opportunity()
+        if not data or not data.get("found"):
+            update_progress(task_id, "No new skills merited", 100)
+            return {"ok": True, "found": False}
+
+        proposal_id = save_proposal(data)
+        update_progress(task_id, "Proposal saved", 100)
+
+        # Alert Matthew
+        try:
+            from app.core.proactive import create_alert
+            create_alert(
+                alert_type="skill_proposal",
+                title=f"Tony proposes: {data.get('proposed_name')}",
+                body=data.get('rationale', '')[:300],
+                priority="normal",
+                source="skill_learner",
+            )
+        except Exception:
+            pass
+
+        return {"ok": True, "proposal_id": proposal_id,
+                "name": data.get("proposed_name")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def register_all_handlers():
     """Call at startup to register all known task handlers."""
     register_handler("daily_eval_run", handle_daily_eval_run)
     register_handler("diary_write", handle_diary_write)
+    register_handler("skill_learn", handle_skill_learn)
     register_handler("deep_research", handle_deep_research)
     register_handler("scheduled_reminder", handle_scheduled_reminder)
     print("[TASK_HANDLERS] Registered handlers: daily_eval_run, deep_research, scheduled_reminder")

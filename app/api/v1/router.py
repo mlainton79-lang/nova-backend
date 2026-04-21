@@ -50,6 +50,8 @@ from app.api.v1.endpoints import budget
 router.include_router(budget.router, tags=["budget"])
 from app.api.v1.endpoints import multi_agent
 router.include_router(multi_agent.router, tags=["multi_agent"])
+from app.api.v1.endpoints import skill_learner
+router.include_router(skill_learner.router, tags=["skill_learner"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
@@ -134,6 +136,7 @@ _inits = [
     ("app.core.document_memory",        "init_document_memory_tables","Document memory"),
     ("app.core.tony_diary",             "init_diary_tables",          "Tony's diary"),
     ("app.core.budget_guard",           "init_budget_tables",         "Budget guard"),
+    ("app.core.skill_learner",          "init_skill_proposal_tables", "Skill learner"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 
