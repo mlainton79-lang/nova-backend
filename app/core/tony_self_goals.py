@@ -89,6 +89,13 @@ STANDING_GOALS = [
         "target_metric": "avg_briefing_words",
         "target_value": 60,  # target max
     },
+    {
+        "title": "Keep Matthew's follow-up satisfaction high",
+        "description": "Rolling 7-day average of follow-up satisfaction score (0-1). Corrective follow-ups drop this fast. Target: 0.8+.",
+        "category": "quality",
+        "target_metric": "user_satisfaction",
+        "target_value": 0.8,
+    },
 ]
 
 
@@ -142,6 +149,18 @@ def measure_progress() -> Dict[str, float]:
             progress["new_facts_per_week"] = cur.fetchone()[0]
         except Exception:
             progress["new_facts_per_week"] = None
+
+        # 7-day user satisfaction
+        try:
+            cur.execute("""
+                SELECT AVG(score) FROM tony_outcomes
+                WHERE created_at > NOW() - INTERVAL '7 days'
+            """)
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                progress["user_satisfaction"] = float(row[0])
+        except Exception:
+            progress["user_satisfaction"] = None
 
         # Latest eval pass rate
         try:

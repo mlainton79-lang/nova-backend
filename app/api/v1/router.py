@@ -58,6 +58,8 @@ from app.api.v1.endpoints import self_goals
 router.include_router(self_goals.router, tags=["self_goals"])
 from app.api.v1.endpoints import retrieval
 router.include_router(retrieval.router, tags=["retrieval"])
+from app.api.v1.endpoints import outcomes
+router.include_router(outcomes.router, tags=["outcomes"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
@@ -144,6 +146,7 @@ _inits = [
     ("app.core.budget_guard",           "init_budget_tables",         "Budget guard"),
     ("app.core.skill_learner",          "init_skill_proposal_tables", "Skill learner"),
     ("app.core.tony_self_goals",        "init_self_goals_tables",     "Tony self-goals"),
+    ("app.core.outcome_tracker",        "init_outcome_tables",        "Outcome tracker"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 

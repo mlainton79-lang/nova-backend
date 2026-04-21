@@ -151,6 +151,31 @@ async def _ingest_document_if_present(
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, _=Depends(verify_token)):
     start = time.time()
+
+    # Retroactive outcome tracking: does this incoming message score the
+    # last reply Tony gave? (corrective / clarification / acknowledgement)
+    try:
+        from app.core.outcome_tracker import record_outcome
+        if request.history and len(request.history) >= 2:
+            # Last assistant reply is history[-1] (if assistant), user question
+            # was history[-2]
+            last = request.history[-1]
+            prev_user = request.history[-2] if len(request.history) >= 2 else None
+            if (last.role == "assistant" and prev_user and prev_user.role == "user"):
+                # Fire and forget — record asynchronously
+                import asyncio
+                asyncio.create_task(asyncio.to_thread(
+                    record_outcome,
+                    message_id=None,
+                    user_message=prev_user.content,
+                    assistant_reply=last.content,
+                    provider=request.provider,
+                    next_user_message=request.message,
+                    delay_seconds=None,
+                ))
+    except Exception as e:
+        print(f"[OUTCOMES] Pre-track failed: {e}")
+
     injected, reason = check_injection(request.message)
     if injected:
         log_request(provider=request.provider, message=request.message,
