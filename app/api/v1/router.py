@@ -123,6 +123,7 @@ _inits = [
     ("app.core.self_improvement",       "init_self_improvement_tables", "Self-improvement"),
     ("app.core.fabrication_detector",   "init_fabrication_tables",    "Fabrication detector"),
     ("app.core.receipt_extractor",      "init_expense_tables",        "Expense tracker"),
+    ("app.core.document_memory",        "init_document_memory_tables","Document memory"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 

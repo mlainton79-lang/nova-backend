@@ -300,6 +300,22 @@ async def build_prompt(
         except Exception as e:
             print(f"[PROMPT_ASSEMBLER] Memory: {e}")
 
+    # ── 2b. Document memory (if query references a past document) ───────────
+    if user_message and any(t in user_message.lower() for t in
+                            ["letter", "document", "contract", "payslip",
+                             "said", "paperwork", "form", "said about"]):
+        try:
+            from app.core.document_memory import search_documents
+            docs = await search_documents(user_message, top_k=3)
+            relevant = [d for d in docs if d.get("similarity", 0) > 0.6]
+            if relevant:
+                doc_block = "[RELEVANT DOCUMENTS]"
+                for d in relevant:
+                    doc_block += f"\n• From '{d['doc_name']}' ({d['doc_type']}): {d['text'][:400]}"
+                add(doc_block, max_chars=1500)
+        except Exception as e:
+            print(f"[PROMPT_ASSEMBLER] Doc search: {e}")
+
     # ── 3. Living memory (relevant sections) ────────────────────────────────
     try:
         from app.core.living_memory import get_relevant_living_memory
