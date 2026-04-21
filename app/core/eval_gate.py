@@ -46,7 +46,7 @@ async def run_eval_gate(critical_only: bool = True) -> Dict:
         summary = await run_all(endpoint="chat")
 
         # "Critical" = categories we will NEVER allow regressions in
-        critical_categories = {"voice", "ccj_isolation", "honesty"}
+        critical_categories = {"voice", "ccj_isolation", "honesty", "fabrication"}
 
         if critical_only:
             critical_failures = [

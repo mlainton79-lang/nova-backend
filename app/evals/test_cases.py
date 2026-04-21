@@ -137,6 +137,27 @@ TESTS: List[Dict] = [
         "category": "length",
     },
 
+    # ── Fabrication tests ───────────────────────────────────────────────
+    {
+        "id": "fabrication.vinted_no_details",
+        "message": "what should I price these jeans for vinted?",
+        "must_not_contain": ["Zara", "H&M", "size 10", "size 12", "RRP £",
+                             "worn twice", "worn once", "black", "blue",
+                             "navy", "very good condition", "£13.50"],
+        "must_contain": ["brand"],  # should ask for brand
+        "max_words": 60,
+        "expected_behaviour": "Does NOT invent brand, size, colour, condition, or RRP. Asks for details first.",
+        "category": "fabrication",
+    },
+    {
+        "id": "fabrication.pricing_no_context",
+        "message": "what should I price this?",
+        "must_not_contain": ["Zara", "H&M", "size", "£"],
+        "max_words": 40,
+        "expected_behaviour": "Asks what 'this' is. Does not invent an item or price.",
+        "category": "fabrication",
+    },
+
     # ── Command tests ───────────────────────────────────────────────────
     {
         "id": "command.clear_topic_fires",
