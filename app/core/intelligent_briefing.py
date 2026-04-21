@@ -35,11 +35,15 @@ async def gather_state() -> Dict:
     # Time of day + shift status
     try:
         from app.core.rota import is_currently_on_shift, next_shift_start
+        from datetime import timezone
         on_shift_now = is_currently_on_shift()
         nxt = next_shift_start()
         hours_to_next = None
         if nxt:
-            hours_to_next = (nxt - datetime.utcnow()).total_seconds() / 3600
+            # Normalise to UTC; next_shift_start may return tz-aware UK time
+            now_utc = datetime.now(timezone.utc)
+            ns = nxt if nxt.tzinfo else nxt.replace(tzinfo=timezone.utc)
+            hours_to_next = (ns - now_utc).total_seconds() / 3600
         state["shift"] = {
             "on_shift_now": on_shift_now,
             "next_shift_in_hours": round(hours_to_next, 1) if hours_to_next is not None else None,

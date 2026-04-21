@@ -77,7 +77,6 @@ def schedule_todays_briefs() -> list:
     """
     try:
         from app.core.task_queue import queue_task
-        from app.core.rota import get_shift_status
 
         scheduled = []
         # Use actual rota functions rather than a non-existent aggregate
@@ -88,10 +87,13 @@ def schedule_todays_briefs() -> list:
             from datetime import date
             on_shift_now = is_currently_on_shift()
             next_start = next_shift_start()
-            from datetime import datetime
+            from datetime import datetime, timezone
             hours_to_next = None
             if next_start:
-                hours_to_next = (next_start - datetime.utcnow()).total_seconds() / 3600
+                # next_start may be tz-aware (UK time). Normalise to UTC before subtracting.
+                now_utc = datetime.now(timezone.utc)
+                ns = next_start if next_start.tzinfo else next_start.replace(tzinfo=timezone.utc)
+                hours_to_next = (ns - now_utc).total_seconds() / 3600
             is_shift_day = on_shift_now or (hours_to_next is not None and hours_to_next < 14)
         except Exception as e:
             print(f"[SCHEDULED_BRIEFS] Rota read failed: {e}")
