@@ -493,6 +493,15 @@ async def build_prompt(
     except Exception:
         pass
 
+    # ── 14.5. Known facts about Matthew (from fact extractor) ────────────────
+    try:
+        from app.core.fact_extractor import format_facts_for_prompt
+        facts_block = format_facts_for_prompt(subject="Matthew", min_confidence=0.7)
+        if facts_block:
+            add(facts_block, max_chars=1500)
+    except Exception:
+        pass
+
     # ── 15. Learned behaviour rules ──────────────────────────────────────────
     try:
         rows = _db_fetch("""

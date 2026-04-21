@@ -494,6 +494,13 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
         except Exception as e:
             print(f"[POST] Living memory: {e}")
 
+    async def _fact_extraction():
+        try:
+            from app.core.fact_extractor import process_conversation_turn
+            await process_conversation_turn(message, reply)
+        except Exception as e:
+            print(f"[POST] Fact extraction: {e}")
+
     async def _world_model():
         try:
             from app.core.world_model import update_world_model
