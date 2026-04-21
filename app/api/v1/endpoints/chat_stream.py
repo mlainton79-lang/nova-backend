@@ -693,6 +693,28 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             # Fire post-response tasks without blocking
             asyncio.create_task(_post_response_tasks(request.message, full, provider_key))
 
+            # Auto-ingest document to long-term memory if one was uploaded
+            async def _ingest_doc():
+                try:
+                    doc_text = request.document_text or ""
+                    if doc_text and len(doc_text.strip()) >= 100:
+                        from app.core.document_memory import ingest_document
+                        doc_type = "unknown"
+                        mime = (request.document_mime or "").lower()
+                        if "pdf" in mime: doc_type = "pdf"
+                        elif "image" in mime: doc_type = "image"
+                        elif "word" in mime or "docx" in (request.document_name or "").lower(): doc_type = "docx"
+                        elif "text" in mime: doc_type = "text"
+                        await ingest_document(
+                            full_text=doc_text,
+                            doc_name=request.document_name or "uploaded document",
+                            doc_type=doc_type,
+                            source="chat_stream_upload",
+                        )
+                except Exception as e:
+                    print(f"[DOC_AUTO_INGEST] Failed: {e}")
+            asyncio.create_task(_ingest_doc())
+
         except Exception as e:
             print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
