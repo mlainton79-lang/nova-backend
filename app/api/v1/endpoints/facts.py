@@ -63,16 +63,28 @@ class DeleteFactRequest(BaseModel):
 
 @router.post("/facts/delete")
 async def delete_fact(req: DeleteFactRequest, _=Depends(verify_token)):
-    """Mark a fact as superseded (soft delete)."""
+    """Hard delete a fact by id.
+
+    Previously this tried to soft-delete via `UPDATE tony_facts SET
+    superseded_by = -1 WHERE id = %s`, but `superseded_by` is a FK
+    back into `tony_facts(id)` and no row has id=-1, so every call
+    silently failed the constraint — the endpoint has never actually
+    deleted anything. Switched to hard DELETE; nothing else reads
+    `superseded_by IS NOT NULL`, so no audit trail is being lost.
+    """
     try:
         conn = get_conn()
         conn.autocommit = True
         cur = conn.cursor()
-        cur.execute("UPDATE tony_facts SET superseded_by = -1 WHERE id = %s",
-                    (req.fact_id,))
+        cur.execute("DELETE FROM tony_facts WHERE id = %s", (req.fact_id,))
+        rows_deleted = cur.rowcount
         cur.close()
         conn.close()
-        return {"ok": True, "deleted": req.fact_id}
+        if rows_deleted == 0:
+            return {"ok": False, "error": f"no fact with id={req.fact_id}",
+                    "rows_deleted": 0}
+        return {"ok": True, "deleted": req.fact_id,
+                "rows_deleted": rows_deleted}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
