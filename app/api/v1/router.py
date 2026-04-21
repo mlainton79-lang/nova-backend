@@ -60,6 +60,8 @@ from app.api.v1.endpoints import admin_clear
 router.include_router(admin_clear.router, tags=["admin"])
 from app.api.v1.endpoints import evals
 router.include_router(evals.router, tags=["evals"])
+from app.api.v1.endpoints import tasks
+router.include_router(tasks.router, tags=["tasks"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
@@ -98,6 +100,7 @@ _inits = [
     ("app.core.codebase_sync",          "init_codebase_table",        "Codebase"),
     ("app.core.topic_bans",             "init_topic_bans_table",      "Topic bans"),
     ("app.core.gap_detector",           "init_gap_tables",            "Capability gap detector"),
+    ("app.core.task_queue",             "init_task_queue_tables",     "Task queue"),
 ]
 
 for module_path, fn_name, label in _inits:

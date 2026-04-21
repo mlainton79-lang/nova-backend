@@ -260,6 +260,12 @@ async def autonomous_loop():
 async def startup_event():
     # Cleanup now runs synchronously at import time (see below) — no task needed here
     asyncio.create_task(autonomous_loop())
+    # Background task queue worker — lets Tony run long-horizon tasks
+    try:
+        from app.core.task_queue import worker_loop
+        asyncio.create_task(worker_loop(poll_interval_seconds=10))
+    except Exception as e:
+        print(f"[STARTUP] Task queue worker failed to start: {e}")
     print("[STARTUP] Tony autonomous loop started")
 
     # Migrate existing memories to semantic index on first run
