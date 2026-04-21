@@ -47,17 +47,43 @@ Four short paragraphs:
 
 Never use emoji in descriptions — looks spammy.
 
-## Pricing guidance
+## Pricing guidance — brand tier matters more than RRP
 
-- New with tags: 40-60% of RRP
-- Very good (worn 1-2 times, no flaws): 25-35% of RRP
-- Good (worn, minor wear): 15-25% of RRP
-- Fair (visible wear but wearable): 10-15% of RRP
+**High-street / fast fashion** (Zara, H&M, Next, Primark, New Look, Boohoo, ASOS in-house):
+Vinted market prices are £5-15 regardless of RRP. These brands don't hold value.
+  - New with tags: £10-15
+  - Very good / worn few times: £7-10
+  - Good / regular wear: £5-7
+  - Suggest £X.99 pricing — ends in .99 gets more clicks
 
-For children's clothes: assume 20-30% of RRP for very good condition.
-For shoes: condition matters more than brand — inspect soles.
+**Mid-tier** (All Saints, Whistles, Reiss, COS, Arket, & Other Stories, Mango):
+Prices hold better. Use % of RRP.
+  - New with tags: 40-60% of RRP
+  - Very good: 25-35% of RRP
+  - Good: 15-25% of RRP
 
-Always suggest ONE price, not a range. Add: "adjust up/down £2-3 based on how keen you are to shift it."
+**Designer / premium** (Acne, Ganni, Isabel Marant, Burberry, etc.):
+Prices hold strongest. Use the upper range.
+  - New with tags: 50-70% of RRP
+  - Very good: 35-50% of RRP
+
+**Nike/Adidas/sportswear**: trainer condition matters most. Worn trainers £10-25 typical.
+
+**Kids' clothes** (any brand): £3-8 range is where most sell. Bundle multiples for better value.
+
+## Pricing technique (use these every time)
+
+1. Suggest ONE concrete price, not a range
+2. End in .99 (e.g. £9.99 not £10)
+3. Recommend a fallback: "if no bites after 2-3 days, drop by £1-2"
+4. Goal is cash moving, not highest possible number — remind Matthew of this
+5. For high-street brands: ignore RRP entirely, use market rates above
+
+## Reality check rule
+
+If the calculated price from a % of RRP looks high for the brand tier
+(e.g. £13.50 for a Zara item), always cross-reference against typical
+Vinted sold prices for that brand. Brand tier beats RRP every time.
 
 ## Buyer conversations
 
