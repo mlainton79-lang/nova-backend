@@ -4,6 +4,7 @@ from app.providers.base import ProviderAdapter
 from app.schemas.chat import HistoryMessage
 from app.utils.history import to_openai_history
 from app.core.config import OPENAI_API_KEY
+from app.core.secrets_redact import redact
 
 class OpenAIAdapter(ProviderAdapter):
     async def chat(self, message: str, history: List[HistoryMessage], system_prompt: str) -> str:
@@ -27,6 +28,7 @@ class OpenAIAdapter(ProviderAdapter):
                     "max_tokens": 1000
                 }
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise RuntimeError(f"OpenAI {response.status_code}: {redact(response.text)[:500]}")
             data = response.json()
             return data["choices"][0]["message"]["content"].strip()

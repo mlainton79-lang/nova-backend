@@ -5,6 +5,7 @@ from app.providers.base import ProviderAdapter
 from app.schemas.chat import HistoryMessage
 from app.utils.history import to_gemini_history
 from app.core.config import GEMINI_API_KEY
+from app.core.secrets_redact import redact
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -50,6 +51,7 @@ class GeminiAdapter(ProviderAdapter):
                     "generationConfig": {"maxOutputTokens": 8192}
                 }
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise RuntimeError(f"Gemini {response.status_code}: {redact(response.text)[:500]}")
             data = response.json()
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()

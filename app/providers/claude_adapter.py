@@ -5,6 +5,7 @@ from app.providers.base import ProviderAdapter
 from app.schemas.chat import HistoryMessage
 from app.utils.history import to_claude_history
 from app.core.config import ANTHROPIC_API_KEY
+from app.core.secrets_redact import redact
 
 CLAUDE_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 CLAUDE_VISION_MODEL = os.environ.get("ANTHROPIC_VISION_MODEL", "claude-sonnet-4-6")
@@ -50,6 +51,7 @@ class ClaudeAdapter(ProviderAdapter):
                     "messages": messages
                 }
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise RuntimeError(f"Claude {response.status_code}: {redact(response.text)[:500]}")
             data = response.json()
             return data["content"][0]["text"].strip()

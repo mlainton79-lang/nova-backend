@@ -64,7 +64,9 @@ async def gemini_stream(message: str, history: list, system_prompt: str,
                 "x-goog-api-key": GEMINI_API_KEY,
             }
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(f"Gemini {response.status_code}: {redact(body.decode('utf-8', 'replace'))[:500]}")
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -113,7 +115,9 @@ async def claude_stream(message: str, history: list, system_prompt: str,
                 "stream": True
             }
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(f"Claude {response.status_code}: {redact(body.decode('utf-8', 'replace'))[:500]}")
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -146,7 +150,9 @@ async def openai_stream(message: str, history: list, system_prompt: str):
             json={"model": model, "messages": messages,
                   "max_tokens": 8192, "stream": True}
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(f"OpenAI {response.status_code}: {redact(body.decode('utf-8', 'replace'))[:500]}")
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -179,7 +185,9 @@ async def groq_stream(message: str, history: list, system_prompt: str):
             json={"model": model, "messages": messages,
                   "max_tokens": 8192, "stream": True}
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(f"Groq {response.status_code}: {redact(body.decode('utf-8', 'replace'))[:500]}")
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -212,7 +220,9 @@ async def mistral_stream(message: str, history: list, system_prompt: str):
             json={"model": model, "messages": messages,
                   "max_tokens": 8192, "stream": True}
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(f"Mistral {response.status_code}: {redact(body.decode('utf-8', 'replace'))[:500]}")
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -249,7 +259,9 @@ async def openrouter_stream(message: str, history: list, system_prompt: str):
             json={"model": model, "messages": messages,
                   "max_tokens": 8192, "stream": True}
         ) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(f"OpenRouter {response.status_code}: {redact(body.decode('utf-8', 'replace'))[:500]}")
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
