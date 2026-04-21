@@ -506,6 +506,23 @@ async def build_prompt(
     except Exception:
         pass
 
+    # ── 15.5. Skills system (progressive disclosure) ─────────────────────────
+    try:
+        from app.skills.loader import get_skill_descriptions, find_matching_skills
+        # Level 1: always include skill names + descriptions (small, ~200 tokens)
+        skill_desc = get_skill_descriptions()
+        if skill_desc:
+            add(skill_desc, max_chars=800)
+        # Level 2: if user message triggers a skill, inject its full body
+        if user_message:
+            matching = find_matching_skills(user_message, limit=1)
+            for skill in matching:
+                add(f"[SKILL ACTIVE: {skill['name']}]\n{skill['body']}",
+                    max_chars=2500)
+    except Exception as e:
+        # Never block prompt assembly if skills system has issues
+        pass
+
     # ── 16. Capabilities (compact — always last) ─────────────────────────────
     caps = ("[TONY CAN] Multi-brain chat (Gemini/Claude/Council/Groq/Mistral), "
             "Gmail 4 accounts, Calendar, GPS location, Voice in/out, "

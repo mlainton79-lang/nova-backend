@@ -11,3 +11,4 @@ Pillow
 cryptography
 gtts
 reportlab
+pyyaml==6.0.2
