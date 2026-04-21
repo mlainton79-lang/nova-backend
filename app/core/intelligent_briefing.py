@@ -86,13 +86,21 @@ async def gather_state() -> Dict:
     except Exception:
         state["emails"] = []
 
-    # Today's calendar events
+    # Today's calendar events (uses get_upcoming_events which needs an email)
     try:
-        from app.core.calendar_service import list_events_today
-        events = await list_events_today()
-        state["calendar"] = events[:5] if events else []
-    except Exception:
+        from app.core.calendar_service import get_upcoming_events
+        # Use Matthew's primary gmail — fall back silently if not configured
+        primary_email = os.environ.get("MATTHEW_GMAIL_PRIMARY", "mlainton79@gmail.com")
+        events = await get_upcoming_events(primary_email, days=1)
+        # Filter to just today
+        from datetime import datetime
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        today_events = [e for e in events
+                        if today_str in str(e.get("start", e.get("start_time", "")))]
+        state["calendar"] = today_events[:5]
+    except Exception as e:
         state["calendar"] = []
+        state["calendar_error"] = str(e)[:100]
 
     # Upcoming family dates
     try:
