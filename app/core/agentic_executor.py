@@ -32,6 +32,7 @@ AVAILABLE_TOOLS = {
     "expense_summary": "Get spending data. Input: days (int). Returns: total + by-category breakdown.",
     "diary_read": "Read recent diary entries. Input: days (int). Returns: observations, mood, followups.",
     "draft_message": "Draft a reply message in Matthew's voice. Input: recipient, purpose, context. Returns: draft.",
+    "unified_search": "Search across ALL memory sources at once (facts, semantic, docs, diary). Best when unsure which source has the info.",
     "think": "Internal reasoning step. Input: thought. Returns: clarified view (no external side-effects).",
     "finish": "Signal goal completed. Input: final summary. Returns: none.",
 }
@@ -184,6 +185,11 @@ British English, contractions, no pet names, direct. Output just the message."""
                 r.raise_for_status()
                 draft = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                 return {"ok": True, "result": {"draft": draft}}
+
+        elif tool == "unified_search":
+            from app.core.unified_retrieval import unified_search
+            results = await unified_search(str(input_val), top_k=8)
+            return {"ok": True, "result": results}
 
         elif tool == "think":
             # Internal reasoning only — no side effects. Just records the thought.

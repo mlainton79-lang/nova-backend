@@ -56,6 +56,8 @@ from app.api.v1.endpoints import agentic
 router.include_router(agentic.router, tags=["agentic"])
 from app.api.v1.endpoints import self_goals
 router.include_router(self_goals.router, tags=["self_goals"])
+from app.api.v1.endpoints import retrieval
+router.include_router(retrieval.router, tags=["retrieval"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
