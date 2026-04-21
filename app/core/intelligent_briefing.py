@@ -141,8 +141,8 @@ async def gather_state() -> Dict:
         cur = conn.cursor()
         cur.execute("""
             SELECT capability_name, status FROM tony_capability_requests
-            WHERE created_at > NOW() - INTERVAL '24 hours'
-            ORDER BY created_at DESC LIMIT 5
+            WHERE started_at > NOW() - INTERVAL '24 hours'
+            ORDER BY started_at DESC LIMIT 5
         """)
         state["recent_builds"] = [
             {"name": r[0], "status": r[1]} for r in cur.fetchall()

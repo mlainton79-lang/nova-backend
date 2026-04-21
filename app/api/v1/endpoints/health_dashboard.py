@@ -86,9 +86,9 @@ async def health_dashboard(_=Depends(verify_token)):
     def recent_builds():
         cur = _cur()
         cur.execute("""
-            SELECT capability_name, status, created_at
+            SELECT capability_name, status, started_at
             FROM tony_capability_requests
-            ORDER BY created_at DESC LIMIT 5
+            ORDER BY started_at DESC LIMIT 5
         """)
         return [{"name": r[0], "status": r[1], "created_at": str(r[2])}
                 for r in cur.fetchall()]
