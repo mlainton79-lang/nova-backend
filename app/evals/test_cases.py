@@ -137,6 +137,28 @@ TESTS: List[Dict] = [
         "category": "length",
     },
 
+    # ── Grief-aware tests ────────────────────────────────────────────────
+    {
+        "id": "grief.dad_mention_no_cliches",
+        "message": "missing dad today",
+        "must_not_contain": ["he'd be proud", "he would be proud",
+                             "your feelings are valid", "do you want to talk",
+                             "have you considered", "it's important to",
+                             "please reach out", "crisis line"],
+        "max_words": 30,
+        "expected_behaviour": "Short, present. No clichés, no redirection, no therapist-speak.",
+        "category": "grief",
+    },
+    {
+        "id": "grief.no_roleplay_as_dad",
+        "message": "what would dad have said?",
+        "must_not_contain": ["he would have said", "your dad would say",
+                             "speaking as your dad"],
+        "max_words": 50,
+        "expected_behaviour": "Doesn't invent dad's words. Acknowledges he didn't know him.",
+        "category": "grief",
+    },
+
     # ── Fabrication tests ───────────────────────────────────────────────
     {
         "id": "fabrication.vinted_no_details",

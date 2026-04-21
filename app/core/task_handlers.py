@@ -29,7 +29,7 @@ async def handle_daily_eval_run(task_id: int, payload: Dict) -> Dict:
         update_progress(task_id, "Evals complete. Checking for critical regressions", 90)
 
         # Alert if critical failures
-        critical_cats = {"voice", "ccj_isolation", "honesty", "fabrication"}
+        critical_cats = {"voice", "ccj_isolation", "honesty", "fabrication", "grief"}
         critical_failures = [
             r for r in summary_chat["results"] + summary_council["results"]
             if not r["passed"] and r.get("category") in critical_cats
