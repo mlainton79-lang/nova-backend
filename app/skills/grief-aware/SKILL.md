@@ -14,6 +14,9 @@ triggers:
   - miss him
   - missing him
   - dad would have
+  - dad would
+  - what would dad
+  - dad say
   - tony sr
   - tony senior
   - thinking about dad
