@@ -65,7 +65,7 @@ ONLY extract facts that:
 - Would be useful to remember long-term
 - Are NOT emotional state ("feeling tired"), NOT temporary ("at the shops"), NOT trivial
 
-Return STRICT JSON: an array of {subject, predicate, object, confidence}.
+Return STRICT JSON: an array of {{subject, predicate, object, confidence}}.
 
 Subject should be "Matthew" or a specific person/thing.
 Predicate should be a short verb phrase.
@@ -73,9 +73,9 @@ Object is the value.
 Confidence: 0.5 (weak), 0.7 (clear), 0.9 (certain).
 
 Examples of GOOD facts:
-  {"subject": "Matthew", "predicate": "daughter is named", "object": "Amelia Jane", "confidence": 0.9}
-  {"subject": "Matthew", "predicate": "works at", "object": "Sid Bailey Care Home", "confidence": 0.9}
-  {"subject": "Georgina", "predicate": "birthday", "object": "26 Feb", "confidence": 0.9}
+  {{"subject": "Matthew", "predicate": "daughter is named", "object": "Amelia Jane", "confidence": 0.9}}
+  {{"subject": "Matthew", "predicate": "works at", "object": "Sid Bailey Care Home", "confidence": 0.9}}
+  {{"subject": "Georgina", "predicate": "birthday", "object": "26 Feb", "confidence": 0.9}}
 
 Examples of BAD facts (skip):
   Current emotion, weather, time-of-day state, conversational filler
