@@ -36,18 +36,6 @@ KNOWLEDGE_ENTRIES = [
     ("consumer_credit_law", "CONC 7.3 Forbearance",
      "Under CONC 7.3, lenders must show forbearance to borrowers in financial difficulty. This includes considering payment plans, not adding excessive charges, and treating customers with dignity. Failure to show forbearance strengthens a complaint."),
     
-    # FOS Process
-    ("fos_process", "FOS Jurisdiction",
-     "The Financial Ombudsman Service (FOS) can consider complaints about regulated credit. They're free to use. FOS decisions are binding on the firm if the consumer accepts them. The firm cannot appeal. Maximum award for distress and inconvenience is typically £500-2,000."),
-    
-    ("fos_process", "FOS Timeline",
-     "After filing a FOS complaint: firm has 8 weeks to respond. If no satisfactory response or deadlock reached, FOS investigates. Typically takes 3-6 months. FOS can direct the firm to remove adverse credit entries, refund charges, or pay compensation."),
-    
-    ("fos_process", "FOS vs Court",
-     "FOS is generally preferable to court for consumer credit complaints: free, informal, binding on firm. Court (N244 to set aside CCJ) costs £303 filing fee, requires stronger legal grounds, but can remove the CCJ entirely. Both paths can be pursued simultaneously."),
-    
-    ("fos_process", "CCJ Set Aside",
-     "A CCJ can be set aside (Form N244) on grounds including: the debt was disputed and you weren't aware of the court claim, the lender committed irresponsible lending, or there are compelling reasons. Cost: £303. If successful, CCJ removed from credit record after 28 days."),
     
     # eBay/Vinted
     ("selling_platforms", "Vinted Rules",
@@ -99,7 +87,6 @@ def get_relevant_knowledge(query: str) -> str:
     
     domain_keywords = {
         "consumer_credit_law": ["conc", "affordability", "fca", "lending", "credit", "irresponsible", "vulnerability"],
-        "fos_process": ["fos", "ombudsman", "complaint", "ccj", "set aside", "court", "n244"],
         "selling_platforms": ["vinted", "ebay", "selling", "listing", "fees", "platform"],
         "employment_rights": ["employment", "rights", "wage", "shift", "work", "care home", "cqc"],
     }

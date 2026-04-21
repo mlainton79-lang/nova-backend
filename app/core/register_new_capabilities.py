@@ -11,7 +11,7 @@ def get_conn():
 
 
 NEW_CAPABILITIES = [
-    ("evals",              "Regression test suite — 14 cases across voice, CCJ, gap detection, honesty, length", "active", "/api/v1/evals/run"),
+    ("evals",              "Regression test suite — 16 cases across voice, topic-isolation, honesty, fabrication, grief, commands", "active", "/api/v1/evals/run"),
     ("task_queue",         "Postgres-backed persistent queue for long-horizon background work",                   "active", "/api/v1/tasks"),
     ("skills",             "Modular capability bundles (SKILL.md) with progressive disclosure",                    "active", "/api/v1/skills"),
     ("fact_extractor",     "Mem0-style structured fact extraction from conversations",                              "active", "/api/v1/facts"),
