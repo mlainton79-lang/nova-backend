@@ -218,15 +218,11 @@ async def send_push(title: str, body: str, data: dict = None) -> bool:
         except Exception as e:
             print(f"[PUSH] Send error: {e}")
     
-    # Fallback: store as alert
-    try:
-        from app.core.proactive import create_alert
-        create_alert(alert_type="notification", title=title, body=body,
-                    priority="high", source="tony_push")
-        return True
-    except Exception as e:
-        print(f"[PUSH] Alert fallback failed: {e}")
-        return False
+    # NO FALLBACK to create_alert — that causes infinite loops because proactive.create_alert()
+    # calls back into tony_notify() for high-priority items. The original alert already exists
+    # in the DB (pushes are triggered FROM existing alerts). If FCM delivery fails, we just log.
+    print(f"[PUSH] FCM unavailable, skipping notification (title={title[:50]})")
+    return False
 
 
 async def tony_notify(message: str, priority: str = "normal"):

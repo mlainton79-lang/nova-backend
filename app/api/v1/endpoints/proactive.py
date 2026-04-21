@@ -16,47 +16,73 @@ def get_conn():
 async def get_briefing(_=Depends(verify_token)):
     """
     Tony's startup briefing - fast, substantive, from live state.
-    Pulls from actual data rather than asking an LLM to guess.
+    Each query is wrapped independently so one failure doesn't cascade.
     """
     briefing_parts = []
-    
+    conn = None
+
     try:
         conn = get_conn()
+        conn.autocommit = True  # so one failed query doesn't abort the next
+    except Exception as e:
+        print(f"[BRIEFING] Connection failed: {e}")
+        return {"ok": True, "briefing": "All clear. What do you need?", "parts": 1}
+
+    # Unread high-priority alerts (skip the push-fallback noise)
+    try:
         cur = conn.cursor()
-        
-        # Unread high-priority alerts
         cur.execute("""
             SELECT title, body FROM tony_alerts
             WHERE read = FALSE AND priority IN ('urgent', 'high')
             AND created_at > NOW() - INTERVAL '48 hours'
+            AND source != 'tony_push'
+            AND title NOT LIKE '%Tony — Urgent%'
             ORDER BY created_at DESC LIMIT 3
         """)
         alerts = cur.fetchall()
+        cur.close()
         if alerts:
             briefing_parts.append("**Alerts needing your attention:**")
             for title, body in alerts:
-                briefing_parts.append(f"• {title}: {body[:100]}")
-        
-        # Pending email approvals
+                # Clean each line — strip the "Tony — Urgent:" noise if the loop left residue
+                clean_body = (body or "").replace("⚠️ Tony — Urgent:", "").strip()
+                if len(clean_body) > 120:
+                    clean_body = clean_body[:120] + "…"
+                briefing_parts.append(f"• **{title}** — {clean_body}" if clean_body else f"• {title}")
+    except Exception as e:
+        print(f"[BRIEFING] Alerts query: {e}")
+
+    # Pending email approvals
+    try:
+        cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM tony_email_queue WHERE approval_status = 'pending'")
         pending = cur.fetchone()[0]
+        cur.close()
         if pending > 0:
-            briefing_parts.append(f"**{pending} email(s) waiting for your approval** — tap + then 'Check pending emails'")
-        
-        # Active urgent/high goals
+            briefing_parts.append(f"**{pending} email(s) waiting for your approval**")
+    except Exception as e:
+        print(f"[BRIEFING] Email queue: {e}")
+
+    # Active urgent/high goals
+    try:
+        cur = conn.cursor()
         cur.execute("""
             SELECT title, priority FROM tony_goals
             WHERE status = 'active' AND priority IN ('urgent', 'high')
             ORDER BY CASE priority WHEN 'urgent' THEN 1 ELSE 2 END LIMIT 2
         """)
         goals = cur.fetchall()
+        cur.close()
         if goals:
             briefing_parts.append("**Active priorities:**")
             for title, pri in goals:
                 briefing_parts.append(f"• {title} ({pri})")
-        
-        # Family dates coming up
-        from datetime import date, timedelta
+    except Exception as e:
+        print(f"[BRIEFING] Goals query: {e}")
+
+    # Family dates coming up
+    try:
+        from datetime import date
         today = date.today()
         family_dates = [
             (date(today.year, 2, 26), "Georgina's birthday"),
@@ -71,27 +97,55 @@ async def get_briefing(_=Depends(verify_token)):
             days_until = (event_date - today).days
             if 0 <= days_until <= 14:
                 briefing_parts.append(f"**{event_name}** in {days_until} days ({event_date.strftime('%d %b')})")
-        
-        # Weekly strategy if exists
+    except Exception as e:
+        print(f"[BRIEFING] Family dates: {e}")
+
+    # Weekly strategy if exists
+    try:
+        cur = conn.cursor()
         cur.execute("SELECT content FROM tony_living_memory WHERE section = 'WEEKLY_STRATEGY'")
         row = cur.fetchone()
+        cur.close()
         if row and row[0] and row[0] != "Not yet assessed.":
             briefing_parts.append(f"**This week:** {row[0][:150]}")
-        
-        # What Tony did in the last 6 hours
+    except Exception as e:
+        print(f"[BRIEFING] Weekly strategy: {e}")
+
+    # What Tony did in the last 6 hours — tony_build_log may not exist
+    try:
+        cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) FROM tony_build_log
             WHERE success = TRUE AND created_at > NOW() - INTERVAL '6 hours'
         """)
         builds = cur.fetchone()[0]
+        cur.close()
         if builds > 0:
             briefing_parts.append(f"Tony completed {builds} autonomous tasks while you were away.")
-        
+    except Exception:
+        pass  # table doesn't exist — silent skip (never user-facing)
+
+    # Capability builds that finished overnight
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT capability_name, capability_description FROM tony_capability_requests
+            WHERE status = 'built' AND completed_at > NOW() - INTERVAL '24 hours'
+            ORDER BY completed_at DESC LIMIT 3
+        """)
+        built = cur.fetchall()
         cur.close()
+        if built:
+            briefing_parts.append("**New capabilities built overnight:**")
+            for name, desc in built:
+                briefing_parts.append(f"• {name}: {(desc or '')[:80]}")
+    except Exception:
+        pass
+
+    try:
         conn.close()
-        
-    except Exception as e:
-        briefing_parts.append(f"Tony ready. (System note: {str(e)[:50]})")
+    except Exception:
+        pass
     
     if not briefing_parts:
         briefing_parts.append("All clear — no urgent items. What do you need?")

@@ -15,6 +15,17 @@ def _one_time_ccj_cleanup_sync():
         conn.autocommit = True  # so failed statements (e.g. table-not-exist) don't abort subsequent ones
         cur = conn.cursor()
 
+        # FIRST: wipe any push-fallback spam alerts that accumulated from the recursive loop bug
+        try:
+            cur.execute("""
+                DELETE FROM tony_alerts
+                WHERE source = 'tony_push' OR title LIKE '%Tony — Urgent%'
+            """)
+            if cur.rowcount > 0:
+                print(f"[STARTUP CLEANUP] Deleted {cur.rowcount} push-fallback spam alerts")
+        except Exception as e:
+            print(f"[STARTUP CLEANUP] Spam cleanup failed: {e}")
+
         # Mark Western Circle / CCJ / Cashfloat alerts as read + expired
         for topic in ["western circle", "ccj", "cashfloat"]:
             try:

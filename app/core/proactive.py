@@ -139,7 +139,9 @@ def create_alert(alert_type: str, title: str, body: str,
         print(f"[PROACTIVE] Alert created: {title}")
 
         # Push notification for genuinely new urgent alerts only
-        if priority in ("urgent", "high"):
+        # Skip if source is 'tony_push' (means the alert was itself created by a push fallback) —
+        # belt and braces against recursive loops
+        if priority in ("urgent", "high") and source != "tony_push":
             try:
                 from app.core.push_notifications import tony_notify
                 loop = asyncio.get_event_loop()
