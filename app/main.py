@@ -265,8 +265,10 @@ async def startup_event():
         from app.core.task_queue import worker_loop
         from app.core.task_handlers import register_all_handlers, schedule_daily_evals
         from app.core.scheduled_briefings import register_brief_handler, schedule_todays_briefs
+        from app.core.email_monitor import register_monitor as register_email_monitor
         register_all_handlers()
         register_brief_handler()
+        register_email_monitor()
         asyncio.create_task(worker_loop(poll_interval_seconds=10))
         # Queue a daily eval run if one isn't already scheduled
         schedule_daily_evals()
