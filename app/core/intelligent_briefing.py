@@ -92,8 +92,7 @@ async def gather_state() -> Dict:
         # Use Matthew's primary gmail — fall back silently if not configured
         primary_email = os.environ.get("MATTHEW_GMAIL_PRIMARY", "mlainton79@gmail.com")
         events = await get_upcoming_events(primary_email, days=1)
-        # Filter to just today
-        from datetime import datetime
+        # Filter to just today (datetime already imported at top)
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         today_events = [e for e in events
                         if today_str in str(e.get("start", e.get("start_time", "")))]
