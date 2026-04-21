@@ -26,6 +26,9 @@ def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
+SUBJECT_NORMALISE = {"user", "i", "me", "myself"}
+
+
 def init_fact_tables():
     try:
         conn = get_conn()
@@ -50,6 +53,39 @@ def init_fact_tables():
             CREATE INDEX IF NOT EXISTS idx_facts_subject
             ON tony_facts(subject) WHERE superseded_by IS NULL
         """)
+
+        # One-shot idempotent backfill: remap rows whose subject got recorded
+        # as "User" / "I" / "me" / "myself" (a historical LLM-extraction
+        # artefact) to "Matthew", matching the forward-looking normaliser
+        # in save_facts. On first deploy this rescues the orphaned rows;
+        # on every subsequent deploy the WHERE clause matches nothing and
+        # both statements no-op.
+        placeholder = tuple(SUBJECT_NORMALISE)
+        cur.execute("""
+            DELETE FROM tony_facts
+            WHERE LOWER(subject) IN %s
+              AND EXISTS (
+                  SELECT 1 FROM tony_facts t2
+                  WHERE t2.subject = 'Matthew'
+                    AND t2.predicate = tony_facts.predicate
+                    AND t2.object = tony_facts.object
+              )
+            RETURNING id
+        """, (placeholder,))
+        dropped = cur.fetchall()
+        cur.execute("""
+            UPDATE tony_facts
+            SET subject = 'Matthew'
+            WHERE LOWER(subject) IN %s
+            RETURNING id
+        """, (placeholder,))
+        renamed = cur.fetchall()
+        print(
+            f"[FACTS] Subject migration: renamed {len(renamed)} "
+            f"User/I/me/myself-subject facts to Matthew; "
+            f"dropped {len(dropped)} duplicates"
+        )
+
         cur.close()
         conn.close()
         print("[FACTS] Tables initialised")
@@ -149,6 +185,15 @@ def save_facts(facts: List[Dict], source: str = "conversation"):
     """Save extracted facts to DB with deduplication via ON CONFLICT."""
     if not facts:
         return 0
+    # Forward-looking guard: when the extractor is fed a synthesised
+    # "User: I ..." payload (e.g. NovaApiClient.addMemory) with no named
+    # anchor, Gemini sometimes emits subject="User" despite the prompt's
+    # guidance. The read path defaults to subject="Matthew", so those
+    # rows get silently orphaned. Normalise any first-person/placeholder
+    # subject to "Matthew" before insert.
+    for f in facts:
+        if str(f.get("subject", "")).strip().lower() in SUBJECT_NORMALISE:
+            f["subject"] = "Matthew"
     try:
         conn = get_conn()
         conn.autocommit = True
