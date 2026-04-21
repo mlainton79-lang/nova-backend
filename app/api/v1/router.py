@@ -151,6 +151,7 @@ _inits = [
     ("app.core.skill_learner",          "init_skill_proposal_tables", "Skill learner"),
     ("app.core.tony_self_goals",        "init_self_goals_tables",     "Tony self-goals"),
     ("app.core.outcome_tracker",        "init_outcome_tables",        "Outcome tracker"),
+    ("app.core.known_facts_seed",       "seed_bedrock_facts",         "Bedrock facts"),
     ("app.core.repository_intelligence","init_repo_intel_tables",     "Repo intelligence"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]

@@ -693,12 +693,14 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             # Fire post-response tasks without blocking
             asyncio.create_task(_post_response_tasks(request.message, full, provider_key))
 
-            # Auto-ingest document to long-term memory if one was uploaded
+            # Auto-ingest document OR image content to long-term memory
             async def _ingest_doc():
                 try:
+                    from app.core.document_memory import ingest_document
                     doc_text = request.document_text or ""
+                    
+                    # Case 1: Direct document text
                     if doc_text and len(doc_text.strip()) >= 100:
-                        from app.core.document_memory import ingest_document
                         doc_type = "unknown"
                         mime = (request.document_mime or "").lower()
                         if "pdf" in mime: doc_type = "pdf"
@@ -711,6 +713,25 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                             doc_type=doc_type,
                             source="chat_stream_upload",
                         )
+                        return
+                    
+                    # Case 2: Image uploaded — reply contains extracted content
+                    if request.image_base64 and full and len(full.strip()) >= 100:
+                        user_lower = (request.message or "").lower()
+                        reading_intent = any(p in user_lower for p in [
+                            "what's this", "whats this", "what does this", "read this",
+                            "what's it say", "whats it say", "describe", "translate",
+                            "transcribe", "what is this", "whats in the", "what is in"
+                        ])
+                        if reading_intent:
+                            from datetime import datetime
+                            doc_text = f"User asked: {request.message}\n\nExtracted content:\n{full}"
+                            await ingest_document(
+                                full_text=doc_text,
+                                doc_name=f"Image captured {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                                doc_type="image",
+                                source="vision_extraction",
+                            )
                 except Exception as e:
                     print(f"[DOC_AUTO_INGEST] Failed: {e}")
             asyncio.create_task(_ingest_doc())

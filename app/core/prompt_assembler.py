@@ -522,6 +522,17 @@ async def build_prompt(
     except Exception as e:
         print(f"[PROMPT_ASSEMBLER] Facts: {e}")
 
+    # Person resolution — if user message or document mentions a name variant,
+    # inject who that person actually is
+    try:
+        from app.core.person_resolver import format_people_context
+        scan_text = (user_message or "") + " " + (document_text or "")[:2000]
+        people_block = format_people_context(scan_text)
+        if people_block:
+            add(people_block, max_chars=800)
+    except Exception as e:
+        print(f"[PROMPT_ASSEMBLER] Person resolver: {e}")
+
     # Tony's own diary — recent observations about Matthew
     try:
         from app.core.tony_diary import format_diary_for_prompt
