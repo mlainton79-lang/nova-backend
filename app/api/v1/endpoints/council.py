@@ -170,8 +170,23 @@ async def _post_response_tasks(message: str, reply: str):
         except Exception as e:
             print(f"[COUNCIL POST] Self-eval: {e}")
 
+    async def _fact_extraction():
+        try:
+            from app.core.fact_extractor import process_conversation_turn
+            await process_conversation_turn(message, reply)
+        except Exception as e:
+            print(f"[COUNCIL POST] Fact extraction: {e}")
+
+    async def _fabrication_check():
+        try:
+            from app.core.fabrication_detector import check_and_log
+            await check_and_log(message, reply)
+        except Exception as e:
+            print(f"[COUNCIL POST] Fabrication: {e}")
+
     await asyncio.gather(
         _memory(), _living(), _world(), _learning(), _goals(), _self_eval(),
+        _fact_extraction(), _fabrication_check(),
         return_exceptions=True
     )
 
