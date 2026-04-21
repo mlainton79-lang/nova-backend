@@ -122,6 +122,16 @@ async def execute_command(command: Dict) -> str:
     elif cmd == "clear_topic":
         return await _clear_topic(args[0])
 
+    elif cmd == "smart_brief":
+        return await _smart_brief()
+
+    elif cmd == "expense_summary":
+        days = int(args[0]) if args and len(args) > 0 and args[0] and str(args[0]).isdigit() else 30
+        return await _expense_summary(days)
+
+    elif cmd == "smart_triage":
+        return await _smart_triage()
+
     return ""
 
 
