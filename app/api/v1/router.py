@@ -52,6 +52,8 @@ from app.api.v1.endpoints import multi_agent
 router.include_router(multi_agent.router, tags=["multi_agent"])
 from app.api.v1.endpoints import skill_learner
 router.include_router(skill_learner.router, tags=["skill_learner"])
+from app.api.v1.endpoints import agentic
+router.include_router(agentic.router, tags=["agentic"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
