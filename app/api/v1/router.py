@@ -54,6 +54,8 @@ from app.api.v1.endpoints import skill_learner
 router.include_router(skill_learner.router, tags=["skill_learner"])
 from app.api.v1.endpoints import agentic
 router.include_router(agentic.router, tags=["agentic"])
+from app.api.v1.endpoints import self_goals
+router.include_router(self_goals.router, tags=["self_goals"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
@@ -139,6 +141,7 @@ _inits = [
     ("app.core.tony_diary",             "init_diary_tables",          "Tony's diary"),
     ("app.core.budget_guard",           "init_budget_tables",         "Budget guard"),
     ("app.core.skill_learner",          "init_skill_proposal_tables", "Skill learner"),
+    ("app.core.tony_self_goals",        "init_self_goals_tables",     "Tony self-goals"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 

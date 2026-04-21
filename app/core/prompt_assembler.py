@@ -528,6 +528,15 @@ async def build_prompt(
         diary = format_diary_for_prompt(days=5)
         if diary:
             add(diary, max_chars=1500)
+    except Exception as e:
+        print(f"[PROMPT_ASSEMBLER] Diary: {e}")
+
+    # Tony's own self-goals — what he's actively working on improving
+    try:
+        from app.core.tony_self_goals import format_goals_for_prompt
+        sg = format_goals_for_prompt()
+        if sg:
+            add(sg, max_chars=800)
     except Exception:
         pass
 
