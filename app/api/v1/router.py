@@ -68,6 +68,8 @@ from app.api.v1.endpoints import video
 router.include_router(video.router, tags=["video"])
 from app.api.v1.endpoints import facts
 router.include_router(facts.router, tags=["facts"])
+from app.api.v1.endpoints import email_triage
+router.include_router(email_triage.router, tags=["triage"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
@@ -109,6 +111,7 @@ _inits = [
     ("app.core.task_queue",             "init_task_queue_tables",     "Task queue"),
     ("app.skills.loader",               "register_skills_in_db",      "Skills registry"),
     ("app.core.fact_extractor",         "init_fact_tables",           "Fact extractor"),
+    ("app.core.email_triage",           "init_triage_tables",         "Email triage"),
 ]
 
 for module_path, fn_name, label in _inits:
