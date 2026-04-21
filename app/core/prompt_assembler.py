@@ -283,7 +283,7 @@ async def build_prompt(
     if user_message:
         try:
             from app.core.semantic_memory import search_memories
-            memories = await search_memories(user_message, limit=10)
+            memories = await search_memories(user_message, top_k=10)
             if memories:
                 # Filter out memories mentioning banned topics
                 active_bans = _get_active_bans()
@@ -384,7 +384,7 @@ async def build_prompt(
 
     try:
         from app.core.weather import get_weather_summary
-        weather = get_weather_summary()
+        weather = await get_weather_summary()
         if weather:
             add(f"[WEATHER] {weather}", max_chars=150)
     except Exception:
@@ -533,12 +533,14 @@ async def build_prompt(
         pass
 
     # ── 16. Capabilities (compact — always last) ─────────────────────────────
-    caps = ("[TONY CAN] Multi-brain chat (Gemini/Claude/Council/Groq/Mistral), "
-            "Gmail 4 accounts, Calendar, GPS location, Voice in/out, "
-            "Vinted/eBay photo listings, FOS complaint generation, "
-            "FCA register, Companies House, Deep research, YouTube study, "
-            "Autonomous every 6h (goals, email drafting, learning, "
-            "AGI self-build, financial intelligence, relationship tracking)")
+    caps = ("[TONY CAN] Multi-brain chat (Gemini/Claude/Council/Groq/Mistral/OpenRouter/DeepSeek), "
+            "Gmail x4 (read/send/triage/draft), Calendar, GPS location, Voice in/out, "
+            "Vision (camera + documents), Receipt/bill extraction, Expense tracking, "
+            "Photo-to-video reels, Skills system, Persistent fact memory, "
+            "Deep research, Task queue for long-running work, "
+            "Autonomous code self-build with eval-gated safety, "
+            "Proactive email monitor + scheduled briefs, "
+            "Regression evals + self-improvement proposals")
     add(caps, max_chars=300)
 
     return "\n\n".join(p for p in parts if p)
