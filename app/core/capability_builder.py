@@ -317,6 +317,58 @@ def validate_code(code: str) -> dict:
     return {"valid": True}
 
 
+def runtime_import_check(code: str, module_name: str) -> dict:
+    """
+    Try to actually import the generated code in an isolated namespace.
+    This catches runtime errors that pure syntax/AST checks miss —
+    like missing imports, wrong signatures, undefined helper calls.
+    
+    Returns {"ok": True} if it imports cleanly, else {"ok": False, "error": "..."}
+    """
+    import tempfile
+    import importlib.util
+    import os as _os
+    
+    tmp_path = None
+    try:
+        # Write to a tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix=f"tony_check_{module_name}_")
+        with _os.fdopen(fd, "w") as f:
+            f.write(code)
+        
+        # Load as a module
+        spec = importlib.util.spec_from_file_location(f"tony_check_{module_name}", tmp_path)
+        if spec is None or spec.loader is None:
+            return {"ok": False, "error": "Could not create module spec"}
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except NameError as e:
+            return {"ok": False, "error": f"NameError at import: {e}"}
+        except ImportError as e:
+            # Only fail on imports we can't resolve. Tony may legitimately import
+            # from app.core — that'll work in production.
+            msg = str(e)
+            if "app.core" in msg or "app.api" in msg:
+                # Expected — would work in production
+                return {"ok": True, "note": "internal app imports skipped in check"}
+            return {"ok": False, "error": f"ImportError: {e}"}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__} at import: {str(e)[:200]}"}
+        
+        # Check for a router attribute
+        if not hasattr(mod, "router"):
+            return {"ok": False, "error": "Module has no 'router' attribute"}
+        
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": f"Check harness error: {e}"}
+    finally:
+        if tmp_path:
+            try: _os.unlink(tmp_path)
+            except Exception: pass
+
+
 async def push_capability_to_github(filename: str, code: str, capability_name: str) -> dict:
     """Push the new capability file to GitHub."""
     try:
@@ -448,7 +500,7 @@ async def build_capability(capability_name: str, capability_description: str) ->
         return report
     step("generate", f"Generated {len(gen['code'])} chars for {gen['filename']}", True)
     
-    # 3. Validate
+    # 3. Validate (syntax + undefined name check)
     validation = validate_code(gen["code"])
     if not validation["valid"]:
         step("validate", validation["error"], False)
@@ -456,9 +508,20 @@ async def build_capability(capability_name: str, capability_description: str) ->
         report["code_for_review"] = gen["code"]
         return report
     step("validate", "Code passed syntax and safety checks", True)
+
+    # 3b. Runtime import check — actually load the code to catch runtime errors
+    # that static analysis misses (e.g. missing imports, syntax-valid but broken)
+    module_name = gen["filename"].split("/")[-1].replace(".py", "")
+    runtime_check = runtime_import_check(gen["code"], module_name)
+    if not runtime_check["ok"]:
+        step("runtime_check", runtime_check["error"], False)
+        report["success"] = False
+        report["code_for_review"] = gen["code"]
+        report["note"] = "Runtime import check failed — code not pushed. Prevented a production breakage."
+        return report
+    step("runtime_check", "Code imports cleanly", True)
     
     # 4. Push to GitHub
-    module_name = gen["filename"].split("/")[-1].replace(".py", "")
     push_result = await push_capability_to_github(gen["filename"], gen["code"], capability_name)
     if not push_result["ok"]:
         step("push", push_result.get("error", "Push failed"), False)
@@ -479,6 +542,16 @@ async def build_capability(capability_name: str, capability_description: str) ->
         report["env_vars_needed"] = gen["env_vars"]
         step("env_vars", f"You need to add to Railway: {', '.join(gen['env_vars'])}", True)
     
+    # 8. Schedule post-deploy eval gate — if this commit broke anything critical,
+    # Tony will revert automatically.
+    try:
+        import asyncio
+        from app.core.eval_gate import post_deploy_check_and_revert_if_needed
+        asyncio.create_task(post_deploy_check_and_revert_if_needed())
+        step("eval_gate_scheduled", "Post-deploy safety check scheduled", True)
+    except Exception as e:
+        step("eval_gate_scheduled", str(e), False)
+
     report["success"] = True
-    report["note"] = "Railway is deploying the new capability now. Will be live in ~60 seconds."
+    report["note"] = "Railway is deploying now. Eval gate will check and auto-revert if critical tests fail."
     return report
