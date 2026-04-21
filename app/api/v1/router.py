@@ -48,6 +48,8 @@ from app.api.v1.endpoints import diary
 router.include_router(diary.router, tags=["diary"])
 from app.api.v1.endpoints import budget
 router.include_router(budget.router, tags=["budget"])
+from app.api.v1.endpoints import multi_agent
+router.include_router(multi_agent.router, tags=["multi_agent"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
