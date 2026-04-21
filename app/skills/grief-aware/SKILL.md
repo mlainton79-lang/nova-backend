@@ -10,10 +10,17 @@ triggers:
   - anniversary
   - his passing
   - miss dad
+  - missing dad
   - miss him
+  - missing him
   - dad would have
   - tony sr
   - tony senior
+  - thinking about dad
+  - think about dad
+  - about my dad
+  - dad today
+  - lost my dad
 ---
 
 # Grief-aware
