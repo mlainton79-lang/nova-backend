@@ -196,6 +196,17 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
                 request.message, request.history, system_prompt
             )
 
+        # Inline self-correction — verifier checks for fabrication, banned content,
+        # voice violations. Only calls LLM if heuristics flag real risk (keeps latency low).
+        try:
+            from app.core.response_verifier import verify_and_correct
+            verify_result = await verify_and_correct(request.message, reply)
+            if verify_result.get("correction_applied"):
+                print(f"[VERIFIER] Corrected reply — risks: {verify_result['risks']}")
+                reply = verify_result["reply"]
+        except Exception as e:
+            print(f"[VERIFIER] Skipped due to error: {e}")
+
         latency_ms = int((time.time() - start) * 1000)
         log_request(
             provider=provider_key, message=request.message,

@@ -351,6 +351,17 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
     except Exception:
         pass
 
+    # Inline self-correction
+    try:
+        from app.core.response_verifier import verify_and_correct
+        verify_result = await verify_and_correct(req.message, reply)
+        if verify_result.get("correction_applied"):
+            print(f"[VERIFIER council] Corrected — risks: {verify_result['risks']}")
+            reply = verify_result["reply"]
+            result["reply"] = reply
+    except Exception as e:
+        print(f"[VERIFIER council] Skipped: {e}")
+
     # Fire post-response tasks without blocking
     asyncio.create_task(_post_response_tasks(req.message, reply))
 
