@@ -128,6 +128,42 @@ async def handle_scheduled_reminder(task_id: int, payload: Dict) -> Dict:
         return {"error": str(e)}
 
 
+def schedule_daily_diary():
+    """Queue a diary-write task to run at 23:45 UTC each evening."""
+    try:
+        import psycopg2
+        import os
+        from datetime import datetime, timedelta
+        from app.core.task_queue import queue_task
+
+        # Don't double-schedule
+        conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id FROM tony_task_queue
+            WHERE task_type = 'diary_write'
+              AND status IN ('queued', 'claimed', 'running')
+              AND created_at::date = CURRENT_DATE
+            LIMIT 1
+        """)
+        already = cur.fetchone()
+        cur.close()
+        conn.close()
+        if already:
+            return
+
+        # Seconds until 23:45 UTC today
+        now = datetime.utcnow()
+        target = now.replace(hour=23, minute=45, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        delay = int((target - now).total_seconds())
+        queue_task("diary_write", {}, delay_seconds=delay)
+        print(f"[DIARY] Scheduled for {target} UTC ({delay}s)")
+    except Exception as e:
+        print(f"[DIARY] Schedule failed: {e}")
+
+
 def schedule_daily_evals():
     """Queue a daily eval task if one isn't already scheduled for today."""
     try:
@@ -152,9 +188,25 @@ def schedule_daily_evals():
         return None
 
 
+
+
+async def handle_diary_write(task_id: int, payload: Dict) -> Dict:
+    """Write Tony's daily diary entry. Queued nightly."""
+    try:
+        from app.core.task_queue import update_progress
+        from app.core.tony_diary import write_todays_entry
+
+        update_progress(task_id, "Reading today's conversations", 10)
+        result = await write_todays_entry()
+        update_progress(task_id, "Diary written" if result.get("ok") else "Diary skipped", 100)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def register_all_handlers():
     """Call at startup to register all known task handlers."""
     register_handler("daily_eval_run", handle_daily_eval_run)
+    register_handler("diary_write", handle_diary_write)
     register_handler("deep_research", handle_deep_research)
     register_handler("scheduled_reminder", handle_scheduled_reminder)
     print("[TASK_HANDLERS] Registered handlers: daily_eval_run, deep_research, scheduled_reminder")

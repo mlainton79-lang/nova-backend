@@ -519,6 +519,15 @@ async def build_prompt(
         facts_block = format_facts_for_prompt(subject="Matthew", min_confidence=0.7)
         if facts_block:
             add(facts_block, max_chars=1500)
+    except Exception as e:
+        print(f"[PROMPT_ASSEMBLER] Facts: {e}")
+
+    # Tony's own diary — recent observations about Matthew
+    try:
+        from app.core.tony_diary import format_diary_for_prompt
+        diary = format_diary_for_prompt(days=5)
+        if diary:
+            add(diary, max_chars=1500)
     except Exception:
         pass
 

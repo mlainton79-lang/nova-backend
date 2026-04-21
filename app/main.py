@@ -274,6 +274,9 @@ async def startup_event():
         schedule_daily_evals()
         # Queue today's scheduled briefs if not already done
         schedule_todays_briefs()
+        # Queue tonight's diary-write if not already scheduled
+        from app.core.task_handlers import schedule_daily_diary
+        schedule_daily_diary()
     except Exception as e:
         print(f"[STARTUP] Task queue setup failed: {e}")
     print("[STARTUP] Tony autonomous loop started")
