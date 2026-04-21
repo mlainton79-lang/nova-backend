@@ -117,6 +117,7 @@ _inits = [
     ("app.core.fact_extractor",         "init_fact_tables",           "Fact extractor"),
     ("app.core.email_triage",           "init_triage_tables",         "Email triage"),
     ("app.core.self_improvement",       "init_self_improvement_tables", "Self-improvement"),
+    ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 
 for module_path, fn_name, label in _inits:
