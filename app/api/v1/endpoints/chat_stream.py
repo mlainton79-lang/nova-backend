@@ -571,6 +571,28 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     start = time.time()
     provider_key = request.provider.lower().strip()
 
+    # Smart model routing — if the client asked for 'auto' / 'smart' / empty,
+    # pick optimal provider. Previously this endpoint skipped routing entirely
+    # and silently fell through to gemini_stream for unknown provider strings.
+    if provider_key in ("auto", "smart", ""):
+        try:
+            from app.core.model_router_smart import choose_provider
+            has_image = bool(getattr(request, "image_base64", None))
+            has_doc = bool(request.document_text or request.document_base64)
+            doc_len = len(request.document_text or "") if request.document_text else 0
+            choice = choose_provider(
+                request.message,
+                preferred=None,
+                has_image=has_image,
+                has_document=has_doc,
+                document_length=doc_len,
+            )
+            provider_key = choice["provider"]
+            print(f"[SMART_ROUTER] Chose {provider_key}: {choice['rationale']}")
+        except Exception as e:
+            print(f"[SMART_ROUTER] Failed (using gemini): {e}")
+            provider_key = "gemini"
+
     # Command parser — handle action commands instantly
     try:
         from app.core.command_parser import detect_command, execute_command
@@ -680,6 +702,10 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     async def gen():
         parts = []
         try:
+            # Announce the resolved provider so clients can show "auto → claude"
+            # (or similar) instead of whatever the client originally sent.
+            yield "data: " + json.dumps({"type": "provider", "name": provider_key}) + "\n\n"
+
             stream_fn = _get_stream(
                 provider_key, request.message, request.history, sp,
                 image_base64=request.image_base64
