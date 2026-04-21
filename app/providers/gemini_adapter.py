@@ -38,11 +38,12 @@ class GeminiAdapter(ProviderAdapter):
 
         gemini_history.append({"role": "user", "parts": user_parts})
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 url,
+                headers={"x-goog-api-key": GEMINI_API_KEY},
                 json={
                     "system_instruction": {"parts": [{"text": system_prompt}]},
                     "contents": gemini_history,
