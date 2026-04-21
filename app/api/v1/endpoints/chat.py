@@ -101,9 +101,24 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
         except Exception:
             pass
 
+    async def _fact_extraction():
+        try:
+            from app.core.fact_extractor import process_conversation_turn
+            await process_conversation_turn(message, reply)
+        except Exception:
+            pass
+
+    async def _fabrication_check():
+        try:
+            from app.core.fabrication_detector import check_and_log
+            await check_and_log(message, reply)
+        except Exception:
+            pass
+
     await asyncio.gather(
         _instant_memory(), _living_memory(), _world_model(),
         _episodic(), _learning(), _goals(), _self_eval(),
+        _fact_extraction(), _fabrication_check(),
         return_exceptions=True
     )
 
