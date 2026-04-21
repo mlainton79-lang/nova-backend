@@ -123,6 +123,31 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
     )
 
 
+async def _ingest_document_if_present(
+    document_text: str, document_name: str, document_mime: str
+):
+    """Auto-ingest documents into long-term memory for later semantic search."""
+    try:
+        if not document_text or len(document_text.strip()) < 100:
+            return
+        from app.core.document_memory import ingest_document
+        # Infer doc_type from mime/name
+        doc_type = "unknown"
+        if document_mime:
+            if "pdf" in document_mime.lower(): doc_type = "pdf"
+            elif "image" in document_mime.lower(): doc_type = "image"
+            elif "word" in document_mime.lower() or "docx" in (document_name or "").lower(): doc_type = "docx"
+            elif "text" in document_mime.lower(): doc_type = "text"
+        await ingest_document(
+            full_text=document_text,
+            doc_name=document_name or "uploaded document",
+            doc_type=doc_type,
+            source="chat_upload",
+        )
+    except Exception as e:
+        print(f"[DOC_AUTO_INGEST] Failed: {e}")
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, _=Depends(verify_token)):
     start = time.time()
