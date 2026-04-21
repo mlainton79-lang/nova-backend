@@ -69,7 +69,7 @@ COMMAND_PATTERNS = [
     (r'^(?:urgent emails?|email triage|smart digest|urgent)\??$', 'smart_triage'),
     (r'check.*urgent.*email', 'smart_triage'),
     # Daily review
-    (r'^(?:how(?:'s| was) (?:today|the day)|end of day|daily review|what happened today|recap today)\??$', 'daily_review'),
+    (r"^(?:how(?:'s| was) (?:today|the day)|end of day|daily review|what happened today|recap today)\??$", 'daily_review'),
     (r'review (?:the )?day', 'daily_review'),
 ]
 
