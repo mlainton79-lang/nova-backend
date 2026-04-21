@@ -68,6 +68,9 @@ COMMAND_PATTERNS = [
     # Email triage
     (r'^(?:urgent emails?|email triage|smart digest|urgent)\??$', 'smart_triage'),
     (r'check.*urgent.*email', 'smart_triage'),
+    # Daily review
+    (r'^(?:how(?:'s| was) (?:today|the day)|end of day|daily review|what happened today|recap today)\??$', 'daily_review'),
+    (r'review (?:the )?day', 'daily_review'),
 ]
 
 
@@ -131,6 +134,9 @@ async def execute_command(command: Dict) -> str:
 
     elif cmd == "smart_triage":
         return await _smart_triage()
+
+    elif cmd == "daily_review":
+        return await _daily_review()
 
     return ""
 
@@ -413,3 +419,13 @@ async def _smart_triage() -> str:
         return digest.get("digest", "Checked. Nothing urgent.")
     except Exception as e:
         return f"Triage error — {str(e)[:100]}"
+
+
+async def _daily_review() -> str:
+    """Run today's review."""
+    try:
+        from app.core.daily_review import get_daily_review
+        result = await get_daily_review()
+        return result.get("review", "Quiet one today.")
+    except Exception as e:
+        return f"Couldn't run daily review — {str(e)[:100]}"

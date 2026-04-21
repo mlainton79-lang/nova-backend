@@ -42,6 +42,8 @@ from app.api.v1.endpoints import drafts
 router.include_router(drafts.router, tags=["drafts"])
 from app.api.v1.endpoints import documents
 router.include_router(documents.router, tags=["documents"])
+from app.api.v1.endpoints import daily_review
+router.include_router(daily_review.router, tags=["daily_review"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
