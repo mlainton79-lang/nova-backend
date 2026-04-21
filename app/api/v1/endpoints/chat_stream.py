@@ -501,6 +501,13 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
         except Exception as e:
             print(f"[POST] Fact extraction: {e}")
 
+    async def _fabrication_check():
+        try:
+            from app.core.fabrication_detector import check_and_log
+            await check_and_log(message, reply)
+        except Exception as e:
+            print(f"[POST] Fabrication check: {e}")
+
     async def _world_model():
         try:
             from app.core.world_model import update_world_model
