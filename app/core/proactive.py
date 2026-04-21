@@ -50,6 +50,17 @@ def init_proactive_tables():
                 expires_at TIMESTAMP
             )
         """)
+        # Caller-controlled dedup key. Callers whose titles are LLM-generated
+        # (and therefore vary run-to-run for the same underlying event) pass
+        # a stable key so repeated creations collapse onto the existing
+        # unread alert instead of producing near-duplicates.
+        cur.execute(
+            "ALTER TABLE tony_alerts ADD COLUMN IF NOT EXISTS dedup_key TEXT"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_dedup_key "
+            "ON tony_alerts(dedup_key) WHERE read = FALSE"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tony_monitoring (
                 id SERIAL PRIMARY KEY,
@@ -95,11 +106,18 @@ def _is_topic_banned(text: str) -> bool:
 def create_alert(alert_type: str, title: str, body: str,
                   priority: str = "normal", source: str = None,
                   expires_hours: int = 48,
-                  dedup_hours: int = 24):
+                  dedup_hours: int = 24,
+                  dedup_key: str = None):
     """
     Tony creates an alert for Matthew.
-    Deduplicates by title — same title within dedup_hours window = skip.
-    This prevents the same legal alert firing every 6 hours.
+
+    Deduplicates within dedup_hours. If dedup_key is provided, matches on
+    it — use this when titles are LLM-generated or otherwise unstable for
+    the same underlying event (e.g. "Nova App Build Failure" vs "Nova App
+    Build Failures" vs "Nova App Build Failed (10 times)" — all the same
+    signal). If dedup_key is omitted, matches on exact title (original
+    behaviour, fine for callers whose titles are stable per-entity, e.g.
+    email_monitor's per-sender titles).
     """
     # BAN CHECK: suppress alert if content matches any active topic ban
     combined = f"{title} {body} {source or ''}"
@@ -112,14 +130,24 @@ def create_alert(alert_type: str, title: str, body: str,
         conn = get_conn()
         cur = conn.cursor()
 
-        # Dedup check — same title already exists within window?
-        cur.execute("""
-            SELECT id FROM tony_alerts
-            WHERE title = %s
-            AND created_at > NOW() - INTERVAL '%s hours'
-            AND read = FALSE
-            LIMIT 1
-        """, (title, dedup_hours))
+        # Dedup check — existing unread alert within window that matches
+        # by (dedup_key when provided) or (exact title otherwise).
+        if dedup_key:
+            cur.execute("""
+                SELECT id FROM tony_alerts
+                WHERE dedup_key = %s
+                AND created_at > NOW() - INTERVAL '%s hours'
+                AND read = FALSE
+                LIMIT 1
+            """, (dedup_key, dedup_hours))
+        else:
+            cur.execute("""
+                SELECT id FROM tony_alerts
+                WHERE title = %s
+                AND created_at > NOW() - INTERVAL '%s hours'
+                AND read = FALSE
+                LIMIT 1
+            """, (title, dedup_hours))
         existing = cur.fetchone()
         if existing:
             cur.close()
@@ -128,10 +156,10 @@ def create_alert(alert_type: str, title: str, body: str,
 
         expires = datetime.utcnow() + timedelta(hours=expires_hours)
         cur.execute("""
-            INSERT INTO tony_alerts (alert_type, title, body, priority, source, expires_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO tony_alerts (alert_type, title, body, priority, source, expires_at, dedup_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (alert_type, title, body, priority, source, expires))
+        """, (alert_type, title, body, priority, source, expires, dedup_key))
         alert_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
@@ -265,12 +293,25 @@ If nothing is urgent, return: {{"urgent_items": []}}"""
             if json_match:
                 data = json.loads(json_match.group())
                 for item in data.get("urgent_items", []):
+                    # LLM-generated titles and sources vary slightly run-to-run
+                    # for the same underlying event (temperature=0.2, shifting
+                    # Gmail summary). Pass a stable dedup_key so repeated scans
+                    # of the same urgent-email signal collapse onto one alert.
+                    src = item.get("source", "Gmail")
+                    # Normalise source for dedup: case-insensitive, stripped of
+                    # common noise like parentheses so "Railway (mlainton79)"
+                    # and "mlainton79 (Railway)" collapse.
+                    src_normalised = (src or "").lower()
+                    for ch in "()[]":
+                        src_normalised = src_normalised.replace(ch, "")
+                    src_normalised = " ".join(sorted(src_normalised.split()))
                     alert_id = create_alert(
                         alert_type="email",
                         title=item.get("title", "Email alert"),
                         body=item.get("body", ""),
                         priority=item.get("priority", "normal"),
-                        source=item.get("source", "Gmail")
+                        source=src,
+                        dedup_key=f"email_scan:{src_normalised}",
                     )
                     if alert_id:
                         urgent_alerts.append(item)
