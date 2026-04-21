@@ -11,6 +11,7 @@ from app.schemas.chat import ChatRequest, ChatResponse
 from app.core.security import verify_token
 from app.core.logger import log_request
 from app.core.injection_filter import check_injection
+from app.core.secrets_redact import redact
 from app.providers.openai_adapter import OpenAIAdapter
 from app.providers.gemini_adapter import GeminiAdapter
 from app.providers.claude_adapter import ClaudeAdapter
@@ -190,8 +191,10 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
             last = request.history[-1]
             prev_user = request.history[-2] if len(request.history) >= 2 else None
             if (last.role == "assistant" and prev_user and prev_user.role == "user"):
-                # Fire and forget — record asynchronously
-                import asyncio
+                # Fire and forget — record asynchronously. asyncio is
+                # imported at module level; a local re-import here would
+                # make asyncio a function-local, unbound on code paths
+                # that skip this branch (UnboundLocalError at line ~291).
                 asyncio.create_task(asyncio.to_thread(
                     record_outcome,
                     message_id=None,
@@ -310,12 +313,13 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
 
     except Exception as e:
         latency_ms = int((time.time() - start) * 1000)
+        safe_error = redact(str(e))
         log_request(
             provider=provider_key, message=request.message,
-            reply="", latency_ms=latency_ms, ok=False, error=str(e)
+            reply="", latency_ms=latency_ms, ok=False, error=safe_error
         )
         return ChatResponse(
             ok=False, provider=provider_key,
             reply="Tony is having trouble connecting right now. Please try again or switch provider.",
-            error=str(e)
+            error=safe_error
         )

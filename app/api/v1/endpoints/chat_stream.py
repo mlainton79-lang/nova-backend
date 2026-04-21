@@ -17,6 +17,7 @@ from app.schemas.chat import ChatRequest
 from app.core.security import verify_token
 from app.core.injection_filter import check_injection
 from app.core.logger import log_request
+from app.core.secrets_redact import redact
 
 router = APIRouter()
 
@@ -48,7 +49,7 @@ async def gemini_stream(message: str, history: list, system_prompt: str,
     contents.append({"role": "user", "parts": user_parts})
 
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"{GEMINI_MODEL}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}")
+           f"{GEMINI_MODEL}:streamGenerateContent?alt=sse")
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         async with client.stream(
@@ -58,7 +59,10 @@ async def gemini_stream(message: str, history: list, system_prompt: str,
                 "contents": contents,
                 "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.7}
             },
-            headers={"Content-Type": "application/json"}
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": GEMINI_API_KEY,
+            }
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -737,11 +741,12 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             asyncio.create_task(_ingest_doc())
 
         except Exception as e:
-            print(f"[CHAT_STREAM] Stream error ({provider_key}): {e}")
-            yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
+            safe_error = redact(str(e))
+            print(f"[CHAT_STREAM] Stream error ({provider_key}): {safe_error}")
+            yield "data: " + json.dumps({"type": "error", "text": safe_error}) + "\n\n"
             log_request(provider=provider_key, message=request.message,
                         reply="", latency_ms=int((time.time() - start) * 1000),
-                        ok=False, error=str(e))
+                        ok=False, error=safe_error)
 
         yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
