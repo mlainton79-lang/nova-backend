@@ -23,6 +23,56 @@ import re
 from typing import Optional, Dict
 
 
+# Providers temporarily excluded from auto-routing. Claude is disabled
+# here because the Anthropic account is out of credits (first observed
+# 2026-04-21 — every /v1/messages call came back HTTP 400 with an
+# invalid_request_error "Your credit balance is too low…"). The
+# adapter itself still works, so direct brain-picker selection of
+# "Claude" on Android continues to function — only auto-routing
+# skips it.
+#
+# To re-enable once credits are topped up:
+#   SKIP_PROVIDERS = set()         # empty set turns it off entirely
+# or just remove "claude":
+#   SKIP_PROVIDERS = {"some_other"}
+SKIP_PROVIDERS = {"claude"}
+
+
+def _apply_skip(choice: Dict) -> Dict:
+    """If the primary provider is in SKIP_PROVIDERS, promote the first
+    non-skipped fallback. Always prunes skipped providers from the
+    fallbacks list so the caller never silently retries a dead one.
+    Last-resort defaults to Gemini if every option is skipped."""
+    primary = choice.get("provider", "").lower()
+    raw_fallbacks = [f for f in choice.get("fallbacks", []) if isinstance(f, str)]
+    pruned_fallbacks = [f for f in raw_fallbacks if f.lower() not in SKIP_PROVIDERS]
+
+    if primary not in SKIP_PROVIDERS:
+        choice["fallbacks"] = pruned_fallbacks
+        return choice
+
+    if pruned_fallbacks:
+        replacement = pruned_fallbacks[0]
+        rest = pruned_fallbacks[1:]
+        return {
+            "provider": replacement,
+            "rationale": (
+                f"{choice.get('rationale', '')} — "
+                f"{primary} skipped (SKIP_PROVIDERS); promoted {replacement}"
+            ),
+            "fallbacks": rest,
+        }
+
+    return {
+        "provider": "gemini",
+        "rationale": (
+            f"{choice.get('rationale', '')} — "
+            f"{primary} skipped and no fallbacks available; defaulted to gemini"
+        ),
+        "fallbacks": [],
+    }
+
+
 # Provider characteristics (rough)
 PROVIDER_META = {
     "groq":        {"cost_relative": 1, "speed": 10, "reasoning": 6, "max_tokens": 8000},
@@ -109,9 +159,31 @@ def choose_provider(
     document_length: int = 0,
 ) -> Dict:
     """
-    Pick the best provider for this request.
+    Pick the best provider for this request, honouring SKIP_PROVIDERS
+    so temporarily-unavailable providers (e.g. Claude when out of
+    credits) get transparently replaced by the first usable fallback.
     Returns {provider, rationale, fallbacks}.
     """
+    raw = _choose_provider_raw(
+        message,
+        preferred=preferred,
+        has_image=has_image,
+        has_document=has_document,
+        document_length=document_length,
+    )
+    return _apply_skip(raw)
+
+
+def _choose_provider_raw(
+    message: str,
+    preferred: Optional[str] = None,
+    has_image: bool = False,
+    has_document: bool = False,
+    document_length: int = 0,
+) -> Dict:
+    """Routing logic before SKIP_PROVIDERS is applied. Kept as a
+    separate function so the skip layer is easy to reason about and
+    remove later."""
     # If user explicitly picked one, respect that
     if preferred and preferred.lower() not in ("auto", "smart", ""):
         return {
