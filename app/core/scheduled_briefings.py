@@ -80,14 +80,23 @@ def schedule_todays_briefs() -> list:
         from app.core.rota import get_shift_status
 
         scheduled = []
-        shift = None
+        # Use actual rota functions rather than a non-existent aggregate
         try:
-            shift = get_shift_status()
-        except Exception:
-            shift = {}
-
-        on_shift_days = shift.get("on_shift_days", [])
-        is_shift_day = shift.get("on_shift_now") or shift.get("next_shift_in_hours", 99) < 14
+            from app.core.rota import (
+                is_currently_on_shift, next_shift_start, is_working_on_date
+            )
+            from datetime import date
+            on_shift_now = is_currently_on_shift()
+            next_start = next_shift_start()
+            from datetime import datetime
+            hours_to_next = None
+            if next_start:
+                hours_to_next = (next_start - datetime.utcnow()).total_seconds() / 3600
+            is_shift_day = on_shift_now or (hours_to_next is not None and hours_to_next < 14)
+        except Exception as e:
+            print(f"[SCHEDULED_BRIEFS] Rota read failed: {e}")
+            on_shift_now = False
+            is_shift_day = False
 
         # Don't double-schedule — check if one already exists in the last 6h
         conn = get_conn()

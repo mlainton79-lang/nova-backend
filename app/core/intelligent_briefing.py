@@ -34,8 +34,17 @@ async def gather_state() -> Dict:
 
     # Time of day + shift status
     try:
-        from app.core.rota import get_shift_status
-        state["shift"] = get_shift_status()
+        from app.core.rota import is_currently_on_shift, next_shift_start
+        on_shift_now = is_currently_on_shift()
+        nxt = next_shift_start()
+        hours_to_next = None
+        if nxt:
+            hours_to_next = (nxt - datetime.utcnow()).total_seconds() / 3600
+        state["shift"] = {
+            "on_shift_now": on_shift_now,
+            "next_shift_in_hours": round(hours_to_next, 1) if hours_to_next is not None else None,
+            "next_shift_start": nxt.isoformat() if nxt else None,
+        }
     except Exception as e:
         state["shift"] = None
         state["shift_error"] = str(e)
@@ -218,10 +227,10 @@ async def synthesise_briefing(state: Dict) -> str:
     shift = state.get("shift")
     if shift:
         if shift.get("on_shift_now"):
-            facts.append(f"On shift now. Ends {shift.get('shift_end', '08:00')}")
+            facts.append("On shift now")
         elif shift.get("next_shift_in_hours") is not None:
             h = shift["next_shift_in_hours"]
-            if h < 24:
+            if h is not None and h < 24:
                 facts.append(f"Next shift in {int(h)}h")
 
     weather = state.get("weather")
