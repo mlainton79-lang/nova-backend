@@ -46,6 +46,26 @@ async def handle_daily_eval_run(task_id: int, payload: Dict) -> Dict:
                 expires_hours=48,
             )
 
+        # Run self-improvement analysis on any failures
+        try:
+            from app.core.self_improvement import analyse_eval_failures
+            # Use the most recent run ID (we just logged two)
+            import psycopg2
+            conn = psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM tony_eval_runs ORDER BY run_at DESC LIMIT 2")
+            run_ids = [r[0] for r in cur.fetchall()]
+            cur.close()
+            conn.close()
+            total_proposals = 0
+            for rid in run_ids:
+                proposals = await analyse_eval_failures(rid)
+                total_proposals += len(proposals)
+            update_progress(task_id,
+                f"Self-improvement: {total_proposals} proposals queued for review", 95)
+        except Exception as e:
+            print(f"[DAILY_EVAL] Self-improvement failed: {e}")
+
         update_progress(task_id, "Done", 100)
         return {
             "chat": {"passed": summary_chat["passed"], "total": summary_chat["total"],

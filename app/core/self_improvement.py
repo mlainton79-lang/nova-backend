@@ -1,139 +1,220 @@
 """
-Tony's Self-Improvement Loop.
+Tony's self-improvement loop.
 
-Tony doesn't just learn rules — he actively rewrites his own approach
-based on evidence of what works and what doesn't.
+Runs after eval runs. If tests failed, analyses the failures and PROPOSES
+prompt/rule changes. Does NOT apply them automatically — queues them for
+Matthew's review.
 
-Every week Tony:
-1. Reviews his conversation performance scores
-2. Identifies his consistent failure patterns
-3. Updates his own knowledge base entries
-4. Flags capabilities that need building
-5. Writes a self-assessment that gets injected into his prompt
-
-This is the closest thing to genuine self-improvement possible
-without fine-tuning weights.
+This is the feedback loop that makes Tony better over time without
+needing Matthew to manually debug every regression.
 """
 import os
+import json
+import httpx
 import psycopg2
-from datetime import datetime
-from typing import Dict, List
-from app.core.model_router import gemini, gemini_json
+from typing import List, Dict
+
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
-async def run_self_improvement() -> Dict:
+def init_self_improvement_tables():
+    try:
+        conn = get_conn()
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tony_improvement_proposals (
+                id SERIAL PRIMARY KEY,
+                trigger_eval_run_id INT,
+                failure_pattern TEXT,
+                proposed_change TEXT,
+                proposed_rule TEXT,
+                evidence JSONB,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT NOW(),
+                applied_at TIMESTAMP,
+                dismissed_at TIMESTAMP
+            )
+        """)
+        cur.close()
+        conn.close()
+        print("[SELF_IMPROVEMENT] Tables initialised")
+    except Exception as e:
+        print(f"[SELF_IMPROVEMENT] Init failed: {e}")
+
+
+async def analyse_eval_failures(eval_run_id: int) -> List[Dict]:
     """
-    Tony's weekly self-improvement cycle.
-    Analyses performance and updates his own operating parameters.
+    Pull the latest eval run, find failed tests, analyse patterns, propose fixes.
+    Returns list of proposal dicts.
     """
     try:
         conn = get_conn()
         cur = conn.cursor()
-
-        # Get recent performance data
         cur.execute("""
-            SELECT lesson, score, action_type, created_at
-            FROM tony_learning_log
-            WHERE created_at > NOW() - INTERVAL '7 days'
-            AND lesson IS NOT NULL
-            ORDER BY score ASC  -- Start with worst performance
-            LIMIT 30
-        """)
-        lessons = cur.fetchall()
-
-        # Get behaviour rules
-        cur.execute("""
-            SELECT rule_text, confidence, evidence_count
-            FROM tony_behaviour_rules
-            WHERE active = TRUE
-            ORDER BY confidence DESC
-            LIMIT 15
-        """)
-        rules = cur.fetchall()
-
-        # Get recent alerts Tony created
-        cur.execute("""
-            SELECT title, body, created_at
-            FROM tony_alerts
-            WHERE created_at > NOW() - INTERVAL '7 days'
-            ORDER BY created_at DESC
-            LIMIT 10
-        """)
-        alerts = cur.fetchall()
-
+            SELECT summary FROM tony_eval_runs WHERE id = %s
+        """, (eval_run_id,))
+        row = cur.fetchone()
         cur.close()
         conn.close()
+        if not row:
+            return []
 
-        if not lessons:
-            return {"ok": False, "reason": "No lessons to analyse"}
+        summary = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        results = summary.get("results", [])
+        failures = [r for r in results if not r.get("passed")]
+        if not failures:
+            return []
 
-        lessons_text = "\n".join(
-            f"[Score: {l[1]:.1f}] {l[0]}" for l in lessons if l[0]
-        )
-        rules_text = "\n".join(f"- {r[0]} (confidence: {r[1]:.2f})" for r in rules)
+        # Group by category
+        by_cat = {}
+        for f in failures:
+            cat = f.get("category", "misc")
+            by_cat.setdefault(cat, []).append(f)
 
-        prompt = f"""You are Tony's self-improvement engine. Tony is an AI assistant for Matthew Lainton.
+        proposals = []
+        for cat, items in by_cat.items():
+            proposal = await _propose_fix_for_category(cat, items)
+            if proposal:
+                proposals.append(proposal)
 
-Tony's performance lessons from this week:
-{lessons_text}
+        # Save proposals
+        if proposals:
+            _save_proposals(eval_run_id, proposals)
 
-Tony's current behaviour rules:
-{rules_text}
-
-Analyse Tony's performance honestly and identify:
-1. What is Tony consistently getting wrong?
-2. What specific changes to his behaviour would fix these issues?
-3. What capabilities does Tony lack that would help Matthew most?
-4. Write a brief self-assessment Tony should carry into next week
-
-Be specific and critical. Generic observations are useless.
-
-Respond in JSON:
-{{
-    "failure_patterns": ["specific thing Tony keeps getting wrong"],
-    "behaviour_changes": ["specific change Tony should make"],
-    "capability_gaps": ["capability Tony needs that he doesn't have"],
-    "self_assessment": "Tony's honest assessment of his performance this week, written in first person as Tony",
-    "priority_improvement": "the single most important thing Tony should fix"
-}}"""
-
-        result = await gemini_json(prompt, task="reasoning", max_tokens=1024)
-        if not result:
-            return {"ok": False, "reason": "Gemini analysis failed"}
-
-        # Store self-assessment in knowledge base for prompt injection
-        if result.get("self_assessment"):
-            try:
-                conn = get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO tony_knowledge (domain, topic, content, confidence)
-                    VALUES ('self_knowledge', 'weekly_assessment', %s, 0.9)
-                    ON CONFLICT (domain, topic) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        updated_at = NOW()
-                """, (f"[Week of {datetime.utcnow().strftime('%d %b %Y')}] {result['self_assessment'][:500]}",))
-
-                # Add priority improvement as a new behaviour rule
-                if result.get("priority_improvement"):
-                    cur.execute("""
-                        INSERT INTO tony_behaviour_rules (rule_type, rule_text, confidence)
-                        VALUES ('self_improvement', %s, 0.8)
-                        ON CONFLICT DO NOTHING
-                    """, (result["priority_improvement"][:300],))
-
-                conn.commit()
-                cur.close()
-                conn.close()
-            except Exception as e:
-                print(f"[SELF_IMPROVEMENT] Storage failed: {e}")
-
-        print(f"[SELF_IMPROVEMENT] Cycle complete. Priority fix: {result.get('priority_improvement', 'none')[:80]}")
-        return {"ok": True, "result": result}
-
+        return proposals
     except Exception as e:
-        print(f"[SELF_IMPROVEMENT] Failed: {e}")
-        return {"ok": False, "error": str(e)}
+        print(f"[SELF_IMPROVEMENT] Analyse failed: {e}")
+        return []
+
+
+async def _propose_fix_for_category(category: str, failures: List[Dict]) -> Dict:
+    """Use Gemini to propose a prompt/rule fix for a cluster of failures."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+
+    failures_summary = "\n".join(
+        f"- Test {f['id']}: {'; '.join(f.get('failures', []))} | Response: {f.get('reply','')[:300]}"
+        for f in failures[:8]
+    )
+
+    prompt = f"""Tony (an AI assistant) just failed {len(failures)} tests in category '{category}'.
+Here are the failures:
+
+{failures_summary}
+
+Propose ONE specific change to Tony's behaviour rules or system prompt that would fix this
+class of failure. Be concrete — don't say 'be more careful', say 'add rule X to section Y'.
+
+Return STRICT JSON:
+{{
+  "failure_pattern": "short description of what's going wrong",
+  "proposed_change": "specific change to make — what file, what section, what exact text to add",
+  "proposed_rule": "a one-sentence rule for Tony's identity section (if applicable, else empty)",
+  "confidence": 0.0-1.0
+}}
+
+Respond with JSON only:"""
+
+    try:
+        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                json={
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 800, "temperature": 0.2}
+                }
+            )
+            r.raise_for_status()
+            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        if first < 0:
+            return None
+        data = json.loads(cleaned[first:last+1])
+        return {
+            "category": category,
+            "failure_pattern": data.get("failure_pattern", "")[:300],
+            "proposed_change": data.get("proposed_change", "")[:1500],
+            "proposed_rule": data.get("proposed_rule", "")[:500],
+            "confidence": float(data.get("confidence", 0.5)),
+            "evidence": {"failures": [{"id": f["id"], "failures": f.get("failures", [])}
+                                       for f in failures]},
+        }
+    except Exception as e:
+        print(f"[SELF_IMPROVEMENT] Propose failed: {e}")
+        return None
+
+
+def _save_proposals(eval_run_id: int, proposals: List[Dict]):
+    try:
+        conn = get_conn()
+        conn.autocommit = True
+        cur = conn.cursor()
+        for p in proposals:
+            cur.execute("""
+                INSERT INTO tony_improvement_proposals
+                    (trigger_eval_run_id, failure_pattern, proposed_change,
+                     proposed_rule, evidence)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (eval_run_id, p["failure_pattern"], p["proposed_change"],
+                  p["proposed_rule"], json.dumps(p.get("evidence", {}))))
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[SELF_IMPROVEMENT] Save failed: {e}")
+
+
+def list_pending_proposals(limit: int = 10) -> List[Dict]:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, trigger_eval_run_id, failure_pattern, proposed_change,
+                   proposed_rule, status, created_at
+            FROM tony_improvement_proposals
+            WHERE status = 'pending'
+            ORDER BY created_at DESC LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {"id": r[0], "eval_run_id": r[1], "pattern": r[2],
+             "change": r[3], "rule": r[4], "status": r[5],
+             "created_at": str(r[6])}
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def mark_proposal(proposal_id: int, status: str):
+    """status: 'applied' or 'dismissed'"""
+    try:
+        conn = get_conn()
+        conn.autocommit = True
+        cur = conn.cursor()
+        col = "applied_at" if status == "applied" else "dismissed_at"
+        cur.execute(f"""
+            UPDATE tony_improvement_proposals
+            SET status = %s, {col} = NOW()
+            WHERE id = %s
+        """, (status, proposal_id))
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[SELF_IMPROVEMENT] Mark failed: {e}")
+        return False

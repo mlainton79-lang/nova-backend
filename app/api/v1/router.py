@@ -72,6 +72,8 @@ from app.api.v1.endpoints import email_triage
 router.include_router(email_triage.router, tags=["triage"])
 from app.api.v1.endpoints import health_dashboard
 router.include_router(health_dashboard.router, tags=["health"])
+from app.api.v1.endpoints import self_improvement
+router.include_router(self_improvement.router, tags=["self_improvement"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
@@ -114,6 +116,7 @@ _inits = [
     ("app.skills.loader",               "register_skills_in_db",      "Skills registry"),
     ("app.core.fact_extractor",         "init_fact_tables",           "Fact extractor"),
     ("app.core.email_triage",           "init_triage_tables",         "Email triage"),
+    ("app.core.self_improvement",       "init_self_improvement_tables", "Self-improvement"),
 ]
 
 for module_path, fn_name, label in _inits:
