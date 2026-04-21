@@ -76,6 +76,8 @@ from app.api.v1.endpoints import self_improvement
 router.include_router(self_improvement.router, tags=["self_improvement"])
 from app.api.v1.endpoints import fabrication
 router.include_router(fabrication.router, tags=["fabrication"])
+from app.api.v1.endpoints import expenses
+router.include_router(expenses.router, tags=["expenses"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
@@ -120,6 +122,7 @@ _inits = [
     ("app.core.email_triage",           "init_triage_tables",         "Email triage"),
     ("app.core.self_improvement",       "init_self_improvement_tables", "Self-improvement"),
     ("app.core.fabrication_detector",   "init_fabrication_tables",    "Fabrication detector"),
+    ("app.core.receipt_extractor",      "init_expense_tables",        "Expense tracker"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 
