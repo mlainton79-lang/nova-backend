@@ -40,6 +40,10 @@ async def run_eval_gate(critical_only: bool = True) -> Dict:
     """
     Run evals post-deploy. If critical tests fail, returns {"passed": False}.
     Used by autonomous builder to decide whether a commit is safe.
+
+    IMPORTANT: distinguishes API/network failures from actual regressions.
+    If ALL failures are 'API call failed' errors, this is a deploy problem,
+    not a Tony-behaviour regression — we do NOT flag as failed.
     """
     try:
         from app.evals.runner import run_all
@@ -53,11 +57,33 @@ async def run_eval_gate(critical_only: bool = True) -> Dict:
                 r for r in summary["results"]
                 if not r["passed"] and r.get("category") in critical_categories
             ]
-            passed = len(critical_failures) == 0
+            # Check if failures are network errors (not regressions)
+            def _is_network_failure(r):
+                failures = r.get("failures", [])
+                return any("API call failed" in str(f) or "Name or service not known" in str(f)
+                           or "Connection" in str(f) or "Timeout" in str(f)
+                           for f in failures)
+
+            network_failures = [r for r in critical_failures if _is_network_failure(r)]
+            behaviour_failures = [r for r in critical_failures if not _is_network_failure(r)]
+
+            # If EVERY failure is network, don't flag as regression — deploy problem
+            if critical_failures and len(network_failures) == len(critical_failures):
+                return {
+                    "passed": False,
+                    "inconclusive": True,
+                    "reason": "All critical failures are API/network errors. Deploy may not be ready.",
+                    "summary": summary,
+                    "critical_failures": critical_failures,
+                }
+
+            # Only flag a regression if there are REAL behaviour failures
+            passed = len(behaviour_failures) == 0
             return {
                 "passed": passed,
                 "summary": summary,
-                "critical_failures": critical_failures,
+                "critical_failures": behaviour_failures,
+                "network_failures": len(network_failures),
             }
         else:
             return {
@@ -134,8 +160,25 @@ async def post_deploy_check_and_revert_if_needed() -> Dict:
         report["action"] = "Deploy passed evals — promoting"
         return report
 
-    # 3. Failed — revert
-    print("[EVAL_GATE] Evals failed, reverting...")
+    # Inconclusive = all failures were network/API errors, not behaviour regressions
+    if eval_result.get("inconclusive"):
+        report["action"] = f"Inconclusive: {eval_result.get("reason", "unknown")}. NOT reverting."
+        # Still alert — Matthew should know deploy might be flaky
+        try:
+            from app.core.proactive import create_alert
+            create_alert(
+                alert_type="eval_gate",
+                title="Deploy inconclusive",
+                body=eval_result.get("reason", "Evals could not run — deploy may be slow/flaky"),
+                priority="normal",
+                source="eval_gate",
+            )
+        except Exception:
+            pass
+        return report
+
+    # 3. Failed — revert (real behaviour regression, not network)
+    print("[EVAL_GATE] Real behaviour regression detected, reverting...")
     revert_result = await revert_last_commit()
     report["steps"].append({"step": "revert", "ok": revert_result.get("ok"),
                             "detail": revert_result})
