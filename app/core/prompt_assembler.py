@@ -285,13 +285,17 @@ async def build_prompt(
             from app.core.semantic_memory import search_memories
             memories = await search_memories(user_message, top_k=10)
             if memories:
+                # Extract text strings from dict results
+                texts = [m.get("text", "") if isinstance(m, dict) else str(m)
+                         for m in memories]
+                texts = [t for t in texts if t]
                 # Filter out memories mentioning banned topics
                 active_bans = _get_active_bans()
                 if active_bans:
-                    memories = [m for m in memories if not _has_banned_topic(m, active_bans)]
-                memories = memories[:6]
-                if memories:
-                    mem_text = "[RELEVANT MEMORIES]\n" + "\n".join(f"• {m}" for m in memories)
+                    texts = [t for t in texts if not _has_banned_topic(t, active_bans)]
+                texts = texts[:6]
+                if texts:
+                    mem_text = "[RELEVANT MEMORIES]\n" + "\n".join(f"• {t}" for t in texts)
                     add(mem_text, max_chars=800)
         except Exception as e:
             print(f"[PROMPT_ASSEMBLER] Memory: {e}")
