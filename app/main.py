@@ -225,6 +225,18 @@ async def autonomous_loop():
     await asyncio.sleep(300)  # 5 min after startup to let things settle
     while True:
         try:
+            # Budget guard — skip this iteration if autonomous work is frozen
+            try:
+                from app.core.budget_guard import is_autonomous_allowed, check_budget_and_freeze_if_needed
+                # Refresh budget state each iteration
+                check_budget_and_freeze_if_needed()
+                if not is_autonomous_allowed():
+                    print("[AUTONOMOUS] Budget frozen — sleeping 30 min")
+                    await asyncio.sleep(1800)
+                    continue
+            except Exception as e:
+                print(f"[AUTONOMOUS] Budget check failed (continuing): {e}")
+
             print(f"[AUTONOMOUS] Fast loop starting at {datetime.utcnow().isoformat()}")
 
             # Fast proactive work only — no heavy jobs

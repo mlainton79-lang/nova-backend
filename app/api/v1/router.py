@@ -46,6 +46,8 @@ from app.api.v1.endpoints import daily_review
 router.include_router(daily_review.router, tags=["daily_review"])
 from app.api.v1.endpoints import diary
 router.include_router(diary.router, tags=["diary"])
+from app.api.v1.endpoints import budget
+router.include_router(budget.router, tags=["budget"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription
@@ -129,6 +131,7 @@ _inits = [
     ("app.core.receipt_extractor",      "init_expense_tables",        "Expense tracker"),
     ("app.core.document_memory",        "init_document_memory_tables","Document memory"),
     ("app.core.tony_diary",             "init_diary_tables",          "Tony's diary"),
+    ("app.core.budget_guard",           "init_budget_tables",         "Budget guard"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
 ]
 
