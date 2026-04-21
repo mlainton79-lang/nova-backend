@@ -60,6 +60,8 @@ from app.api.v1.endpoints import retrieval
 router.include_router(retrieval.router, tags=["retrieval"])
 from app.api.v1.endpoints import outcomes
 router.include_router(outcomes.router, tags=["outcomes"])
+from app.api.v1.endpoints import artifacts
+router.include_router(artifacts.router, tags=["artifacts"])
 from app.api.v1.endpoints import handover
 router.include_router(handover.router, tags=["handover"])
 from app.api.v1.endpoints import transcription

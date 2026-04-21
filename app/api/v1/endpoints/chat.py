@@ -241,9 +241,23 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
         # Fire post-response tasks without blocking the response
         asyncio.create_task(_post_response_tasks(request.message, reply, provider_key))
 
-        return ChatResponse(
+        # Extract canvas-worthy artifacts (code, tables, lists, email drafts)
+        try:
+            from app.core.artifact_extractor import extract_artifacts
+            artifacts = extract_artifacts(reply, request.message)
+        except Exception:
+            artifacts = []
+
+        resp = ChatResponse(
             ok=True, provider=provider_key, reply=reply, latency_ms=latency_ms
         )
+        # ChatResponse is a Pydantic model — add artifacts via model_dump + construct
+        resp_dict = resp.model_dump()
+        if artifacts:
+            resp_dict["artifacts"] = artifacts
+        # Return as dict so artifacts pass through (backward compatible — field ignored by older clients)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=resp_dict)
 
     except Exception as e:
         latency_ms = int((time.time() - start) * 1000)
