@@ -15,9 +15,23 @@ def get_conn():
 @router.get("/proactive/briefing")
 async def get_briefing(_=Depends(verify_token)):
     """
-    Tony's startup briefing - fast, substantive, from live state.
-    Each query is wrapped independently so one failure doesn't cascade.
+    Tony's startup briefing. Tries intelligent LLM-synthesised version first;
+    falls back to fast DB-only bullets if that fails for any reason.
     """
+    # Try the intelligent briefing first — the Android app calls this endpoint
+    # and benefits from the richer synthesis automatically.
+    try:
+        from app.core.intelligent_briefing import get_intelligent_briefing
+        result = await get_intelligent_briefing()
+        if result.get("ok") and result.get("briefing"):
+            text = result["briefing"].strip()
+            # Only use smart result if it's not empty / not just fallback
+            if text and len(text) > 10:
+                return result
+    except Exception as e:
+        print(f"[BRIEFING] Smart version failed, falling back: {e}")
+
+    # Fallback: legacy DB-bullets briefing (was the only thing until now)
     briefing_parts = []
     conn = None
 
