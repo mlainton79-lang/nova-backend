@@ -59,6 +59,15 @@ COMMAND_PATTERNS = [
     (r'permanently forget (.+)', 'clear_topic'),
     (r'wipe (.+) from (?:your|my) memory', 'clear_topic'),
     (r'remove (.+) from (?:your|my) memory', 'clear_topic'),
+    # Smart briefing on demand
+    (r'^(?:what(?:\'s| is)? (?:new|up)|any updates?|anything (?:new|happening)|brief me|give me (?:a )?briefing|what(?:\'s| is)? (?:going on|happening))\??$', 'smart_brief'),
+    # Expense summary
+    (r'what.*spend.*(?:last|past) (\d+) days?', 'expense_summary'),
+    (r'my spending (?:this )?(?:week|month|last (?:week|month))', 'expense_summary'),
+    (r'how much have i spent', 'expense_summary'),
+    # Email triage
+    (r'^(?:urgent emails?|email triage|smart digest|urgent)\??$', 'smart_triage'),
+    (r'check.*urgent.*email', 'smart_triage'),
 ]
 
 
@@ -352,3 +361,45 @@ async def _clear_topic(topic: str) -> str:
         )
     except Exception as e:
         return f"Couldn't clear that — DB error: {e}"
+
+
+async def _smart_brief() -> str:
+    """Run the intelligent briefing."""
+    try:
+        from app.core.intelligent_briefing import get_intelligent_briefing
+        result = await get_intelligent_briefing()
+        return result.get("briefing", "All clear. Nothing needing you.")
+    except Exception as e:
+        return f"Couldn't generate brief — {str(e)[:100]}"
+
+
+async def _expense_summary(days: int = 30) -> str:
+    """Summarise recent spending."""
+    try:
+        from app.core.receipt_extractor import get_expense_summary
+        summary = get_expense_summary(days=days)
+        if summary.get("error") or summary.get("count", 0) == 0:
+            return f"No expenses tracked in the last {days} days. Photograph a receipt and I'll start logging."
+        total = summary["total"]
+        top_cats = summary.get("by_category", [])[:3]
+        cats_str = ", ".join(
+            f"{c['category']} £{c['total']:.0f}" for c in top_cats
+        ) if top_cats else "uncategorised"
+        return (f"Last {days} days: £{total:.2f} across {summary['count']} receipts. "
+                f"Biggest: {cats_str}.")
+    except Exception as e:
+        return f"Couldn't get expenses — {str(e)[:100]}"
+
+
+async def _smart_triage() -> str:
+    """Run smart email triage and summarise urgent items."""
+    try:
+        from app.core.email_triage import get_smart_digest
+        digest = await get_smart_digest()
+        if not digest.get("ok"):
+            return f"Couldn't check emails — {digest.get('error', 'unknown')}"
+        if digest.get("count", 0) == 0:
+            return "All caught up. No unread emails."
+        return digest.get("digest", "Checked. Nothing urgent.")
+    except Exception as e:
+        return f"Triage error — {str(e)[:100]}"
