@@ -171,6 +171,31 @@ def _has_banned_topic(text: str, bans: list) -> bool:
     return any(b in tl for b in bans)
 
 
+# Keywords that flip include_codebase=True on a chat/stream/council request.
+# Kept as a module-level constant so all three endpoint callers share the
+# same triggers. Two kinds:
+#   - technical: user is talking about code mechanics
+#   - self-reference: user is asking Tony to read or modify his own source
+#     (added after Tony was observed denying codebase access on prompts
+#     like "edit yourself")
+_CODEBASE_KEYWORDS = [
+    "code", "function", "file", "class", "bug", "error", "fix",
+    "kotlin", "python", "api", "push", "patch", "build", "nova",
+    "read your", "modify yourself", "edit yourself", "self-edit",
+    "your own code",
+]
+
+
+def _wants_codebase(message: str) -> bool:
+    """True if the user message should cause the codebase context block
+    to be injected into Tony's system prompt. Lowercase substring match
+    against _CODEBASE_KEYWORDS."""
+    if not message:
+        return False
+    ml = message.lower()
+    return any(k in ml for k in _CODEBASE_KEYWORDS)
+
+
 async def build_prompt(
     context: Optional[str] = None,
     location: Optional[str] = None,

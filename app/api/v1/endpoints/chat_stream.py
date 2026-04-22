@@ -720,10 +720,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
               "Describe what you see and answer the question concisely.")
     else:
         try:
-            from app.core.prompt_assembler import build_prompt
-            code_kw = ["code", "function", "file", "class", "bug", "error", "fix",
-                       "kotlin", "python", "api", "push", "patch", "build", "nova"]
-            inc_codebase = any(k in request.message.lower() for k in code_kw)
+            from app.core.prompt_assembler import build_prompt, _wants_codebase
+            inc_codebase = _wants_codebase(request.message)
             sp = await build_prompt(
                 context=request.context,
                 document_text=request.document_text,

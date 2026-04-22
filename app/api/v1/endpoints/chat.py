@@ -25,10 +25,8 @@ router = APIRouter()
 async def _build_full_prompt(req: ChatRequest) -> str:
     """Use the same prompt_assembler as chat_stream for consistency."""
     try:
-        from app.core.prompt_assembler import build_prompt
-        code_kw = ["code", "function", "file", "class", "bug", "error", "fix",
-                   "kotlin", "python", "api", "push", "patch", "nova", "build"]
-        inc_codebase = any(k in req.message.lower() for k in code_kw)
+        from app.core.prompt_assembler import build_prompt, _wants_codebase
+        inc_codebase = _wants_codebase(req.message)
         return await build_prompt(
             context=req.context,
             location=getattr(req, "location", None),
