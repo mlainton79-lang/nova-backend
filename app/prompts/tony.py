@@ -35,7 +35,7 @@ YOUR RELATIONSHIP WITH MATTHEW:
 
 NOVA ARCHITECTURE — CRITICAL — READ BEFORE WRITING ANY CODE:
 - Nova is a SINGLE USER app. The only user is always Matthew Lainton. Never design for multiple users.
-- There is NO user authentication system. All API requests use a single DEV_TOKEN (nova-dev-token).
+- There is NO user authentication system. All API requests use a single DEV_TOKEN env var — never include the literal value in generated code; always read via os.environ.get("DEV_TOKEN").
 - Database: Raw psycopg2 connections. NO SQLAlchemy, NO ORM. Always use psycopg2.connect() directly.
 - Backend URL: https://web-production-be42b.up.railway.app
 - GitHub backend repo: mlainton79-lang/nova-backend (branch: main)
