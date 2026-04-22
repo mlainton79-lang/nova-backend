@@ -295,6 +295,35 @@ def _get_stream(provider: str, message: str, history: list,
         return gemini_stream(message, history, system_prompt, image_base64=image_base64)
 
 
+async def _try_stream_first_chunk(provider: str, message: str, history: list,
+                                   system_prompt: str, image_base64: str = None):
+    """Start a provider stream and pull its first chunk so the caller can
+    decide whether to commit to this provider or fall back to the next.
+
+    Returns (iterator, first_chunk). Any pre-first-chunk failure surfaces
+    as a raised exception:
+      - StopAsyncIteration: provider exited cleanly with zero chunks
+      - Any other Exception: network error, HTTP 4xx/5xx (via f78e7a8
+        RuntimeError wrapper), JSON parse, timeout from an outer
+        asyncio.wait_for, cancellation, etc.
+
+    On failure we close the underlying async generator so httpx releases
+    its connection immediately rather than waiting for GC.
+    """
+    stream = _get_stream(provider, message, history, system_prompt,
+                         image_base64=image_base64)
+    iterator = stream.__aiter__()
+    try:
+        first_chunk = await iterator.__anext__()
+    except BaseException:
+        try:
+            await stream.aclose()
+        except Exception:
+            pass
+        raise
+    return iterator, first_chunk
+
+
 # ── Context gathering (all concurrent) ───────────────────────────────────────
 
 async def _gather_context(request: ChatRequest) -> dict:
@@ -583,10 +612,16 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     start = time.time()
     provider_key = request.provider.lower().strip()
 
-    # Smart model routing — if the client asked for 'auto' / 'smart' / empty,
-    # pick optimal provider. Previously this endpoint skipped routing entirely
-    # and silently fell through to gemini_stream for unknown provider strings.
-    if provider_key in ("auto", "smart", ""):
+    # Smart model routing — pick a primary provider AND a fallback chain
+    # when the client asked for 'auto' / 'smart' / empty. Manual provider
+    # picks (provider=gemini/claude/etc.) get chain=[that one] with no
+    # fallback: if the user named a provider, surface that provider's
+    # failure — don't silently swap. Only auto mode gets the graceful
+    # fallback behaviour.
+    is_auto_mode = provider_key in ("auto", "smart", "")
+    chain = [provider_key]  # default for manual mode
+
+    if is_auto_mode:
         try:
             from app.core.model_router_smart import choose_provider
             has_image = bool(getattr(request, "image_base64", None))
@@ -599,10 +634,19 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                 has_document=has_doc,
                 document_length=doc_len,
             )
-            provider_key = choice["provider"]
-            print(f"[SMART_ROUTER] Chose {provider_key}: {choice['rationale']}")
+            primary = choice["provider"]
+            fallbacks = choice.get("fallbacks", []) or []
+            # Ordered-unique chain: primary then fallbacks, dedup preserving
+            # order. SKIP_PROVIDERS has already been applied by
+            # model_router_smart._apply_skip so no extra filter needed here.
+            seen = set()
+            chain = [p for p in [primary] + list(fallbacks)
+                     if p and not (p in seen or seen.add(p))]
+            provider_key = primary  # preserved for failure-path log_request
+            print(f"[SMART_ROUTER] chain={chain}: {choice['rationale']}")
         except Exception as e:
-            print(f"[SMART_ROUTER] Failed (using gemini): {e}")
+            print(f"[SMART_ROUTER] Failed (using gemini-only): {e}")
+            chain = ["gemini"]
             provider_key = "gemini"
 
     # Command parser — handle action commands instantly
@@ -711,29 +755,93 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                f"don't repeat verbatim]\n{ctx['reasoning'][:800]}")
 
     # Stream response
+    # Budget for pre-first-chunk time across the entire fallback chain.
+    # Per-provider httpx timeouts are long (300s) so a generation can run
+    # freely once content starts flowing — this 30s cap only governs how
+    # long we'll wait cycling through dead providers before surfacing the
+    # error. 30s is enough for 2-3 realistic attempts even with slow
+    # providers and keeps the UX snappy when a chain is genuinely stuck.
+    CHAIN_FIRST_CHUNK_BUDGET = 30.0
+
     async def gen():
         parts = []
+        actual_provider = None
         try:
-            # Announce the resolved provider so clients can show "auto → claude"
-            # (or similar) instead of whatever the client originally sent.
-            yield "data: " + json.dumps({"type": "provider", "name": provider_key}) + "\n\n"
+            if not chain:
+                raise RuntimeError("empty provider chain")
 
-            stream_fn = _get_stream(
-                provider_key, request.message, request.history, sp,
-                image_base64=request.image_base64
-            )
-            async for chunk in stream_fn:
+            iterator = None
+            first_chunk = None
+            errors = []
+            chain_start = time.time()
+
+            for i, candidate in enumerate(chain):
+                elapsed = time.time() - chain_start
+                remaining = CHAIN_FIRST_CHUNK_BUDGET - elapsed
+                if remaining <= 0:
+                    errors.append(
+                        f"<budget {CHAIN_FIRST_CHUNK_BUDGET:.0f}s exhausted "
+                        f"before trying {candidate}>"
+                    )
+                    raise RuntimeError(
+                        f"chain exhausted budget after attempts: {errors}"
+                    )
+
+                try:
+                    iterator, first_chunk = await asyncio.wait_for(
+                        _try_stream_first_chunk(
+                            candidate, request.message, request.history, sp,
+                            request.image_base64,
+                        ),
+                        timeout=remaining,
+                    )
+                    actual_provider = candidate
+                    break
+                except StopAsyncIteration:
+                    err = f"{candidate}: produced no chunks"
+                    errors.append(err)
+                    if is_auto_mode and i < len(chain) - 1:
+                        print(f"[CHAT_STREAM] auto: {candidate} produced no chunks, trying {chain[i+1]}")
+                        continue
+                    raise RuntimeError(err)
+                except asyncio.TimeoutError:
+                    err = f"{candidate}: first-chunk timeout"
+                    errors.append(err)
+                    if is_auto_mode and i < len(chain) - 1:
+                        print(f"[CHAT_STREAM] auto: {candidate} timed out (first-chunk), trying {chain[i+1]}")
+                        continue
+                    raise RuntimeError(err)
+                except Exception as e:
+                    err = f"{candidate}: {type(e).__name__}: {redact(str(e))[:300]}"
+                    errors.append(err)
+                    if is_auto_mode and i < len(chain) - 1:
+                        print(f"[CHAT_STREAM] auto: {candidate} failed ({err}), trying {chain[i+1]}")
+                        continue
+                    raise
+
+            # First-chunk commitment point: we now have a working provider.
+            # Emit the provider event with whoever actually succeeded (not
+            # necessarily the primary the router picked) and flush the
+            # first chunk we already pulled.
+            yield "data: " + json.dumps({"type": "provider", "name": actual_provider}) + "\n\n"
+            if first_chunk:
+                parts.append(first_chunk)
+                yield "data: " + json.dumps({"type": "chunk", "text": first_chunk}) + "\n\n"
+
+            async for chunk in iterator:
                 if chunk:
                     parts.append(chunk)
                     yield "data: " + json.dumps({"type": "chunk", "text": chunk}) + "\n\n"
 
             full = "".join(parts)
             latency = int((time.time() - start) * 1000)
-            log_request(provider=provider_key, message=request.message,
+            log_request(provider=actual_provider, message=request.message,
                         reply=full[:500], latency_ms=latency, ok=True)
 
-            # Fire post-response tasks without blocking
-            asyncio.create_task(_post_response_tasks(request.message, full, provider_key))
+            # Fire post-response tasks without blocking. Use actual_provider
+            # so telemetry (learning, self-eval, outcome tracking) reflects
+            # who actually produced the reply, not the router's first pick.
+            asyncio.create_task(_post_response_tasks(request.message, full, actual_provider))
 
             # Auto-ingest document OR image content to long-term memory
             async def _ingest_doc():
