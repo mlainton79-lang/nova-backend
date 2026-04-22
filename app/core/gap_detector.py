@@ -50,6 +50,54 @@ def init_gap_tables():
             )
         """)
 
+        # Human-approval staging queue for autonomous capability builds.
+        # Populated by _background_build after stage-validation passes;
+        # drained by POST /api/v1/builder/approve/{request_id} (pushes + deploys)
+        # or POST /api/v1/builder/reject/{request_id} (deletes the row).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pending_capabilities (
+                id                     SERIAL PRIMARY KEY,
+                request_id             INT NOT NULL REFERENCES tony_capability_requests(id),
+                capability_name        TEXT NOT NULL,
+                capability_description TEXT NOT NULL,
+                user_message           TEXT,
+                filename               TEXT NOT NULL,
+                module_name            TEXT NOT NULL,
+                generated_code         TEXT NOT NULL,
+                env_vars_needed        TEXT,
+                providers_used         TEXT,
+                validation_report      TEXT,
+                status                 TEXT DEFAULT 'pending',
+                created_at             TIMESTAMP DEFAULT NOW(),
+                decided_at             TIMESTAMP,
+                decision_notes         TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_capabilities_status
+            ON pending_capabilities(status) WHERE status = 'pending'
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_capabilities_request
+            ON pending_capabilities(request_id)
+        """)
+
+        # Abandoned-build cleanup: any 'building' row older than 1h has
+        # outlived the asyncio task that could resume it (Railway restart
+        # or process crash will kill in-memory tasks). Mark them abandoned
+        # so the request log reflects reality. Idempotent — matches zero
+        # rows on subsequent deploys.
+        cur.execute("""
+            UPDATE tony_capability_requests
+            SET status = 'abandoned', completed_at = NOW()
+            WHERE status = 'building'
+              AND started_at < NOW() - INTERVAL '1 hour'
+            RETURNING id
+        """)
+        abandoned = cur.rowcount
+        if abandoned:
+            print(f"[GAP_DETECTOR] Marked {abandoned} stuck 'building' row(s) as 'abandoned'")
+
         # One-shot idempotent cleanup for the broken auto-built post_to_vinted
         # capability (hallucinated Vinted signing protocol, non-functional).
         # File + router wiring already removed in this commit; these UPDATEs
@@ -228,66 +276,83 @@ async def start_autonomous_build(capability_name: str, description: str, user_me
 
 async def _background_build(request_id: int, capability_name: str, description: str):
     """
-    Runs the full build pipeline in background, retrying with different
-    approaches if needed.
+    Stage-only background pipeline: generate + validate code, then insert
+    a pending_capabilities row and fire a review alert. Does NOT push to
+    GitHub or deploy. The human reviewer drains the queue via
+    POST /api/v1/builder/approve/{request_id} or /reject/{request_id}.
+
+    Retries up to 3 times on generation/validation failure with varied
+    approach hints (same as before the approval gate landed).
     """
     MAX_ATTEMPTS = 3
     approaches_tried = []
 
     try:
-        from app.core.capability_builder import build_capability
+        from app.core.capability_builder import build_capability_stage, extract_imports
     except Exception as e:
         _mark_failed(request_id, f"Builder import failed: {e}")
         return
 
+    user_message = _get_user_message(request_id)
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             _update_attempt(request_id, attempt)
-            print(f"[GAP_DETECTOR] Build attempt {attempt} for {capability_name}")
+            print(f"[GAP_DETECTOR] Stage attempt {attempt} for {capability_name}")
 
-            # On retries, vary the approach
             desc_for_attempt = description
             if attempt == 2:
                 desc_for_attempt = f"{description} (prefer the simplest free approach; avoid paid APIs if possible)"
             elif attempt == 3:
                 desc_for_attempt = f"{description} (fall back to browser automation / scraping if direct API unavailable)"
 
-            report = await build_capability(capability_name, desc_for_attempt)
+            result = await build_capability_stage(capability_name, desc_for_attempt)
             approaches_tried.append({
                 "attempt": attempt,
                 "description": desc_for_attempt,
-                "success": report.get("success", False),
-                "steps": [s for s in report.get("steps", []) if not s.get("ok")]
+                "success": result.get("ok", False),
+                "steps": [s for s in result.get("steps", []) if not s.get("ok")],
             })
 
-            if report.get("success"):
-                _mark_success(request_id, report, approaches_tried)
+            if result.get("ok"):
+                artifacts = result["artifacts"]
+                pending_id = _insert_pending(
+                    request_id=request_id,
+                    capability_name=capability_name,
+                    capability_description=desc_for_attempt,
+                    user_message=user_message,
+                    artifacts=artifacts,
+                    validation_report=result.get("steps", []),
+                )
+                if pending_id <= 0:
+                    # Insert failed — mark the request failed and move on.
+                    _mark_failed(request_id, "pending_capabilities INSERT failed",
+                                 approaches_tried)
+                    return
 
-                # Create alert for Matthew
-                try:
-                    from app.core.proactive import create_alert
-                    create_alert(
-                        alert_type="capability_built",
-                        title=f"Built: {capability_name}",
-                        body=f"{description}\n\nReady in ~60 seconds once Railway deploys. {report.get('note', '')}",
-                        priority="high",
-                        source="gap_detector",
-                        expires_hours=72
-                    )
-                except Exception:
-                    pass
+                _mark_pending_review(request_id,
+                                     approach_log={"approaches": approaches_tried})
 
+                imports = extract_imports(artifacts["code"])
+                _create_pending_alert(
+                    capability_name=capability_name,
+                    description=desc_for_attempt,
+                    user_message=user_message,
+                    request_id=request_id,
+                    imports=imports,
+                    env_vars=artifacts.get("env_vars", []) or [],
+                    providers_used=artifacts.get("providers_used", []) or [],
+                )
+                print(f"[GAP_DETECTOR] Staged '{capability_name}' for review "
+                      f"(request_id={request_id}, pending_id={pending_id})")
                 return
 
         except Exception as e:
-            approaches_tried.append({
-                "attempt": attempt,
-                "error": str(e)[:500]
-            })
+            approaches_tried.append({"attempt": attempt, "error": str(e)[:500]})
             print(f"[GAP_DETECTOR] Attempt {attempt} failed: {e}")
 
     # All attempts failed
-    _mark_failed(request_id, "All approaches failed", approaches_tried)
+    _mark_failed(request_id, "All staging attempts failed", approaches_tried)
     try:
         from app.core.proactive import create_alert
         summary = "\n".join(
@@ -300,10 +365,117 @@ async def _background_build(request_id: int, capability_name: str, description: 
             body=f"Tried {MAX_ATTEMPTS} approaches.\n\n{summary}\n\nLet me know if you want to talk through it.",
             priority="normal",
             source="gap_detector",
-            expires_hours=168
+            expires_hours=168,
         )
     except Exception:
         pass
+
+
+# Imports that deserve extra attention when they appear in autonomously-
+# generated code. Shown front-and-centre in the review alert body so the
+# approver can spot surprising capability at a glance.
+_NOTABLE_IMPORTS = {
+    "subprocess", "socket", "ctypes", "shutil", "os", "sys",
+    "builtins", "importlib", "pickle", "marshal", "eval", "exec",
+}
+
+
+def _create_pending_alert(capability_name: str, description: str,
+                          user_message: str, request_id: int,
+                          imports: list, env_vars: list,
+                          providers_used: list):
+    try:
+        from app.core.proactive import create_alert
+        notable = [i for i in imports if i in _NOTABLE_IMPORTS]
+        imports_line = f"Imports: {', '.join(imports) if imports else '(none)'}"
+        if notable:
+            imports_line += f"\n⚠ Notable: {', '.join(notable)}"
+        body = (
+            f"{description}\n\n"
+            f"Original message: \"{(user_message or '')[:240]}\"\n\n"
+            f"Code generated and validated. Waiting on your approval "
+            f"before anything touches production.\n\n"
+            f"Review:  GET  /api/v1/builder/pending\n"
+            f"Approve: POST /api/v1/builder/approve/{request_id}\n"
+            f"Reject:  POST /api/v1/builder/reject/{request_id}\n\n"
+            f"{imports_line}\n"
+            f"Providers used: {', '.join(providers_used) or '(none)'}\n"
+            f"Env vars required: {', '.join(env_vars) or 'none'}"
+        )
+        create_alert(
+            alert_type="capability_pending_review",
+            title=f"Review pending: Tony wants to build '{capability_name}'",
+            body=body,
+            priority="high",
+            source="builder_pending",
+            expires_hours=168,
+            dedup_key=f"pending_build:{capability_name}",
+        )
+    except Exception as e:
+        print(f"[GAP_DETECTOR] Alert creation failed: {e}")
+
+
+def _insert_pending(request_id: int, capability_name: str,
+                    capability_description: str, user_message: str,
+                    artifacts: dict, validation_report: list) -> int:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO pending_capabilities
+                (request_id, capability_name, capability_description, user_message,
+                 filename, module_name, generated_code, env_vars_needed,
+                 providers_used, validation_report, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+            RETURNING id
+        """, (
+            request_id, capability_name, capability_description, user_message,
+            artifacts["filename"], artifacts["module_name"], artifacts["code"],
+            json.dumps(artifacts.get("env_vars", []) or []),
+            json.dumps(artifacts.get("providers_used", []) or []),
+            json.dumps(validation_report or []),
+        ))
+        pending_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return pending_id
+    except Exception as e:
+        print(f"[GAP_DETECTOR] _insert_pending failed: {e}")
+        return -1
+
+
+def _get_user_message(request_id: int) -> str:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_message FROM tony_capability_requests WHERE id = %s",
+            (request_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else ""
+    except Exception:
+        return ""
+
+
+def _mark_pending_review(request_id: int, approach_log: dict = None):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_capability_requests
+            SET status = 'pending_review',
+                approach_log = %s
+            WHERE id = %s
+        """, (json.dumps(approach_log or {}), request_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[GAP_DETECTOR] _mark_pending_review failed: {e}")
 
 
 def _update_attempt(request_id: int, attempt: int):

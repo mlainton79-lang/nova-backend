@@ -229,6 +229,27 @@ CODE:
         return best
 
 
+def extract_imports(code: str) -> list:
+    """Return a sorted de-duped list of top-level module names imported by
+    the generated code. Used at approval time to surface surprising imports
+    (subprocess, socket, ctypes, etc.) in the review alert — a lightweight
+    security scan visible before anything deploys."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name:
+                    found.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                found.add(node.module.split(".")[0])
+    return sorted(found)
+
+
 def validate_code(code: str) -> dict:
     """Syntax check, safety, AND name/import validation."""
     issues = []
@@ -473,77 +494,105 @@ def register_capability(name: str, description: str, endpoint: str):
         print(f"[BUILDER] Registry update failed: {e}")
 
 
-async def build_capability(capability_name: str, capability_description: str) -> dict:
+async def build_capability_stage(capability_name: str, capability_description: str) -> dict:
     """
-    Full pipeline: research → generate → validate → deploy → register.
-    Returns a status report.
+    Stage-only build: research → generate → validate → runtime-import-check.
+    No network side effects against GitHub or the capability registry.
+
+    Returns:
+      {"ok": True, "steps": [...], "artifacts": {filename, module_name, code, env_vars, providers_used}}
+      {"ok": False, "error": "...", "steps": [...], "code_for_review"?: str}
     """
-    report = {
-        "capability": capability_name,
-        "description": capability_description,
-        "steps": []
-    }
-    
+    report_steps = []
+
     def step(name, result, ok):
-        report["steps"].append({"step": name, "result": result, "ok": ok})
-        print(f"[BUILDER] {name}: {'✓' if ok else '✗'} {result[:100] if isinstance(result,str) else ''}")
-    
+        report_steps.append({"step": name, "result": result, "ok": ok})
+        print(f"[BUILDER] {name}: {'✓' if ok else '✗'} {result[:100] if isinstance(result, str) else ''}")
+
     # 1. Research
     research = await research_capability(capability_description)
     step("research", f"Found {len(research.split(chr(10)))} research items", True)
-    
+
     # 2. Generate code
     gen = await generate_capability_code(capability_name, capability_description, research)
     if not gen["ok"]:
         step("generate", gen.get("error", "Generation failed"), False)
-        report["success"] = False
-        return report
+        return {"ok": False, "error": gen.get("error", "Generation failed"), "steps": report_steps}
     step("generate", f"Generated {len(gen['code'])} chars for {gen['filename']}", True)
-    
-    # 3. Validate (syntax + undefined name check)
+
+    # 3. Validate (syntax + undefined name check + banned patterns)
     validation = validate_code(gen["code"])
     if not validation["valid"]:
         step("validate", validation["error"], False)
-        report["success"] = False
-        report["code_for_review"] = gen["code"]
-        return report
+        return {"ok": False, "error": validation["error"], "steps": report_steps,
+                "code_for_review": gen["code"]}
     step("validate", "Code passed syntax and safety checks", True)
 
-    # 3b. Runtime import check — actually load the code to catch runtime errors
-    # that static analysis misses (e.g. missing imports, syntax-valid but broken)
+    # 3b. Runtime import check — isolated-namespace load
     module_name = gen["filename"].split("/")[-1].replace(".py", "")
     runtime_check = runtime_import_check(gen["code"], module_name)
     if not runtime_check["ok"]:
         step("runtime_check", runtime_check["error"], False)
-        report["success"] = False
-        report["code_for_review"] = gen["code"]
-        report["note"] = "Runtime import check failed — code not pushed. Prevented a production breakage."
-        return report
+        return {"ok": False, "error": runtime_check["error"], "steps": report_steps,
+                "code_for_review": gen["code"]}
     step("runtime_check", "Code imports cleanly", True)
-    
+
+    return {
+        "ok": True,
+        "steps": report_steps,
+        "artifacts": {
+            "filename": gen["filename"],
+            "module_name": module_name,
+            "code": gen["code"],
+            "env_vars": gen.get("env_vars", []),
+            "providers_used": gen.get("providers_used", []),
+        },
+    }
+
+
+async def deploy_capability_stage(capability_name: str, capability_description: str,
+                                   artifacts: dict) -> dict:
+    """
+    Deploy half: push to GitHub → wire router → register → schedule eval gate.
+    Called only from POST /builder/approve/{request_id} after a human review
+    of the staged artifacts.
+    """
+    report = {"capability": capability_name, "description": capability_description, "steps": []}
+
+    def step(name, result, ok):
+        report["steps"].append({"step": name, "result": result, "ok": ok})
+        print(f"[BUILDER] {name}: {'✓' if ok else '✗'} {result[:100] if isinstance(result, str) else ''}")
+
+    filename = artifacts["filename"]
+    module_name = artifacts["module_name"]
+    code = artifacts["code"]
+    env_vars = artifacts.get("env_vars", []) or []
+
     # 4. Push to GitHub
-    push_result = await push_capability_to_github(gen["filename"], gen["code"], capability_name)
+    push_result = await push_capability_to_github(filename, code, capability_name)
     if not push_result["ok"]:
         step("push", push_result.get("error", "Push failed"), False)
         report["success"] = False
+        report["error"] = push_result.get("error", "Push failed")
         return report
-    step("push", f"Pushed to GitHub: {push_result.get('url','')}", True)
-    
+    step("push", f"Pushed to GitHub: {push_result.get('url', '')}", True)
+
     # 5. Wire into router
     router_result = await update_router_for_capability(capability_name, module_name)
-    step("router", "Wired into router" if router_result["ok"] else router_result.get("error",""), router_result["ok"])
-    
-    # 6. Register capability
+    step("router",
+         "Wired into router" if router_result["ok"] else router_result.get("error", ""),
+         router_result["ok"])
+
+    # 6. Register in capability registry
     register_capability(capability_name, capability_description, f"/api/v1/{module_name}")
     step("register", "Added to capability registry", True)
-    
-    # 7. Note any env vars needed
-    if gen["env_vars"]:
-        report["env_vars_needed"] = gen["env_vars"]
-        step("env_vars", f"You need to add to Railway: {', '.join(gen['env_vars'])}", True)
-    
-    # 8. Schedule post-deploy eval gate — if this commit broke anything critical,
-    # Tony will revert automatically.
+
+    # 7. Env vars note
+    if env_vars:
+        report["env_vars_needed"] = env_vars
+        step("env_vars", f"Add to Railway: {', '.join(env_vars)}", True)
+
+    # 8. Schedule post-deploy eval gate — auto-reverts if critical tests fail
     try:
         import asyncio
         from app.core.eval_gate import post_deploy_check_and_revert_if_needed
@@ -553,5 +602,38 @@ async def build_capability(capability_name: str, capability_description: str) ->
         step("eval_gate_scheduled", str(e), False)
 
     report["success"] = True
-    report["note"] = "Railway is deploying now. Eval gate will check and auto-revert if critical tests fail."
+    report["note"] = "Railway deploying now. Eval gate will check and auto-revert if critical tests fail."
     return report
+
+
+async def build_capability(capability_name: str, capability_description: str) -> dict:
+    """
+    DEPRECATED direct-deploy form. Since the approval gate landed, this
+    wrapper routes through the staging pipeline: it schedules generation +
+    validation in the background and returns the request_id. The caller
+    must approve via POST /api/v1/builder/approve/{request_id} before
+    anything touches production.
+
+    Returns success=False deliberately — "successfully deployed" is no
+    longer a possible outcome of a single call. Callers that treat
+    success=True as "capability is live" (e.g. tony_mission) will correctly
+    see False until the human approves and the eventual deploy completes.
+    """
+    from app.core.gap_detector import start_autonomous_build
+    request_id = await start_autonomous_build(
+        capability_name=capability_name,
+        description=capability_description,
+        user_message=f"manual build request: {capability_description}",
+    )
+    return {
+        "capability": capability_name,
+        "description": capability_description,
+        "steps": [],
+        "success": False,
+        "request_id": request_id,
+        "status": "pending_review" if request_id > 0 else "failed_to_stage",
+        "note": (f"Staged for review. Approve via "
+                 f"POST /api/v1/builder/approve/{request_id}"
+                 if request_id > 0
+                 else "Failed to start staging; see server logs."),
+    }
