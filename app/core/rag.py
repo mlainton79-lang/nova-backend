@@ -106,26 +106,25 @@ def init_rag_tables():
 
 
 async def embed_text(text: str) -> Optional[List[float]]:
-    """Get embedding vector from Gemini free tier. Tries multiple models."""
+    """Get embedding vector from Gemini. Returns None on any failure."""
     if not text.strip():
         return None
-    models_to_try = ["gemini-embedding-001", "gemini-embedding-2-preview"]
+    model = "gemini-embedding-001"
     async with httpx.AsyncClient(timeout=5.0) as client:
-        for model in models_to_try:
-            try:
-                resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={GEMINI_API_KEY}",
-                    json={"model": f"models/{model}", "content": {"parts": [{"text": text[:8000]}]}, "taskType": "RETRIEVAL_DOCUMENT"}
-                )
-                if resp.status_code == 200:
-                    values = resp.json().get("embedding", {}).get("values")
-                    if values:
-                        return values
-                    print(f"[RAG] Embed {model}: 200 but no values. Response: {resp.text[:200]}")
-                else:
-                    print(f"[RAG] Embed {model}: {resp.status_code} — {resp.text[:200]}")
-            except Exception as e:
-                print(f"[RAG] Embed {model} exception: {e}")
+        try:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={GEMINI_API_KEY}",
+                json={"model": f"models/{model}", "content": {"parts": [{"text": text[:8000]}]}, "taskType": "RETRIEVAL_DOCUMENT"}
+            )
+            if resp.status_code == 200:
+                values = resp.json().get("embedding", {}).get("values")
+                if values:
+                    return values
+                print(f"[RAG] Embed {model}: 200 but no values. Response: {resp.text[:200]}")
+            else:
+                print(f"[RAG] Embed {model}: {resp.status_code} — {resp.text[:200]}")
+        except Exception as e:
+            print(f"[RAG] Embed {model} exception: {e}")
     return None
 
 
