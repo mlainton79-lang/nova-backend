@@ -68,7 +68,7 @@ Return JSON only:
                             {"text": prompt}
                         ]
                     }],
-                    "generationConfig": {"maxOutputTokens": 512, "temperature": 0.1}
+                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.1}
                 }
             )
             r.raise_for_status()
@@ -244,7 +244,7 @@ Respond in JSON:
                 f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
                 json={
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.3}
+                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.3}
                 }
             )
             r.raise_for_status()
