@@ -15,7 +15,7 @@ import re
 import json
 import logging
 import httpx
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -23,8 +23,17 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
 
-async def identify_item(image_base64: str, image_mime: str = "image/jpeg") -> Dict:
-    """Use Gemini Vision to identify what the item is."""
+async def identify_item(
+    image_base64: str = "",
+    image_mime: str = "image/jpeg",
+    images: Optional[List[Dict]] = None,
+) -> Dict:
+    """Use Gemini Vision to identify what the item is.
+
+    Accepts either a single image (image_base64 + image_mime) or a list of
+    image dicts with shape {"base64": ..., "mime": ...} via `images`.
+    If `images` is non-empty, it takes precedence.
+    """
     fallback = {
         "item_name": "Unknown item",
         "brand": "",
@@ -35,10 +44,22 @@ async def identify_item(image_base64: str, image_mime: str = "image/jpeg") -> Di
         "color": "",
         "material": "",
         "search_query": "",
+        "suggested_uk_resale_price": None,
+        "price_reasoning": "",
+        "parcel_size": "medium",
+        "confidence": "low",
         "_fallback": True,
     }
     if not GEMINI_API_KEY:
         log.warning("[VINTED] identify_item: GEMINI_API_KEY not configured, using fallback")
+        return fallback
+
+    if images:
+        image_items = images
+    elif image_base64:
+        image_items = [{"base64": image_base64, "mime": image_mime}]
+    else:
+        log.warning("[VINTED] identify_item called with no images, using fallback")
         return fallback
 
     prompt = """You are helping sell an item on Vinted/eBay. Identify this item precisely.
@@ -53,21 +74,32 @@ Return JSON only:
     "key_features": ["notable features that affect value"],
     "color": "primary colour e.g. black, navy, multicoloured",
     "material": "primary material e.g. cotton, leather, polyester",
+    "suggested_uk_resale_price": 15,
+    "price_reasoning": "one sentence explaining the price, e.g. 'Sky Q remotes typically sell for £8-12 used on eBay UK'",
+    "parcel_size": "small",
+    "confidence": "high",
     "search_query": "best search query to find sold prices on eBay e.g. Nike Air Max 90 size 9"
-}"""
+}
+
+Field guidance:
+- suggested_uk_resale_price: realistic UK resale price in GBP as a NUMBER (not a string). Base on item type, brand, condition, and what it would typically sell for on Vinted or eBay UK.
+- parcel_size: one of "small", "medium", "large". Small = fits in a shoebox. Medium = larger than a shoebox but under 60x40x30cm. Large = bigger than that.
+- confidence: one of "high", "medium", "low". Use "low" for items that might be rare/collectible and need manual valuation (rare books, vinyl records, antiques, signed items, vintage toys).
+
+If multiple images are provided, they show the same item from different angles. Synthesise across all of them."""
+
+    parts = [
+        {"inline_data": {"mime_type": img.get("mime", "image/jpeg"), "data": img.get("base64", "")}}
+        for img in image_items
+    ]
+    parts.append({"text": prompt})
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
                 json={
-                    "contents": [{
-                        "role": "user",
-                        "parts": [
-                            {"inline_data": {"mime_type": image_mime, "data": image_base64}},
-                            {"text": prompt}
-                        ]
-                    }],
+                    "contents": [{"role": "user", "parts": parts}],
                     "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.1}
                 }
             )
@@ -193,6 +225,7 @@ async def draft_listing(
             "condition": condition,
             "category_suggestion": item_info.get("category", ""),
             "tips": [],
+            "parcel_size": item_info.get("parcel_size", "medium"),
             "_fallback": True,
         }
 
@@ -257,25 +290,31 @@ Respond in JSON:
 
 
 async def full_listing_pipeline(
-    image_base64: str,
+    image_base64: str = "",
     image_mime: str = "image/jpeg",
     platform: str = "vinted",
     condition: str = "good",
-    user_notes: str = ""
+    user_notes: str = "",
+    images: Optional[List[Dict]] = None,
 ) -> Dict:
     """
-    Full pipeline: photo → identification → price research → listing.
+    Full pipeline: photo(s) → identification → price research → listing.
     Returns everything Tony needs to post the listing.
     """
     warnings = []
 
     # Step 1: Identify the item
     print("[VINTED] Identifying item from photo...")
-    item_info = await identify_item(image_base64, image_mime)
+    item_info = await identify_item(
+        image_base64=image_base64,
+        image_mime=image_mime,
+        images=images,
+    )
     if item_info.pop("_fallback", False):
         warnings.append("vision_identification")
 
-    # Step 2: Research prices
+    # Step 2: Research prices via Brave. Retained for reference URLs / snippets;
+    # no longer the primary price source (Gemini's estimate wins if usable).
     search_query = item_info.get("search_query", item_info.get("item_name", ""))
     if search_query:
         print(f"[VINTED] Researching prices for: {search_query}")
@@ -285,9 +324,21 @@ async def full_listing_pipeline(
     if price_data.pop("_fallback", False):
         warnings.append("price_research")
 
+    # Step 2.5: Choose price source. Gemini's suggested_uk_resale_price is
+    # primary if usable (positive int/float); otherwise fall back to Brave.
+    gemini_price = item_info.get("suggested_uk_resale_price")
+    if isinstance(gemini_price, (int, float)) and gemini_price > 0:
+        effective_price_data = {
+            "suggested_price": gemini_price,
+            "source": "gemini",
+            "reasoning": item_info.get("price_reasoning", ""),
+        }
+    else:
+        effective_price_data = price_data
+
     # Step 3: Draft listing
     print("[VINTED] Drafting listing...")
-    listing = await draft_listing(item_info, price_data, platform, condition)
+    listing = await draft_listing(item_info, effective_price_data, platform, condition)
     if listing.pop("_fallback", False):
         warnings.append("listing_draft")
 
