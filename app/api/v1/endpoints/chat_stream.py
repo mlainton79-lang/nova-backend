@@ -137,7 +137,7 @@ async def claude_stream(message: str, history: list, system_prompt: str,
 async def openai_stream(message: str, history: list, system_prompt: str):
     """Real SSE streaming from OpenAI."""
     from app.utils.history import to_openai_history
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+    model = os.environ.get("OPENAI_MODEL", "gpt-5.4")
     messages = [{"role": "system", "content": system_prompt}]
     messages += to_openai_history(history)
     messages.append({"role": "user", "content": message})

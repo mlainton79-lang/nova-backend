@@ -7,7 +7,7 @@ from app.utils.history import to_openai_history
 from app.core.secrets_redact import redact
 
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
-MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-large-latest")
 
 class MistralAdapter(ProviderAdapter):
     async def chat(self, message: str, history: List[HistoryMessage], system_prompt: str) -> str:

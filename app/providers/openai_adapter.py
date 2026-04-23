@@ -1,3 +1,4 @@
+import os
 import httpx
 from typing import List
 from app.providers.base import ProviderAdapter
@@ -5,6 +6,8 @@ from app.schemas.chat import HistoryMessage
 from app.utils.history import to_openai_history
 from app.core.config import OPENAI_API_KEY
 from app.core.secrets_redact import redact
+
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4")
 
 class OpenAIAdapter(ProviderAdapter):
     async def chat(self, message: str, history: List[HistoryMessage], system_prompt: str) -> str:
@@ -23,9 +26,9 @@ class OpenAIAdapter(ProviderAdapter):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": OPENAI_MODEL,
                     "messages": messages,
-                    "max_tokens": 1000
+                    "max_tokens": 4096
                 }
             )
             if response.status_code >= 400:

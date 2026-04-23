@@ -7,7 +7,7 @@ from app.utils.history import to_openai_history
 from app.core.secrets_redact import redact
 
 XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
-XAI_MODEL = os.environ.get("XAI_MODEL", "grok-3-mini")
+XAI_MODEL = os.environ.get("XAI_MODEL", "grok-4")
 
 class XAIAdapter(ProviderAdapter):
     async def chat(self, message: str, history: List[HistoryMessage], system_prompt: str) -> str:
