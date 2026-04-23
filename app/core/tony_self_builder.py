@@ -103,7 +103,7 @@ async def _claude(prompt: str) -> Optional[str]:
                     "content-type": "application/json"
                 },
                 json={
-                    "model": "claude-sonnet-4-6",
+                    "model": os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7"),
                     "max_tokens": 8192,
                     "messages": [{"role": "user", "content": prompt}]
                 }

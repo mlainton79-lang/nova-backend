@@ -103,7 +103,7 @@ async def call_provider(provider: str, prompt: str) -> str:
             r = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                json={"model": "openrouter/auto", "messages": [{"role": "user", "content": prompt}],
+                json={"model": os.environ.get("OPENROUTER_MODEL", "openrouter/auto"), "messages": [{"role": "user", "content": prompt}],
                       "max_tokens": 4096, "temperature": 0.1}
             )
             r.raise_for_status()
