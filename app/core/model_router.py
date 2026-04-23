@@ -10,20 +10,24 @@ Never use Flash when Pro would give a meaningfully better answer.
 Never use Pro when Flash is fast enough and accurate enough.
 """
 import os
-import httpx
 import re
 import json
+import logging
 from typing import Optional
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+from app.core import gemini_client
 
-# Models
-GEMINI_PRO = "gemini-2.5-pro"
-GEMINI_FLASH = "gemini-2.5-flash"
+log = logging.getLogger(__name__)
+
+# Sentinel tier values used by choose_model() for task classification.
+# The actual model strings sent to Gemini live in app/core/gemini_client.py
+# (env: GEMINI_PRO_PRIMARY / GEMINI_PRO_FALLBACK / GEMINI_FLASH_MODEL).
+GEMINI_PRO = "pro"
+GEMINI_FLASH = "flash"
 
 
 def choose_model(task: str) -> str:
-    """Choose the right Gemini model for a given task type."""
+    """Choose the right Gemini tier for a given task type."""
     pro_tasks = {
         "reasoning", "legal", "financial", "planning", "strategy",
         "analysis", "synthesis", "world_model", "learning_synthesis",
@@ -45,67 +49,60 @@ def choose_model(task: str) -> str:
 async def gemini(
     prompt: str,
     task: str = "general",
-    model: str = None,
     max_tokens: int = 2048,
     temperature: float = 0.2,
-    system: str = None
+    system: str = None,
 ) -> Optional[str]:
     """
-    Unified Gemini call with automatic model selection.
+    Unified Gemini call with automatic tier selection.
     Use this everywhere instead of raw httpx calls to Gemini.
+
+    Returns the generated text on success, None on any failure —
+    preserving the None-on-failure contract that ~34 downstream files
+    depend on. Actual fallback logic (pro-primary → pro-stable) lives
+    in gemini_client.generate_content.
     """
-    if not GEMINI_API_KEY:
-        return None
+    tier = choose_model(task)  # "pro" or "flash"
 
-    selected_model = model or choose_model(task)
-
-    contents = []
-    if system:
-        contents.append({"role": "user", "parts": [{"text": f"[SYSTEM]: {system}"}]})
-        contents.append({"role": "model", "parts": [{"text": "Understood."}]})
-    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    # Pro-tier reasoning calls get Google Search grounding. Flash-tier
+    # tasks (emotional classification, dedup, quick lookups) don't
+    # benefit from fresh external facts and skip grounding.
+    tools = [{"google_search": {}}] if tier == "pro" else None
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": contents,
-                    "generationConfig": {
-                        "maxOutputTokens": max_tokens,
-                        "temperature": temperature
-                    }
-                }
-            )
-            if r.status_code == 200:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                # Fall back to Flash if Pro fails
-                if selected_model == GEMINI_PRO:
-                    r2 = await client.post(
-                        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_FLASH}:generateContent?key={GEMINI_API_KEY}",
-                        json={
-                            "contents": contents,
-                            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature}
-                        }
-                    )
-                    if r2.status_code == 200:
-                        return r2.json()["candidates"][0]["content"]["parts"][0]["text"]
+        response = await gemini_client.generate_content(
+            tier=tier,
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            system_instruction=system,
+            tools=tools,
+            generation_config={
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+            },
+            timeout=30.0,
+            caller_context=f"model_router.{task}",
+        )
+        text = gemini_client.extract_text(response)
+        return text or None
+    except gemini_client.GeminiClientError as e:
+        log.warning("[MODEL_ROUTER] %s tier exhausted for task=%s: %s", tier, task, e)
+        return None
     except Exception as e:
-        print(f"[MODEL_ROUTER] {selected_model} failed: {e}")
-
-    return None
+        log.warning(
+            "[MODEL_ROUTER] %s unexpected failure for task=%s: %s: %s",
+            tier, task, type(e).__name__, e,
+        )
+        return None
 
 
 async def gemini_json(
     prompt: str,
     task: str = "general",
-    model: str = None,
     max_tokens: int = 2048,
     temperature: float = 0.1
 ) -> Optional[dict]:
     """Gemini call expecting JSON response. Parses and returns dict."""
-    result = await gemini(prompt, task=task, model=model, max_tokens=max_tokens, temperature=temperature)
+    result = await gemini(prompt, task=task, max_tokens=max_tokens, temperature=temperature)
     if not result:
         return None
     try:

@@ -119,7 +119,7 @@ Respond in JSON:
 
 If nothing changed: {{"dimension_changed": null}}"""
 
-    result = await gemini_json(prompt, task="analysis", max_tokens=300, temperature=0.1)
+    result = await gemini_json(prompt, task="analysis", max_tokens=2048, temperature=0.1)
     
     if result and result.get("dimension_changed") and result.get("new_content"):
         try:

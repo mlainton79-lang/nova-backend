@@ -23,6 +23,8 @@ import base64
 import re
 from typing import List, Optional
 
+from app.core import gemini_client
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
@@ -32,22 +34,20 @@ async def tony_see(image_base64: str, prompt: str, mime_type: str = "image/jpeg"
     Tony looks at an image and responds to a prompt about it.
     This is Tony's primary visual processing.
     """
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-            json={
-                "contents": [{
-                    "role": "user",
-                    "parts": [
-                        {"inline_data": {"mime_type": mime_type, "data": image_base64}},
-                        {"text": prompt}
-                    ]
-                }],
-                "generationConfig": {"maxOutputTokens": 2048}
-            }
-        )
-        r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    response = await gemini_client.generate_content(
+        tier="flash",
+        contents=[{
+            "role": "user",
+            "parts": [
+                {"inline_data": {"mime_type": mime_type, "data": image_base64}},
+                {"text": prompt}
+            ]
+        }],
+        generation_config={"maxOutputTokens": 2048},
+        timeout=30.0,
+        caller_context="vision.tony_see",
+    )
+    return gemini_client.extract_text(response)
 
 
 async def tony_read_document(image_base64: str, mime_type: str = "image/jpeg") -> str:
@@ -183,8 +183,7 @@ async def tony_study_video(video_url: str, question: str = None) -> dict:
 
     # Tony processes the transcript himself — this is Tony thinking, not asking
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            system = f"""You are Tony, Matthew's personal AI. You have just watched this video.
+        system = f"""You are Tony, Matthew's personal AI. You have just watched this video.
 Title: {metadata.get('title', 'Unknown')}
 Channel: {metadata.get('author', 'Unknown')}
 
@@ -193,16 +192,15 @@ Here is the complete transcript of what was said:
 
 Now answer the following based on what you watched:"""
 
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "system_instruction": {"parts": [{"text": system}]},
-                    "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
-                    "generationConfig": {"maxOutputTokens": 4096}
-                }
-            )
-            r.raise_for_status()
-            answer = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        response = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt_text}]}],
+            system_instruction=system,
+            generation_config={"maxOutputTokens": 4096},
+            timeout=30.0,
+            caller_context="vision.tony_study_video",
+        )
+        answer = gemini_client.extract_text(response)
     except Exception as e:
         answer = f"Could not process transcript: {e}"
 
@@ -250,16 +248,14 @@ Now provide:
 5. Your overall assessment and recommendation for Matthew"""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": synthesis_prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 4096}
-                }
-            )
-            r.raise_for_status()
-            synthesis = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        response = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": synthesis_prompt}]}],
+            generation_config={"maxOutputTokens": 4096},
+            timeout=30.0,
+            caller_context="vision.tony_study_multiple_videos",
+        )
+        synthesis = gemini_client.extract_text(response)
     except Exception as e:
         synthesis = f"Synthesis failed: {e}"
 
@@ -439,16 +435,14 @@ Now answer: {prompt_text}
 Be specific. Reference both what was said AND what was visually demonstrated where relevant."""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": synthesis_prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 4096}
-                }
-            )
-            r.raise_for_status()
-            answer = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        response = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": synthesis_prompt}]}],
+            generation_config={"maxOutputTokens": 4096},
+            timeout=30.0,
+            caller_context="vision.tony_watch_youtube_properly",
+        )
+        answer = gemini_client.extract_text(response)
     except Exception as e:
         answer = f"Could not process video content: {e}"
 
@@ -500,17 +494,18 @@ async def tony_watch_uploaded_video(video_base64: str, filename: str = "video.mp
                 try:
                     with open(audio_path, "rb") as af:
                         audio_b64 = base64.b64encode(af.read()).decode()
-                    async with httpx.AsyncClient(timeout=60.0) as client:
-                        r = await client.post(
-                            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                            json={"contents": [{"role": "user", "parts": [
-                                {"inline_data": {"mime_type": "audio/mpeg", "data": audio_b64}},
-                                {"text": "Transcribe this audio exactly. Return only the spoken words."}
-                            ]}]}
-                        )
-                        if r.status_code == 200:
-                            transcript = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                            result["transcript"] = transcript
+                    response = await gemini_client.generate_content(
+                        tier="flash",
+                        contents=[{"role": "user", "parts": [
+                            {"inline_data": {"mime_type": "audio/mpeg", "data": audio_b64}},
+                            {"text": "Transcribe this audio exactly. Return only the spoken words."}
+                        ]}],
+                        timeout=60.0,
+                        caller_context="vision.uploaded_video_transcribe",
+                    )
+                    transcript = gemini_client.extract_text(response)
+                    if transcript:
+                        result["transcript"] = transcript
                 except Exception as e:
                     print(f"[VISION] Audio transcription failed: {e}")
             
@@ -562,14 +557,14 @@ async def tony_watch_uploaded_video(video_base64: str, filename: str = "video.mp
     
     if synthesis_parts:
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                    json={"contents": [{"role": "user", "parts": [{"text": f"You are Tony. You've just watched an uploaded video.\n\n{chr(10).join(synthesis_parts)}\n\nNow answer: {question_text}"}]}],
-                          "generationConfig": {"maxOutputTokens": 4096}}
-                )
-                r.raise_for_status()
-                result["answer"] = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            response = await gemini_client.generate_content(
+                tier="flash",
+                contents=[{"role": "user", "parts": [{"text": f"You are Tony. You've just watched an uploaded video.\n\n{chr(10).join(synthesis_parts)}\n\nNow answer: {question_text}"}]}],
+                generation_config={"maxOutputTokens": 4096},
+                timeout=30.0,
+                caller_context="vision.uploaded_video_synth",
+            )
+            result["answer"] = gemini_client.extract_text(response)
         except Exception as e:
             result["answer"] = f"Could not synthesise: {e}"
     

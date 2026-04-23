@@ -17,6 +17,8 @@ import logging
 import httpx
 from typing import Dict, List, Optional
 
+from app.core import gemini_client
+
 log = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -116,18 +118,17 @@ If multiple images are provided, they show the same item from different angles. 
     parts.append({"text": prompt})
 
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": parts}],
-                    "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
-                }
-            )
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            text = re.sub(r'```json|```', '', text).strip()
-            return json.loads(text)
+        response = await gemini_client.generate_content(
+            tier="pro",
+            contents=[{"role": "user", "parts": parts}],
+            tools=[{"google_search": {}}],
+            generation_config={"maxOutputTokens": 4096, "temperature": 0.1},
+            timeout=45.0,
+            caller_context="vinted.identify_item",
+        )
+        text = gemini_client.extract_text(response)
+        text = re.sub(r'```json|```', '', text).strip()
+        return json.loads(text)
     except Exception:
         log.exception("[VINTED] identify_item failed, returning fallback")
         return fallback
@@ -293,18 +294,16 @@ Respond in JSON:
 }}"""
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.3}
-                }
-            )
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            text = re.sub(r'```json|```', '', text).strip()
-            return json.loads(text)
+        response = await gemini_client.generate_content(
+            tier="pro",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 4096, "temperature": 0.3},
+            timeout=45.0,
+            caller_context="vinted.draft_listing",
+        )
+        text = gemini_client.extract_text(response)
+        text = re.sub(r'```json|```', '', text).strip()
+        return json.loads(text)
     except Exception:
         log.exception("[VINTED] draft_listing failed, returning synthetic fallback")
         return _build_fallback()
