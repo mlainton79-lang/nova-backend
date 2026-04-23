@@ -89,25 +89,23 @@ async def _call_planner_llm(prompt: str, max_tokens: int = 1500) -> Optional[str
     if not api_key:
         return None
     try:
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.2}
-                }
-            )
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            # Budget log
-            try:
-                from app.core.budget_guard import log_api_call
-                log_api_call("gemini-2.5-flash", "agentic_executor",
-                             tokens=max_tokens, source="agentic_executor")
-            except Exception:
-                pass
-            return text
+        from app.core import gemini_client
+        response = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": max_tokens, "temperature": 0.2},
+            timeout=30.0,
+            caller_context="agentic_executor.planner",
+        )
+        text = gemini_client.extract_text(response)
+        # Budget log
+        try:
+            from app.core.budget_guard import log_api_call
+            log_api_call("gemini-2.5-flash", "agentic_executor",
+                         tokens=max_tokens, source="agentic_executor")
+        except Exception:
+            pass
+        return text
     except Exception as e:
         print(f"[AGENTIC] Planner LLM failed: {e}")
         return None
@@ -173,18 +171,16 @@ British English, contractions, no pet names, direct. Output just the message."""
             api_key = os.environ.get("GEMINI_API_KEY", "")
             if not api_key:
                 return {"ok": False, "error": "No Gemini key"}
-            model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                    json={
-                        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                        "generationConfig": {"maxOutputTokens": 300, "temperature": 0.4}
-                    }
-                )
-                r.raise_for_status()
-                draft = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return {"ok": True, "result": {"draft": draft}}
+            from app.core import gemini_client
+            response = await gemini_client.generate_content(
+                tier="flash",
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                generation_config={"maxOutputTokens": 300, "temperature": 0.4},
+                timeout=15.0,
+                caller_context="agentic_executor.draft_message",
+            )
+            draft = gemini_client.extract_text(response).strip()
+            return {"ok": True, "result": {"draft": draft}}
 
         elif tool == "unified_search":
             from app.core.unified_retrieval import unified_search

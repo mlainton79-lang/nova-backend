@@ -64,13 +64,15 @@ async def call_provider(provider: str, prompt: str) -> str:
     """Call a single AI provider for code generation."""
     async with httpx.AsyncClient(timeout=45.0) as client:
         if provider == "gemini":
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                      "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}}
+            from app.core import gemini_client
+            resp = await gemini_client.generate_content(
+                tier="flash",
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                generation_config={"maxOutputTokens": 4096, "temperature": 0.1},
+                timeout=45.0,
+                caller_context="capability_builder.call_provider.gemini",
             )
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return gemini_client.extract_text(resp)
 
         elif provider == "groq":
             GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")

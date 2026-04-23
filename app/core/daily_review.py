@@ -232,17 +232,15 @@ Today's data:
 Write the review:"""
 
     try:
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 300, "temperature": 0.4}
-                }
-            )
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        from app.core import gemini_client
+        response = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 300, "temperature": 0.4},
+            timeout=15.0,
+            caller_context="daily_review",
+        )
+        return gemini_client.extract_text(response).strip()
     except Exception as e:
         print(f"[DAILY_REVIEW] LLM synthesis failed: {e}")
         return _fallback_review(signals)

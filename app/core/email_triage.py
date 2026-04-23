@@ -104,17 +104,15 @@ Rules:
 Respond with JSON only, no prose:"""
 
     try:
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 800, "temperature": 0.2}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 800, "temperature": 0.2},
+            timeout=20.0,
+            caller_context="email_triage",
+        )
+        response = gemini_client.extract_text(resp)
 
         cleaned = response.strip()
         if cleaned.startswith("```"):

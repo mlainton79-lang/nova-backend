@@ -38,21 +38,21 @@ Rules:
 Text: {req.text}"""
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 200, "temperature": 0.1}
-                }
-            )
-            if r.status_code == 200:
-                corrected = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                # Sanity check — if Gemini returns something wildly different, use original
-                if len(corrected) > len(req.text) * 2 or len(corrected) < len(req.text) * 0.5:
-                    return {"corrected": req.text, "changed": False}
-                changed = corrected.lower() != req.text.lower()
-                return {"corrected": corrected, "changed": changed}
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 200, "temperature": 0.1},
+            timeout=5.0,
+            caller_context="transcription.correct",
+        )
+        corrected = gemini_client.extract_text(resp).strip()
+        if corrected:
+            # Sanity check — if Gemini returns something wildly different, use original
+            if len(corrected) > len(req.text) * 2 or len(corrected) < len(req.text) * 0.5:
+                return {"corrected": req.text, "changed": False}
+            changed = corrected.lower() != req.text.lower()
+            return {"corrected": corrected, "changed": changed}
     except Exception as e:
         print(f"[TRANSCRIPTION] Correction failed: {e}")
 

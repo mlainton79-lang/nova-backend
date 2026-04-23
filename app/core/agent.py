@@ -315,16 +315,15 @@ Think step by step. Use tools as needed. When you have a complete answer, respon
     for step_num in range(max_steps):
         # Call Gemini
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                    json={
-                        "contents": messages,
-                        "generationConfig": {"maxOutputTokens": 2048}
-                    }
-                )
-                r.raise_for_status()
-                response_text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            from app.core import gemini_client
+            resp = await gemini_client.generate_content(
+                tier="flash",
+                contents=messages,
+                generation_config={"maxOutputTokens": 2048},
+                timeout=30.0,
+                caller_context="agent.step_loop",
+            )
+            response_text = gemini_client.extract_text(resp).strip()
         except Exception as e:
             log_agent_step(task_id, f"step_{step_num}", f"LLM error: {e}", False)
             break

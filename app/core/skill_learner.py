@@ -133,17 +133,15 @@ async def detect_skill_opportunity() -> Optional[Dict]:
     )
 
     try:
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 2000, "temperature": 0.3}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 2000, "temperature": 0.3},
+            timeout=30.0,
+            caller_context="skill_learner",
+        )
+        response = gemini_client.extract_text(resp).strip()
 
         # Log budget
         try:

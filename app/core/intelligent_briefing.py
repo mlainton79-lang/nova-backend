@@ -308,22 +308,20 @@ Write the brief. One short paragraph. No headers, no bullets, no 'Good morning'.
 """
 
     try:
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 400, "temperature": 0.4}
-                }
-            )
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Strip any accidental 'Good morning' or bullet prefixes
-            for opener in ["Good morning", "Morning.", "Morning,", "Morning! ", "Morning, "]:
-                if text.startswith(opener):
-                    text = text[len(opener):].lstrip(" ,.")
-            return text
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 400, "temperature": 0.4},
+            timeout=15.0,
+            caller_context="intelligent_briefing",
+        )
+        text = gemini_client.extract_text(resp).strip()
+        # Strip any accidental 'Good morning' or bullet prefixes
+        for opener in ["Good morning", "Morning.", "Morning,", "Morning! ", "Morning, "]:
+            if text.startswith(opener):
+                text = text[len(opener):].lstrip(" ,.")
+        return text
     except Exception as e:
         print(f"[BRIEFING] LLM synthesis failed: {e}")
         return _fallback_briefing(state)

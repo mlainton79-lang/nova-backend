@@ -170,16 +170,15 @@ def save_draft(account: str, message_id: str, from_addr: str, subject: str,
 
 async def _call_gemini(prompt: str, max_tokens: int = 2000) -> Optional[str]:
     try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.3}
-                }
-            )
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": max_tokens, "temperature": 0.3},
+            timeout=25.0,
+            caller_context="email_drafter",
+        )
+        return gemini_client.extract_text(resp)
     except Exception as e:
         print(f"[EMAIL DRAFTER] Gemini call failed: {e}")
         return None

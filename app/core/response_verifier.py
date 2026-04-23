@@ -150,30 +150,28 @@ async def correct_reply(
     )
 
     try:
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 400, "temperature": 0.2}
-                }
-            )
-            r.raise_for_status()
-            corrected = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 400, "temperature": 0.2},
+            timeout=6.0,
+            caller_context="response_verifier",
+        )
+        corrected = gemini_client.extract_text(resp).strip()
 
-            # Log the call
-            try:
-                from app.core.budget_guard import log_api_call
-                log_api_call("gemini-2.5-flash", "verifier_correction",
-                             tokens=500, source="response_verifier")
-            except Exception:
-                pass
+        # Log the call
+        try:
+            from app.core.budget_guard import log_api_call
+            log_api_call("gemini-2.5-flash", "verifier_correction",
+                         tokens=500, source="response_verifier")
+        except Exception:
+            pass
 
-            # Strip any accidental quotes the model wraps around
-            if corrected.startswith('"') and corrected.endswith('"'):
-                corrected = corrected[1:-1]
-            return corrected
+        # Strip any accidental quotes the model wraps around
+        if corrected.startswith('"') and corrected.endswith('"'):
+            corrected = corrected[1:-1]
+        return corrected
     except Exception as e:
         print(f"[VERIFIER] Correction call failed: {e}")
         return None

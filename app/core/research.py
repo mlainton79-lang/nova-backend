@@ -133,16 +133,16 @@ Produce a comprehensive research report covering:
 Be specific, precise, and thorough. Matthew is relying on this."""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": synthesis_prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 4096}
-                }
-            )
-            r.raise_for_status()
-            report["findings"] = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="pro",
+            contents=[{"role": "user", "parts": [{"text": synthesis_prompt}]}],
+            tools=[{"google_search": {}}],
+            generation_config={"maxOutputTokens": 4096},
+            timeout=30.0,
+            caller_context="research",
+        )
+        report["findings"] = gemini_client.extract_text(resp)
     except Exception as e:
         report["findings"] = f"Research synthesis failed: {e}"
 

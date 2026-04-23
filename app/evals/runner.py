@@ -126,17 +126,15 @@ Does the actual response match the expected behaviour? Answer STRICTLY with JSON
         if not api_key:
             return {"passed": True, "failures": [], "note": "GEMINI_API_KEY unset — skipped"}
 
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 256, "temperature": 0.1}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        response_json = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 256, "temperature": 0.1},
+            timeout=15.0,
+            caller_context="evals.runner",
+        )
+        response = gemini_client.extract_text(response_json)
 
         # Extract JSON
         cleaned = response.strip()

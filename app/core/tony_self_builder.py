@@ -74,29 +74,16 @@ def log_build(stage: str, content: str, success: bool = True):
 
 async def _gemini_pro(prompt: str, max_tokens: int = 8192) -> Optional[str]:
     """Gemini 2.5 Pro for high-quality code generation."""
-    if not GEMINI_API_KEY:
-        return None
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1}
-                }
-            )
-            if r.status_code == 200:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            # Fallback to Flash
-            r2 = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1}
-                }
-            )
-            if r2.status_code == 200:
-                return r2.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="pro",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": max_tokens, "temperature": 0.1},
+            timeout=60.0,
+            caller_context="tony_self_builder",
+        )
+        return gemini_client.extract_text(resp) or None
     except Exception as e:
         log_build("gemini_error", str(e), False)
     return None

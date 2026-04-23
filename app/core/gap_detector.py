@@ -188,17 +188,15 @@ Respond ONLY with valid JSON:
         if not api_key:
             return None
 
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 512, "temperature": 0.1}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 512, "temperature": 0.1},
+            timeout=10.0,
+            caller_context="gap_detector",
+        )
+        response = gemini_client.extract_text(resp)
 
         # Log what Gemini actually said — for debugging
         print(f"[GAP_DETECTOR] Raw response: {response[:500]}")

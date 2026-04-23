@@ -278,15 +278,15 @@ Respond in JSON only:
 If nothing is urgent, return: {{"urgent_items": []}}"""
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.2}
-                }
+            from app.core import gemini_client
+            resp = await gemini_client.generate_content(
+                tier="flash",
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                generation_config={"maxOutputTokens": 1024, "temperature": 0.2},
+                timeout=20.0,
+                caller_context="proactive",
             )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            response = gemini_client.extract_text(resp)
 
             import re
             json_match = re.search(r'\{.*\}', response, re.DOTALL)

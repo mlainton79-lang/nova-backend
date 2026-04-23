@@ -160,16 +160,15 @@ Important: Be specific, factual, and reference relevant regulations where applic
 Write the complete letter now. Do not truncate or summarise. Every paragraph must be complete. The letter must be fully self-contained and ready to send:"""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.3}
-                }
-            )
-            r.raise_for_status()
-            letter_body = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="pro",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 8192, "temperature": 0.3},
+            timeout=30.0,
+            caller_context="document_generator",
+        )
+        letter_body = gemini_client.extract_text(resp)
 
         # Create PDF
         pdf_bytes = _create_pdf(

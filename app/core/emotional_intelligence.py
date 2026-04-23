@@ -124,44 +124,43 @@ Respond in JSON:
 }}"""
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 256, "temperature": 0.3}
-                }
-            )
-            r.raise_for_status()
-            response = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 256, "temperature": 0.3},
+            timeout=10.0,
+            caller_context="emotional_intelligence",
+        )
+        response = gemini_client.extract_text(resp)
 
-            import json, re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
+        import json, re
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group())
 
-                # Log to DB
-                try:
-                    conn = get_conn()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        INSERT INTO tony_emotional_state
-                        (detected_state, confidence, signals, tony_response_adjustment, conversation_context)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (
-                        data.get("detected_state", "neutral"),
-                        data.get("confidence", 0.5),
-                        str(context_signals),
-                        data.get("adjustment", ""),
-                        message[:200]
-                    ))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                except Exception:
-                    pass
+            # Log to DB
+            try:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO tony_emotional_state
+                    (detected_state, confidence, signals, tony_response_adjustment, conversation_context)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    data.get("detected_state", "neutral"),
+                    data.get("confidence", 0.5),
+                    str(context_signals),
+                    data.get("adjustment", ""),
+                    message[:200]
+                ))
+                conn.commit()
+                cur.close()
+                conn.close()
+            except Exception:
+                pass
 
-                return data
+            return data
     except Exception as e:
         pass
 
