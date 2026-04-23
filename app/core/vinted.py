@@ -13,8 +13,11 @@ This turns a photo into a ready-to-post listing in seconds.
 import os
 import re
 import json
+import logging
 import httpx
 from typing import Dict, Optional
+
+log = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
@@ -22,8 +25,21 @@ BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
 async def identify_item(image_base64: str, image_mime: str = "image/jpeg") -> Dict:
     """Use Gemini Vision to identify what the item is."""
+    fallback = {
+        "item_name": "Unknown item",
+        "brand": "",
+        "category": "",
+        "estimated_size": "",
+        "condition_visible": "used",
+        "key_features": [],
+        "color": "",
+        "material": "",
+        "search_query": "",
+        "_fallback": True,
+    }
     if not GEMINI_API_KEY:
-        return {"error": "Gemini not configured"}
+        log.warning("[VINTED] identify_item: GEMINI_API_KEY not configured, using fallback")
+        return fallback
 
     prompt = """You are helping sell an item on Vinted/eBay. Identify this item precisely.
 
@@ -35,6 +51,8 @@ Return JSON only:
     "estimated_size": "size if clothing/footwear, or dimensions if other",
     "condition_visible": "what condition does it appear to be in from the photo",
     "key_features": ["notable features that affect value"],
+    "color": "primary colour e.g. black, navy, multicoloured",
+    "material": "primary material e.g. cotton, leather, polyester",
     "search_query": "best search query to find sold prices on eBay e.g. Nike Air Max 90 size 9"
 }"""
 
@@ -57,8 +75,9 @@ Return JSON only:
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             text = re.sub(r'```json|```', '', text).strip()
             return json.loads(text)
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        log.exception("[VINTED] identify_item failed, returning fallback")
+        return fallback
 
 
 async def research_sold_prices(search_query: str, item_name: str) -> Dict:
@@ -112,8 +131,19 @@ async def research_sold_prices(search_query: str, item_name: str) -> Dict:
             "source": "brave_search",
             "snippets": [r.get("description", "")[:100] for r in price_results[:3]]
         }
-    except Exception as e:
-        return {"error": str(e), "prices": []}
+    except Exception:
+        log.exception("[VINTED] research_sold_prices failed, returning fallback")
+        return {
+            "prices_found": [],
+            "average": None,
+            "min": None,
+            "max": None,
+            "suggested_price": None,
+            "source": "fallback",
+            "snippets": [],
+            "research_notes": "Unable to research recent sold prices. Price suggestion is based on item type only.",
+            "_fallback": True,
+        }
 
 
 async def draft_listing(
@@ -123,8 +153,52 @@ async def draft_listing(
     condition: str = "good"
 ) -> Dict:
     """Draft an optimised listing for Vinted or eBay."""
+    def _build_fallback() -> Dict:
+        brand = (item_info.get("brand") or "").strip()
+        item_name = (item_info.get("item_name") or "Item").strip()
+        color = (item_info.get("color") or "").strip()
+        material = (item_info.get("material") or "").strip()
+        condition_visible = (item_info.get("condition_visible") or condition or "used").strip()
+        size = (item_info.get("estimated_size") or "").strip()
+        features = item_info.get("key_features") or []
+        if not isinstance(features, list):
+            features = []
+
+        title = f"{brand} {item_name}".strip() if brand else item_name
+        if len(title) > 80:
+            title = title[:77].rstrip() + "..."
+
+        desc_parts = []
+        desc_parts.append(f"{brand} {item_name}." if brand else f"{item_name}.")
+        if condition_visible:
+            desc_parts.append(f"Condition: {condition_visible}.")
+        if size:
+            desc_parts.append(f"Size: {size}.")
+        if color:
+            desc_parts.append(f"Colour: {color}.")
+        if material:
+            desc_parts.append(f"Material: {material}.")
+        if features:
+            desc_parts.append("Features: " + ", ".join(str(f) for f in features) + ".")
+        desc_parts.append("Postage or collection available.")
+        description = " ".join(desc_parts)
+
+        sp = price_data.get("suggested_price")
+        suggested_price = sp if sp else "See seller"
+
+        return {
+            "title": title,
+            "description": description,
+            "suggested_price": suggested_price,
+            "condition": condition,
+            "category_suggestion": item_info.get("category", ""),
+            "tips": [],
+            "_fallback": True,
+        }
+
     if not GEMINI_API_KEY:
-        return {"error": "Gemini not configured"}
+        log.warning("[VINTED] draft_listing: GEMINI_API_KEY not configured, using fallback")
+        return _build_fallback()
 
     price_context = ""
     if price_data.get("suggested_price"):
@@ -140,6 +214,8 @@ Item identified: {item_info.get('item_name', 'Unknown item')}
 Brand: {item_info.get('brand', 'Unknown')}
 Category: {item_info.get('category', 'Other')}
 Size/dimensions: {item_info.get('estimated_size', 'See photos')}
+Colour: {item_info.get('color', 'See photos')}
+Material: {item_info.get('material', 'See photos')}
 Condition from photo: {item_info.get('condition_visible', 'Good')}
 Key features: {', '.join(item_info.get('key_features', []))}
 {price_context}
@@ -175,8 +251,9 @@ Respond in JSON:
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             text = re.sub(r'```json|```', '', text).strip()
             return json.loads(text)
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        log.exception("[VINTED] draft_listing failed, returning synthetic fallback")
+        return _build_fallback()
 
 
 async def full_listing_pipeline(
@@ -190,42 +267,40 @@ async def full_listing_pipeline(
     Full pipeline: photo → identification → price research → listing.
     Returns everything Tony needs to post the listing.
     """
-    result = {"ok": False, "steps": {}}
+    warnings = []
 
     # Step 1: Identify the item
     print("[VINTED] Identifying item from photo...")
     item_info = await identify_item(image_base64, image_mime)
-    result["steps"]["identification"] = item_info
-
-    if "error" in item_info:
-        result["error"] = f"Could not identify item: {item_info['error']}"
-        return result
-
-    result["item"] = item_info
+    if item_info.pop("_fallback", False):
+        warnings.append("vision_identification")
 
     # Step 2: Research prices
     search_query = item_info.get("search_query", item_info.get("item_name", ""))
     if search_query:
         print(f"[VINTED] Researching prices for: {search_query}")
         price_data = await research_sold_prices(search_query, item_info.get("item_name", ""))
-        result["steps"]["price_research"] = price_data
-        result["prices"] = price_data
     else:
         price_data = {}
+    if price_data.pop("_fallback", False):
+        warnings.append("price_research")
 
     # Step 3: Draft listing
     print("[VINTED] Drafting listing...")
     listing = await draft_listing(item_info, price_data, platform, condition)
-    result["steps"]["listing"] = listing
+    if listing.pop("_fallback", False):
+        warnings.append("listing_draft")
 
-    if "error" not in listing:
-        result["ok"] = True
-        result["listing"] = listing
-        result["platform"] = platform
-        result["summary"] = (
+    return {
+        "ok": True,
+        "item": item_info,
+        "listing": listing,
+        "prices": price_data,
+        "platform": platform,
+        "warnings": warnings,
+        "summary": (
             f"Listed: {item_info.get('item_name', 'Item')}"
             f" | Suggested price: £{listing.get('suggested_price', '?')}"
             f" | Platform: {platform}"
-        )
-
-    return result
+        ),
+    }
