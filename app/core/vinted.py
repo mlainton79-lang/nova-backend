@@ -35,6 +35,7 @@ async def identify_item(
     If `images` is non-empty, it takes precedence.
     """
     fallback = {
+        "visible_text": [],
         "item_name": "Unknown item",
         "brand": "",
         "category": "",
@@ -48,6 +49,7 @@ async def identify_item(
         "price_reasoning": "",
         "parcel_size": "medium",
         "confidence": "low",
+        "needs_manual_verification": True,
         "_fallback": True,
     }
     if not GEMINI_API_KEY:
@@ -62,12 +64,31 @@ async def identify_item(
         log.warning("[VINTED] identify_item called with no images, using fallback")
         return fallback
 
-    prompt = """You are helping sell an item on Vinted/eBay. Identify this item precisely.
+    prompt = """You are a meticulous visual inspector helping sell an item on Vinted/eBay. Your job is to identify the item accurately. Accuracy beats confidence — if unsure, say so.
 
-Return JSON only:
+STEP 1 — Transcribe visible text.
+First, list every piece of text, logo, brand mark, or identifying label visible on the item. Include partial text, trademark symbols, model numbers, and made-up-sounding words. Transcribe exactly what you see — do not interpret, translate, or correct it. Even if a word looks like a typo or an unfamiliar brand (e.g. HUNTR/X, Pop Mart, Ty Beanie), write it verbatim. Put these in "visible_text" as a list of strings.
+
+STEP 2 — Identify from visible evidence only.
+Use ONLY the visible text and physical features of the item. Do NOT substitute an unknown brand with a similar-sounding brand you know. If the visible text shows "HUNTR/X", write HUNTR/X in brand or item_name — do not write "LEGO Friends" or any other brand you think it "looks like". If no clear brand text is visible, set brand to "Unknown" and describe the item physically.
+
+Never invent character names, series names, franchise names, or licences. If you cannot see a recognisable licence mark or trademark, do NOT guess which film/TV/music/game/toy line the item belongs to.
+
+STEP 3 — Choose confidence honestly.
+confidence defaults to "low". Upgrade only if evidence warrants it:
+- "medium" only if you are 80%+ certain of BOTH brand AND product type.
+- "high" only if you can see clear, unambiguous brand text AND you have seen this exact product before in training.
+- If the item appears to be licensed merchandise (film, TV, music, game, toy line) and you are not 100% sure of the licence: confidence MUST be "low".
+- If visible_text contains any word or name you don't confidently recognise: confidence MUST be "low".
+
+STEP 4 — Flag uncertain items for manual review.
+Set needs_manual_verification to true if the item might be licensed merchandise, rare, collectible, vintage, or antique AND you are not 100% certain of its identity. This warns the user to verify before listing.
+
+Return JSON only (no prose, no markdown):
 {
-    "item_name": "specific product name e.g. Nike Air Max 90 trainers",
-    "brand": "brand name or Unknown",
+    "visible_text": ["exact strings visible on the item"],
+    "item_name": "specific product name based on visible evidence",
+    "brand": "brand name verbatim from visible text, or 'Unknown'",
     "category": "clothing/footwear/electronics/homeware/toys/other",
     "estimated_size": "size if clothing/footwear, or dimensions if other",
     "condition_visible": "what condition does it appear to be in from the photo",
@@ -77,16 +98,16 @@ Return JSON only:
     "suggested_uk_resale_price": 15,
     "price_reasoning": "one sentence explaining the price, e.g. 'Sky Q remotes typically sell for £8-12 used on eBay UK'",
     "parcel_size": "small",
-    "confidence": "high",
+    "confidence": "low",
+    "needs_manual_verification": true,
     "search_query": "best search query to find sold prices on eBay e.g. Nike Air Max 90 size 9"
 }
 
 Field guidance:
-- suggested_uk_resale_price: realistic UK resale price in GBP as a NUMBER (not a string). Base on item type, brand, condition, and what it would typically sell for on Vinted or eBay UK.
+- suggested_uk_resale_price: realistic UK resale price in GBP as a NUMBER (not a string). Base on item type, brand, condition, and typical Vinted/eBay UK pricing.
 - parcel_size: one of "small", "medium", "large". Small = fits in a shoebox. Medium = larger than a shoebox but under 60x40x30cm. Large = bigger than that.
-- confidence: one of "high", "medium", "low". Use "low" for items that might be rare/collectible and need manual valuation (rare books, vinyl records, antiques, signed items, vintage toys).
 
-If multiple images are provided, they show the same item from different angles. Synthesise across all of them."""
+If multiple images are provided, they show the same item from different angles. Synthesise visible_text across all of them before identifying."""
 
     parts = [
         {"inline_data": {"mime_type": img.get("mime", "image/jpeg"), "data": img.get("base64", "")}}
@@ -95,12 +116,12 @@ If multiple images are provided, they show the same item from different angles. 
     parts.append({"text": prompt})
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=45.0) as client:
             r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}",
                 json={
                     "contents": [{"role": "user", "parts": parts}],
-                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.1}
+                    "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
                 }
             )
             r.raise_for_status()
