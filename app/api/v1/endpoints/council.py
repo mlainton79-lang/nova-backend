@@ -233,6 +233,19 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
                     ok=True, provider="council", reply=reply,
                     latency_ms=int((time.time() - start) * 1000)
                 )
+            elif request_id == -2:
+                # N1.5-A: gap_detector refused — capability builder is in safe mode.
+                # Be honest with Matthew rather than implying a build is happening.
+                refusal = (
+                    "That sounds like something I'd need to build. "
+                    "Self-build is locked off for now, so I won't spin the builder up. "
+                    "Tell me the end result you want and I'll work around it with what I already have."
+                )
+                log_request(provider="council", message=req.message, reply=refusal[:500], ok=True)
+                return CouncilResponse(
+                    ok=True, provider="council", reply=refusal,
+                    latency_ms=int((time.time() - start) * 1000)
+                )
     except Exception as e:
         print(f"[COUNCIL] Gap detection: {e}")
 

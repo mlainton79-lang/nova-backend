@@ -248,7 +248,35 @@ async def start_autonomous_build(capability_name: str, description: str, user_me
     """
     Kick off a capability build in the background. Returns a request_id.
     Tony will work on this between conversations.
+
+    Returns:
+       >0  request_id of the staged build
+       -1  insert/scheduling failed (see logs)
+       -2  refused: autonomous staging disabled by safe-mode flag
+            (CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED=false). An audit
+            row with status='refused_safe_mode' is still inserted when
+            possible so the refusal is visible in the requests table.
     """
+    # N1.5-A safe-mode gate: refuse before any LLM/Brave cost is incurred.
+    from app.core.config import CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED
+    if not CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED:
+        print(f"[CAPABILITY_BUILDER] Autonomous staging disabled — request for '{capability_name}' refused (safe mode)")
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO tony_capability_requests
+                    (user_message, capability_name, capability_description, status)
+                VALUES (%s, %s, %s, 'refused_safe_mode')
+                RETURNING id
+            """, (user_message, capability_name, description))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[CAPABILITY_BUILDER] Failed to log safe-mode refusal: {e}")
+        return -2
+
     try:
         conn = get_conn()
         cur = conn.cursor()

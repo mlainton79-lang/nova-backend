@@ -687,6 +687,20 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                     yield "data: " + json.dumps({"type": "chunk", "text": ack}) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
                 return StreamingResponse(_gap_stream(), media_type="text/event-stream")
+            elif request_id == -2:
+                # N1.5-A: gap_detector refused — capability builder is in safe mode.
+                # Be honest with Matthew rather than implying a build is happening.
+                refusal = (
+                    "That sounds like something I'd need to build. "
+                    "Self-build is locked off for now, so I won't spin the builder up. "
+                    "Tell me the end result you want and I'll work around it with what I already have."
+                )
+                log_request(provider="gap_detector", message=request.message,
+                            reply=refusal, ok=True)
+                async def _refused_stream():
+                    yield "data: " + json.dumps({"type": "chunk", "text": refusal}) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+                return StreamingResponse(_refused_stream(), media_type="text/event-stream")
     except Exception as e:
         print(f"[CHAT_STREAM] Gap detection: {e}")
 

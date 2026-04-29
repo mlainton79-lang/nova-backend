@@ -511,6 +511,15 @@ async def build_capability_stage(capability_name: str, capability_description: s
         report_steps.append({"step": name, "result": result, "ok": ok})
         print(f"[BUILDER] {name}: {'✓' if ok else '✗'} {result[:100] if isinstance(result, str) else ''}")
 
+    # N1.5-A safe-mode gate: refuse before any LLM/Brave cost is incurred.
+    # Default-off; set CAPABILITY_BUILDER_STAGING_ENABLED=true in Railway to enable.
+    from app.core.config import CAPABILITY_BUILDER_STAGING_ENABLED
+    if not CAPABILITY_BUILDER_STAGING_ENABLED:
+        msg = ("capability builder staging disabled — safe mode "
+               "(set CAPABILITY_BUILDER_STAGING_ENABLED=true to enable)")
+        step("safe_mode_gate", msg, False)
+        return {"ok": False, "error": msg, "steps": report_steps}
+
     # 1. Research
     research = await research_capability(capability_description)
     step("research", f"Found {len(research.split(chr(10)))} research items", True)
