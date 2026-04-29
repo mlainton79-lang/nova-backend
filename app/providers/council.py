@@ -1,6 +1,41 @@
 import asyncio
 import time
 
+
+def _recent_context(history, n=2, max_chars=500):
+    """
+    Build a compact textual representation of the last n*2 turns of conversation
+    for embedding into council synthesis prompts. Handles both Pydantic
+    HistoryMessage objects and dicts defensively.
+
+    Used by N1.6 to ensure short follow-up messages like "how?", "why?", "do that"
+    stay anchored to recent context across challenge/refine/final synthesis.
+    """
+    if not history:
+        return "No recent conversation context supplied."
+
+    recent = list(history)[-(n * 2):]
+    lines = []
+    for h in recent:
+        # Defensive: handle both Pydantic objects and dicts
+        role = getattr(h, "role", None)
+        content = getattr(h, "content", None)
+        if isinstance(h, dict):
+            role = h.get("role", role)
+            content = h.get("content", content)
+
+        role = (role or "unknown").upper()
+        content = (content or "").strip()
+
+        if len(content) > max_chars:
+            content = content[:max_chars].rstrip() + "…"
+
+        if content:
+            lines.append(f"{role}: {content}")
+
+    return "\n".join(lines) if lines else "No recent conversation context supplied."
+
+
 async def run_council(message, history, system_prompt, debug=False):
     start = time.time()
     adapters = {}
@@ -76,9 +111,15 @@ async def run_council(message, history, system_prompt, debug=False):
     others = {n: r for n, r in successes.items() if n != deciding}
     round1_summary = "\n\n".join(f"{n.upper()} said: {r}" for n, r in successes.items())
 
+    # N1.6: shared context block for all three synthesis prompts so short
+    # follow-ups like "how?" / "why?" / "do that" don't get treated as
+    # standalone questions during chair challenge / refine / final synthesis.
+    ctx_block = _recent_context(history)
+
     challenge_prompt = (
         f"You are chairing a debate between multiple AI systems to find the best answer for Matthew.\n\n"
-        f"The question was: {message}\n\n"
+        f"Recent conversation context, most recent last:\n{ctx_block}\n\n"
+        f"Matthew's latest message:\n{message}\n\n"
         f"Here is what each AI said in Round 1:\n\n{round1_summary}\n\n"
         f"Having read all responses, identify in 2-3 sentences: "
         f"(1) what the best insight was across all responses, "
@@ -94,7 +135,8 @@ async def run_council(message, history, system_prompt, debug=False):
         if n in adapters:
             refine_prompt = (
                 f"You are in a debate with other AI systems answering a question for Matthew.\n\n"
-                f"The question was: {message}\n\n"
+                f"Recent conversation context, most recent last:\n{ctx_block}\n\n"
+                f"Matthew's latest message:\n{message}\n\n"
                 f"What you said in Round 1: {successes[n]}\n\n"
                 f"What the other AIs said:\n"
                 + "\n".join(f"{k.upper()}: {v}" for k, v in successes.items() if k != n)
@@ -115,7 +157,8 @@ async def run_council(message, history, system_prompt, debug=False):
 
     final_prompt = (
         f"You have chaired a rigorous debate between {len(successes)} AI systems to find the best answer for Matthew.\n\n"
-        f"Matthew asked: {message}\n\n"
+        f"Recent conversation context, most recent last:\n{ctx_block}\n\n"
+        f"Matthew's latest message:\n{message}\n\n"
         f"Full debate record:\n\n{evidence}\n\n"
         f"Now deliver the definitive answer as Tony — Matthew's personal AI, named after his late father Tony Lainton.\n\n"
         f"CRITICAL RULES:\n"
@@ -124,7 +167,7 @@ async def run_council(message, history, system_prompt, debug=False):
         f"- NEVER include meta-commentary like 'This response acknowledges...' or 'I think I can do better' or 'Here is my revised answer'.\n"
         f"- NO phrases like 'I think', 'let me', 'revised', 'this addresses'.\n"
         f"- Speak directly to Matthew as Tony. No preamble, no self-reflection, no explanation of process.\n"
-        f"- Match Matthew's energy — short message gets short answer. He said '{message[:50]}' so keep it proportionate.\n"
+        f"- Answer Matthew's latest message in the context of the recent conversation. If it is a short follow-up, resolve what it refers to before answering.\n"
         f"- British English. Direct. Warm but not soft.\n"
         f"- Do NOT mention the debate, other AIs, multiple sources, or that this was synthesised.\n"
         f"- Your entire output will appear as Tony's reply in the chat bubble. Treat it accordingly."
