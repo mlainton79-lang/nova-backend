@@ -154,6 +154,7 @@ _inits = [
     ("app.core.known_facts_seed",       "seed_bedrock_facts",         "Bedrock facts"),
     ("app.core.repository_intelligence","init_repo_intel_tables",     "Repo intelligence"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
+    ("app.core.seed_capabilities_v1",      "run_once",                 "Capabilities v1.1 seed"),
 ]
 
 for module_path, fn_name, label in _inits:

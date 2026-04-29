@@ -4,6 +4,7 @@ Tracks what Tony can and can't do.
 When a request hits an unknown capability, Tony researches and proposes a build.
 """
 import psycopg2
+import psycopg2.extras
 import os
 from datetime import datetime
 
@@ -25,6 +26,17 @@ def init_capabilities_table():
                 notes TEXT
             )
         """)
+        # N1.1: idempotent column additions for richer capability metadata
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS risk_level TEXT DEFAULT 'low'")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS approval_required BOOLEAN DEFAULT false")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS cost_type TEXT DEFAULT 'free'")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS runner TEXT")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS inputs JSONB")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS outputs JSONB")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS last_tested TIMESTAMP")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS last_result TEXT")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS failure_notes TEXT")
+        cur.execute("ALTER TABLE capabilities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS capability_gaps (
                 id SERIAL PRIMARY KEY,
@@ -90,14 +102,40 @@ def init_capabilities_table():
 def get_capabilities(status=None):
     conn = get_conn()
     cur = conn.cursor()
+    select_cols = (
+        "name, description, status, endpoint, runner, "
+        "risk_level, approval_required, cost_type, "
+        "inputs, outputs, last_tested, last_result, failure_notes, "
+        "notes, added_at, updated_at"
+    )
     if status:
-        cur.execute("SELECT name, description, status, endpoint FROM capabilities WHERE status=%s ORDER BY name", (status,))
+        cur.execute(f"SELECT {select_cols} FROM capabilities WHERE status=%s ORDER BY name", (status,))
     else:
-        cur.execute("SELECT name, description, status, endpoint FROM capabilities ORDER BY status, name")
+        cur.execute(f"SELECT {select_cols} FROM capabilities ORDER BY status, name")
     rows = cur.fetchall()
     cur.close()
     conn.close()
-    return [{"name": r[0], "description": r[1], "status": r[2], "endpoint": r[3]} for r in rows]
+    return [
+        {
+            "name": r[0],
+            "description": r[1],
+            "status": r[2],
+            "endpoint": r[3],
+            "runner": r[4],
+            "risk_level": r[5],
+            "approval_required": r[6],
+            "cost_type": r[7],
+            "inputs": r[8],
+            "outputs": r[9],
+            "last_tested": r[10].isoformat() if r[10] else None,
+            "last_result": r[11],
+            "failure_notes": r[12],
+            "notes": r[13],
+            "added_at": r[14].isoformat() if r[14] else None,
+            "updated_at": r[15].isoformat() if r[15] else None,
+        }
+        for r in rows
+    ]
 
 def log_capability_gap(request_text, proposed_solution=None):
     """Log when Tony encounters something he can't do."""
@@ -123,3 +161,110 @@ def get_capability_summary():
         return f"ACTIVE CAPABILITIES: {', '.join(active)}\nNOT YET BUILT: {', '.join(not_built)}"
     except Exception:
         return ""
+
+
+def update_capability(name: str, **fields) -> bool:
+    """
+    Update a capability by name. Whitelisted columns only.
+    Returns True if a row was updated, False if name not found.
+    """
+    allowed = {
+        "status", "endpoint", "runner",
+        "risk_level", "approval_required", "cost_type",
+        "inputs", "outputs",
+        "last_tested", "last_result", "failure_notes",
+        "notes", "description"
+    }
+    set_fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not set_fields:
+        return False
+
+    set_clause = ", ".join(f"{k} = %s" for k in set_fields.keys())
+    set_clause += ", updated_at = NOW()"
+    values = list(set_fields.values()) + [name]
+
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE capabilities SET {set_clause} WHERE name = %s",
+                    values
+                )
+                return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def create_capability(name: str, description: str, status: str = "active", **kw) -> int:
+    """
+    Create a new capability. Raises psycopg2.IntegrityError on duplicate name.
+    Returns new row id.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO capabilities (
+                        name, description, status, endpoint, runner,
+                        risk_level, approval_required, cost_type,
+                        inputs, outputs, notes, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    RETURNING id
+                """, (
+                    name, description, status,
+                    kw.get("endpoint"), kw.get("runner"),
+                    kw.get("risk_level", "low"),
+                    kw.get("approval_required", False),
+                    kw.get("cost_type", "free"),
+                    psycopg2.extras.Json(kw["inputs"]) if kw.get("inputs") else None,
+                    psycopg2.extras.Json(kw["outputs"]) if kw.get("outputs") else None,
+                    kw.get("notes")
+                ))
+                return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def upsert_capability(name: str, description: str, status: str = "active", **kw) -> int:
+    """
+    Insert or update a capability. Used by seed scripts.
+    Returns row id.
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO capabilities (
+                        name, description, status, endpoint, runner,
+                        risk_level, approval_required, cost_type,
+                        inputs, outputs, notes, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (name) DO UPDATE SET
+                        description = EXCLUDED.description,
+                        status = EXCLUDED.status,
+                        endpoint = EXCLUDED.endpoint,
+                        runner = EXCLUDED.runner,
+                        risk_level = EXCLUDED.risk_level,
+                        approval_required = EXCLUDED.approval_required,
+                        cost_type = EXCLUDED.cost_type,
+                        inputs = EXCLUDED.inputs,
+                        outputs = EXCLUDED.outputs,
+                        notes = EXCLUDED.notes,
+                        updated_at = NOW()
+                    RETURNING id
+                """, (
+                    name, description, status,
+                    kw.get("endpoint"), kw.get("runner"),
+                    kw.get("risk_level", "low"),
+                    kw.get("approval_required", False),
+                    kw.get("cost_type", "free"),
+                    psycopg2.extras.Json(kw["inputs"]) if kw.get("inputs") else None,
+                    psycopg2.extras.Json(kw["outputs"]) if kw.get("outputs") else None,
+                    kw.get("notes")
+                ))
+                return cur.fetchone()[0]
+    finally:
+        conn.close()
