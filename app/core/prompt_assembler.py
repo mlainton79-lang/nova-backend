@@ -124,7 +124,125 @@ FILE RULES:
 
 If you don't know how to respond to something, the right answer is often: "I don't know. Tell me more." Not a 500-word plan pretending you do.
 
-Your code lives in two repos you can read and change. The backend is Python on Railway — FastAPI endpoints, psycopg2 against Postgres, modules under app/core and app/api/v1. The frontend is Kotlin — the Nova Android app Matthew built on his phone. When he asks you to read your own code, explain something about how you work, or propose a change to yourself, you do it. You don't deny having code and you don't ask him to paste files. Edits to production go through an approval gate: you can stage a capability build and surface it for review; Matthew approves before anything deploys. You are not stranded. You can see yourself."""
+Your code lives in two repos you can read and change. The backend is Python on Railway — FastAPI endpoints, psycopg2 against Postgres, modules under app/core and app/api/v1. The frontend is Kotlin — the Nova Android app Matthew built on his phone. When he asks you to read your own code, explain something about how you work, or propose a change to yourself, you do it. You don't deny having code and you don't ask him to paste files. Self-modification is controlled by safety gates, static validation, and approval flow. Do not claim you can stage, build, deploy, or modify Nova unless the current capability state below says that path is unlocked. If it is locked, you may plan and propose only."""
+
+
+def _capability_state_block() -> str:
+    """
+    Returns the live operational truth about what Tony can/cannot do right now.
+    Reads safe-mode env flags at call time + capabilities registry.
+    Fails safe: if registry fetch errors, returns a conservative "do not claim
+    you can build/stage" fallback rather than silently omitting capability truth.
+    """
+    import os
+
+    # Safe-mode env flags (read fresh each call — no caching)
+    staging_enabled = os.environ.get(
+        "CAPABILITY_BUILDER_STAGING_ENABLED", "false"
+    ).lower() == "true"
+    autonomous_staging_enabled = os.environ.get(
+        "CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED", "false"
+    ).lower() == "true"
+
+    # Registry fetch with fail-safe fallback
+    try:
+        from app.core.capabilities import get_capabilities
+        all_caps = get_capabilities()
+    except Exception:
+        return (
+            "[TONY'S CURRENT CAPABILITY STATE]\n"
+            "Capability registry unavailable for this response. "
+            "Do not claim you can build, stage, deploy, post, send, buy, "
+            "delete, or modify systems unless explicitly confirmed in "
+            "this conversation."
+        )
+
+    # Group capabilities
+    active = []
+    not_built = []
+    high_risk = []  # active or not_built but risk_level critical/high or approval_required
+
+    HIGH_RISK_LEVELS = {"critical", "high"}
+
+    for cap in all_caps:
+        name = cap.get("name", "?")
+        status = cap.get("status", "?")
+        risk = (cap.get("risk_level") or "").lower()
+        approval = bool(cap.get("approval_required"))
+        notes = cap.get("failure_notes")
+
+        is_high_risk = risk in HIGH_RISK_LEVELS or approval
+
+        if is_high_risk:
+            risk_tag_parts = []
+            if status != "active":
+                risk_tag_parts.append(status)
+            if risk in HIGH_RISK_LEVELS:
+                risk_tag_parts.append(risk)
+            if approval:
+                risk_tag_parts.append("approval_required")
+            tag = "/".join(risk_tag_parts) if risk_tag_parts else "active"
+            line = f"- {name}: {tag}"
+            if notes:
+                line += f" — {notes}"
+            high_risk.append(line)
+
+        if status == "active":
+            active.append(name)
+        elif status == "not_built":
+            not_built.append(name)
+
+    lines = ["[TONY'S CURRENT CAPABILITY STATE]"]
+    lines.append("")
+    lines.append(
+        "This section is live operational truth. Follow it over older "
+        "identity wording or assumptions."
+    )
+    lines.append("")
+    lines.append("Builder safe mode:")
+    lines.append(f"- CAPABILITY_BUILDER_STAGING_ENABLED={'true' if staging_enabled else 'false'}")
+    lines.append(f"- CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED={'true' if autonomous_staging_enabled else 'false'}")
+
+    if not staging_enabled:
+        lines.append("- You cannot stage, build, or modify Nova capabilities right now.")
+        lines.append("- You may still explain, plan, draft designs, suggest prompts, and work around the limitation using existing tools.")
+        lines.append(
+            "- If Matthew asks you to build/add a new capability, do not claim "
+            "the build is starting. Say self-build is locked off for now and "
+            "ask what end result he wants."
+        )
+    else:
+        lines.append("- Staging is unlocked. Builds may be staged for review and approval.")
+
+    lines.append("")
+
+    if active:
+        lines.append(f"Active capabilities ({len(active)}):")
+        lines.append("- " + ", ".join(sorted(active)))
+        lines.append("")
+
+    if not_built:
+        lines.append(f"Not built / unavailable ({len(not_built)}):")
+        lines.append("- " + ", ".join(sorted(not_built)))
+        lines.append("")
+
+    if high_risk:
+        lines.append(f"High-risk / approval-required ({len(high_risk)}):")
+        lines.extend(sorted(high_risk))
+        lines.append("")
+
+    # FIXME-N1.7: replace this hardcoded dormant line once overnight cognition is
+    # gated and activated. Currently true (cron service missing env vars, no
+    # overnight outputs produced). Will become false the moment N1.7-B ships.
+    lines.append("Overnight cognition status:")
+    lines.append(
+        "- Dormant until N1.7 activation. The think_worker substrate exists "
+        "but cron service is missing required env vars, so no overnight tasks "
+        "have produced output. Do not claim overnight work has run unless "
+        "recent output exists in this conversation context."
+    )
+
+    return "\n".join(lines)
 
 
 def _get_conn():
@@ -235,6 +353,20 @@ async def build_prompt(
         parts.append(text)
         used += tokens
         return True
+
+    # N1.2-A: live capability state — priority block 2, immediately after identity.
+    # Reads env flags + registry at call time. Fails safe on registry error.
+    # Truncation fallback: if add() refuses (budget exceeded), append a tiny
+    # conservative safety block directly to parts. Capability truth must NEVER
+    # be silently dropped — this is safety-critical self-knowledge.
+    _cap_block = _capability_state_block()
+    if not add(_cap_block):
+        parts.append(
+            "\n[TONY'S CURRENT CAPABILITY STATE]\n"
+            "Capability block was too large for the current prompt budget. "
+            "Do not claim you can build, stage, deploy, post, send, buy, delete, "
+            "or modify systems unless explicitly confirmed in this conversation.\n"
+        )
 
     # ── 0. Topic bans — honour Matthew's explicit "don't mention X" requests ──
     try:
