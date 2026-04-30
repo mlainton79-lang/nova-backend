@@ -28,6 +28,87 @@ BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 BACKEND_URL = "https://web-production-be42b.up.railway.app"
 DEV_TOKEN = os.environ.get("DEV_TOKEN", "nova-dev-token")
 
+
+# ============================================================
+# N1.5-B static validation — DO NOT permit generated-code execution
+# ============================================================
+
+# Stdlib safe set: read/transform-only modules generated capability code may import.
+# Filesystem, network low-level, process control, and reflection escape-hatches
+# are deliberately excluded.
+STDLIB_ALLOWLIST = frozenset({
+    "abc", "ast", "asyncio", "base64", "binascii", "bisect", "calendar",
+    "codecs", "collections", "concurrent", "contextlib", "copy", "csv",
+    "dataclasses", "datetime", "decimal", "difflib", "email", "enum",
+    "errno", "fnmatch", "functools", "gettext", "glob", "gzip",
+    "hashlib", "heapq", "hmac", "html", "http", "io", "ipaddress",
+    "itertools", "json", "locale", "logging", "math", "mimetypes",
+    "numbers", "operator", "queue", "random", "re", "secrets",
+    "statistics", "string", "struct", "tempfile", "textwrap", "time",
+    "timeit", "traceback", "typing", "unicodedata", "uuid", "warnings",
+    "weakref", "xml", "zipfile", "zlib", "zoneinfo",
+})
+
+# Submodule allowlist (specific dotted paths only):
+STDLIB_SUBMODULE_ALLOWLIST = frozenset({
+    "urllib.parse",  # parsing only — NOT urllib.request
+    "os.path",       # path manipulation only — NOT os itself
+})
+
+# Third-party allowlist: matched against the top-level package name.
+# Curated subset of requirements.txt — only packages safe for generated
+# endpoint code to use directly. Update DELIBERATELY when a new capability
+# genuinely needs a new package; do not auto-derive from requirements.txt.
+THIRD_PARTY_ALLOWLIST = frozenset({
+    "fastapi",
+    "pydantic",
+    "httpx",
+    "psycopg2",
+    "pgvector",
+})
+
+# Internal app.* allowlist — narrow on purpose.
+# Do NOT broaden to "app.*" without a specific use case and security review.
+INTERNAL_ALLOWLIST = frozenset({
+    "app.core.security",
+})
+
+# Calls rejected by AST walker (matched on the leaf name of the qualified
+# call path, post-aliasing). Includes code-execution, process/shell,
+# filesystem mutation, deserialisation RCE, raw network, and reflection
+# escape-hatches.
+DANGEROUS_CALL_NAMES = frozenset({
+    # Code execution
+    "eval", "exec", "compile", "__import__",
+    "exec_module", "import_module", "reload",
+    # Reflection escape
+    "getattr", "setattr", "delattr", "vars",
+    # File access (any mode — read is exfiltration risk)
+    "open",
+    # Process / shell
+    "system", "popen", "fork", "spawn", "spawnl", "spawnv", "spawnvp",
+    "execv", "execvp", "execve",
+    # Subprocess
+    "Popen", "run", "call", "check_call", "check_output",
+    "getoutput", "getstatusoutput",
+    # Filesystem mutation
+    "rmtree", "move", "copy", "copy2", "copyfile", "copytree",
+    "remove", "unlink", "rmdir", "removedirs", "rename", "replace",
+    "mkdir", "makedirs",
+    "write_text", "write_bytes", "read_text", "read_bytes",
+    # Deserialisation RCE — handled with module-context check
+    "load", "loads",
+    # Network low-level (raw)
+    "socket", "create_connection",
+})
+
+# Modules where load/loads is dangerous (deserialisation RCE).
+# json.load / json.loads are NOT in this set — safe and widely used.
+_DESERIALISATION_DANGEROUS = frozenset({
+    "pickle", "marshal", "dill", "shelve",
+})
+
+
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
@@ -340,56 +421,194 @@ def validate_code(code: str) -> dict:
     return {"valid": True}
 
 
+import ast as _ast
+
+
+def _import_top_level(name: str) -> str:
+    """Return the top-level package name from a dotted module path."""
+    return name.split(".")[0]
+
+
+def _is_allowlisted_import(module_name: str) -> bool:
+    """Check if an import target is in any allowlist."""
+    if module_name in STDLIB_SUBMODULE_ALLOWLIST:
+        return True
+    if module_name in INTERNAL_ALLOWLIST:
+        return True
+    top = _import_top_level(module_name)
+    if top in STDLIB_ALLOWLIST:
+        return True
+    if top in THIRD_PARTY_ALLOWLIST:
+        return True
+    return False
+
+
+def _qualified_call_name(call_node: _ast.Call) -> str:
+    """
+    Return the qualified name of a Call's function for matching.
+    e.g. subprocess.Popen() -> "subprocess.Popen"
+         os.path.join()    -> "os.path.join"
+         eval()            -> "eval"
+         x.method()        -> ".method" / "method" depending on receiver shape
+    """
+    func = call_node.func
+    parts = []
+    while isinstance(func, _ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if isinstance(func, _ast.Name):
+        parts.append(func.id)
+    parts.reverse()
+    return ".".join(parts)
+
+
+def _check_imports(tree: _ast.AST, issues: list) -> None:
+    """Reject any import not in the allowlists."""
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                if not _is_allowlisted_import(alias.name):
+                    issues.append(
+                        f"Banned import: {alias.name} (not in allowlist)"
+                    )
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module is None:
+                issues.append("Banned import: relative import (from . import ...)")
+                continue
+            if not _is_allowlisted_import(node.module):
+                issues.append(
+                    f"Banned import: from {node.module} (not in allowlist)"
+                )
+
+
+def _check_dangerous_calls(tree: _ast.AST, issues: list) -> None:
+    """Reject dangerous call patterns by qualified name."""
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        qname = _qualified_call_name(node)
+        leaf = qname.split(".")[-1] if qname else ""
+
+        if leaf in DANGEROUS_CALL_NAMES:
+            # Special case for load/loads — only dangerous from pickle/marshal/etc.
+            # json.load / json.loads pass this filter.
+            if leaf in {"load", "loads"}:
+                root = qname.split(".")[0] if "." in qname else ""
+                if root in _DESERIALISATION_DANGEROUS:
+                    issues.append(f"Dangerous call: {qname} (deserialisation RCE)")
+                # else: allow json.load, json.loads, etc.
+            else:
+                issues.append(f"Dangerous call: {qname or leaf}")
+
+
+def _check_top_level_body(tree: _ast.Module, issues: list) -> None:
+    """
+    Reject top-level nodes other than imports, definitions, and a narrow
+    set of safe statements. No top-level if/for/while/try/with/raise/calls
+    other than allowed assignments.
+    """
+    ALLOWED_TOP_LEVEL = (
+        _ast.Import, _ast.ImportFrom,
+        _ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef,
+        _ast.Assign, _ast.AnnAssign,
+        _ast.Expr,  # docstrings + harmless constants only
+    )
+    for node in tree.body:
+        if not isinstance(node, ALLOWED_TOP_LEVEL):
+            issues.append(
+                f"Banned top-level construct: {type(node).__name__} "
+                f"at line {getattr(node, 'lineno', '?')}"
+            )
+            continue
+        # Restrict top-level Expr to constants/docstrings only.
+        if isinstance(node, _ast.Expr) and not isinstance(node.value, _ast.Constant):
+            issues.append(
+                f"Banned top-level expression at line {node.lineno}"
+            )
+
+
+def _check_router_assignment(tree: _ast.Module, issues: list) -> None:
+    """Require unconditional top-level router = APIRouter() assignment."""
+    found = False
+    for node in tree.body:
+        if isinstance(node, _ast.Assign):
+            for target in node.targets:
+                if isinstance(target, _ast.Name) and target.id == "router":
+                    if isinstance(node.value, _ast.Call):
+                        callee = _qualified_call_name(node.value)
+                        if callee.endswith("APIRouter"):
+                            found = True
+                            break
+            if found:
+                break
+    if not found:
+        issues.append(
+            "Missing or invalid top-level router assignment "
+            "(must be unconditional `router = APIRouter()`)"
+        )
+
+
+def static_validate_capability(
+    code: str,
+    expected_attrs: list = None,
+) -> dict:
+    """
+    AST-only validation for LLM-generated capability code.
+
+    NEVER executes the code. This is the N1.5-B replacement for the
+    previous exec_module-based runtime_import_check.
+
+    Args:
+        code: source text of the generated module.
+        expected_attrs: reserved for future use; currently the router
+                        check is hard-coded.
+
+    Returns:
+        {"ok": True} on full pass, OR
+        {"ok": False, "error": "<one-line summary>", "issues": [...]} on rejection.
+    """
+    issues: list = []
+
+    # Step 1: parse
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError as e:
+        return {
+            "ok": False,
+            "error": f"SyntaxError: {e.msg} at line {e.lineno}",
+            "issues": [f"SyntaxError: {e.msg} at line {e.lineno}"],
+        }
+
+    # Step 2: imports
+    _check_imports(tree, issues)
+    # Step 3: dangerous calls
+    _check_dangerous_calls(tree, issues)
+    # Step 4: top-level body
+    _check_top_level_body(tree, issues)
+    # Step 5: router assignment
+    _check_router_assignment(tree, issues)
+
+    if issues:
+        return {
+            "ok": False,
+            "error": issues[0],   # one-line summary
+            "issues": issues,     # full list
+        }
+    return {"ok": True}
+
+
 def runtime_import_check(code: str, module_name: str) -> dict:
     """
-    Try to actually import the generated code in an isolated namespace.
-    This catches runtime errors that pure syntax/AST checks miss —
-    like missing imports, wrong signatures, undefined helper calls.
-    
-    Returns {"ok": True} if it imports cleanly, else {"ok": False, "error": "..."}
+    Historical name retained for compatibility.
+
+    N1.5-B (commit pending): this function NO LONGER imports or executes
+    generated code. It delegates to static_validate_capability which
+    performs AST-only static analysis.
+
+    The module_name parameter is retained for call-site compatibility
+    but no longer used.
     """
-    import tempfile
-    import importlib.util
-    import os as _os
-    
-    tmp_path = None
-    try:
-        # Write to a tempfile
-        fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix=f"tony_check_{module_name}_")
-        with _os.fdopen(fd, "w") as f:
-            f.write(code)
-        
-        # Load as a module
-        spec = importlib.util.spec_from_file_location(f"tony_check_{module_name}", tmp_path)
-        if spec is None or spec.loader is None:
-            return {"ok": False, "error": "Could not create module spec"}
-        mod = importlib.util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(mod)
-        except NameError as e:
-            return {"ok": False, "error": f"NameError at import: {e}"}
-        except ImportError as e:
-            # Only fail on imports we can't resolve. Tony may legitimately import
-            # from app.core — that'll work in production.
-            msg = str(e)
-            if "app.core" in msg or "app.api" in msg:
-                # Expected — would work in production
-                return {"ok": True, "note": "internal app imports skipped in check"}
-            return {"ok": False, "error": f"ImportError: {e}"}
-        except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__} at import: {str(e)[:200]}"}
-        
-        # Check for a router attribute
-        if not hasattr(mod, "router"):
-            return {"ok": False, "error": "Module has no 'router' attribute"}
-        
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": f"Check harness error: {e}"}
-    finally:
-        if tmp_path:
-            try: _os.unlink(tmp_path)
-            except Exception: pass
+    return static_validate_capability(code)
 
 
 async def push_capability_to_github(filename: str, code: str, capability_name: str) -> dict:

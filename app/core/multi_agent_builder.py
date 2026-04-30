@@ -239,6 +239,26 @@ async def build_capability_multi_agent(capability_name: str) -> Dict:
     """
     Full multi-agent pipeline. Returns {ok, spec, code, critique, issues_fixed}.
     """
+    # N1.5-B safe-mode gate (mirrors N1.5-A pattern for chat-driven path).
+    # Multi-agent build is operator-only via verify_token, but it can still
+    # reach validation/staging logic that handles LLM-generated code.
+    # Refuse before any model calls or staging when staging flag is off.
+    if os.environ.get(
+        "CAPABILITY_BUILDER_STAGING_ENABLED", "false"
+    ).lower() != "true":
+        return {
+            "ok": False,
+            "phase": "safe_mode_gate",
+            "error": (
+                "Capability staging is locked. "
+                "CAPABILITY_BUILDER_STAGING_ENABLED is not set to true. "
+                "No build will run."
+            ),
+            "spec": None,
+            "code": None,
+            "critique": None,
+        }
+
     # Budget check first
     try:
         from app.core.budget_guard import is_autonomous_allowed
