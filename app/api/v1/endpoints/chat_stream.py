@@ -377,7 +377,8 @@ async def _gather_context(request: ChatRequest) -> dict:
                                "emails from", "show me", "look up", "any emails", "have i got"]
             if any(t in msg_lower for t in search_triggers):
                 results = await asyncio.wait_for(
-                    search_all_accounts(request.message, max_per_account=5), timeout=4.0
+                    # N1.gmail-fix-A: 15s — search_all_accounts also fans out to 4 accounts
+                    search_all_accounts(request.message, max_per_account=5), timeout=15.0
                 )
                 if results:
                     lines = ["[GMAIL SEARCH]"]
@@ -388,7 +389,12 @@ async def _gather_context(request: ChatRequest) -> dict:
                             lines.append(f"  {e['snippet'][:100]}")
                     return "\n".join(lines)
             else:
-                summary = await asyncio.wait_for(get_morning_summary(), timeout=4.0)
+                # N1.gmail-fix-A: 15s timeout — get_morning_summary fans out to all
+                # connected accounts (4 in current production), each requiring an OAuth
+                # refresh + Gmail API call. 4s was too tight after re-auth re-enabled
+                # the full account set. Caused silent timeout fallback making Tony say
+                # "Gmail's not working" when Gmail was healthy.
+                summary = await asyncio.wait_for(get_morning_summary(), timeout=15.0)
                 return f"[GMAIL]\n{summary}" if summary else ""
         except Exception as e:
             print(f"[CHAT_STREAM] Gmail: {e}")
