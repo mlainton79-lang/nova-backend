@@ -126,6 +126,67 @@ def mark_draft_dismissed(draft_id: int):
         print(f"[EMAIL DRAFTER] Dismiss failed: {e}")
 
 
+def get_draft_for_send(draft_id: int) -> Optional[Dict]:
+    """
+    Fetch all fields needed by the send endpoint, including the
+    original_message_id trust anchor for threading. Only returns
+    pending drafts (sent/dismissed return None).
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, account, original_message_id, original_from,
+                   original_subject, draft_to, draft_subject, draft_body,
+                   tony_reasoning, status
+            FROM tony_email_drafts
+            WHERE id = %s AND status = 'pending'
+        """, (draft_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "account": row[1],
+            "original_message_id": row[2],
+            "original_from": row[3],
+            "original_subject": row[4],
+            "draft_to": row[5],
+            "draft_subject": row[6],
+            "draft_body": row[7],
+            "reasoning": row[8],
+            "status": row[9],
+        }
+    except Exception as e:
+        print(f"[EMAIL DRAFTER] get_draft_for_send failed: {e}")
+        return None
+
+
+def update_draft_fields(draft_id: int, draft_subject: str, draft_body: str) -> bool:
+    """
+    Persist the final approved subject/body to the draft row before marking
+    sent. Audit row reflects what was actually sent, not what was originally
+    drafted.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_email_drafts
+            SET draft_subject = %s, draft_body = %s
+            WHERE id = %s
+        """, (draft_subject, draft_body, draft_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[EMAIL DRAFTER] update_draft_fields failed: {e}")
+        return False
+
+
 def draft_already_exists(message_id: str) -> bool:
     """Prevent duplicate drafts for the same email."""
     try:
@@ -341,3 +402,146 @@ async def scan_and_draft_replies() -> Dict:
 
     print(f"[EMAIL DRAFTER] Done. {results['drafts_created']} drafts created from {results['emails_checked']} emails.")
     return results
+
+
+async def draft_single_reply(query: str, instruction: Optional[str] = None) -> Dict:
+    """
+    Chat-driven on-demand drafting. Find email by query, draft reply, persist.
+
+    Bypasses the autonomous _needs_reply classifier — Matthew explicitly asked,
+    no needs-reply check required.
+
+    Args:
+        query: search terms ("Pharmacy2U", "CQC inspection", "Western Circle")
+        instruction: optional Matthew-provided guidance ("say delivery time works")
+
+    Returns:
+        On success: {"ok": True, "draft_id": int, "matched_email": {...},
+                     "draft_subject": str, "draft_body": str}
+        On no match: {"ok": False, "error": "no_match", "query": str}
+        On multiple matches: {"ok": False, "error": "multiple_matches",
+                              "candidates": [{id, from, subject, snippet, account}, ...]}
+        On other failure: {"ok": False, "error": "search_failed"|"draft_failed",
+                           "details": str}
+    """
+    from app.core.gmail_service import search_all_accounts, get_email_body
+
+    try:
+        matches = await search_all_accounts(query, max_per_account=5)
+    except Exception as e:
+        return {"ok": False, "error": "search_failed", "details": str(e)}
+
+    if not matches:
+        return {"ok": False, "error": "no_match", "query": query}
+
+    if len(matches) > 1:
+        # Sort by date desc, take top 5
+        sorted_matches = sorted(matches, key=lambda m: m.get("date", ""), reverse=True)[:5]
+        candidates = [
+            {
+                "id": m.get("id"),
+                "from": m.get("from", ""),
+                "subject": m.get("subject", ""),
+                "snippet": m.get("snippet", "")[:200],
+                "account": m.get("account", ""),
+            }
+            for m in sorted_matches
+        ]
+        return {"ok": False, "error": "multiple_matches", "candidates": candidates}
+
+    # Exactly one match — fetch full body and draft.
+    email_meta = matches[0]
+    account = email_meta.get("account", "")
+    message_id = email_meta.get("id", "")
+    from_addr = email_meta.get("from", "")
+    subject = email_meta.get("subject", "")
+    snippet = email_meta.get("snippet", "")
+
+    try:
+        full = await get_email_body(account, message_id)
+        body_text = (full.get("body", "") or snippet)[:4000]
+    except Exception as e:
+        print(f"[EMAIL DRAFTER] body fetch failed for {message_id}: {e}")
+        body_text = snippet
+
+    world_context = await _get_world_context()
+    instruction_block = (
+        f"\n\nMatthew's specific instruction for this reply: {instruction}"
+        if instruction else ""
+    )
+
+    prompt = f"""You are Tony, Matthew Lainton's personal AI assistant.
+
+Matthew's context:
+{world_context}
+
+Matthew has explicitly asked you to draft a reply to this email.{instruction_block}
+
+Email details:
+Account: {account}
+From: {from_addr}
+Subject: {subject}
+Full body:
+{body_text}
+
+Respond in JSON only:
+{{
+    "draft_subject": "Re: {subject}",
+    "draft_body": "Full email body Tony has drafted for Matthew. British English. Professional but direct. Sign off as Matthew Lainton. Honour Matthew's instruction above. If this is a legal matter, be firm but measured."
+}}"""
+
+    response = await _call_gemini(prompt, max_tokens=2000)
+    if not response:
+        return {"ok": False, "error": "draft_failed", "details": "Gemini returned no response"}
+
+    try:
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if not json_match:
+            return {"ok": False, "error": "draft_failed", "details": "no JSON in Gemini response"}
+        data = json.loads(json_match.group())
+    except Exception as e:
+        return {"ok": False, "error": "draft_failed", "details": f"JSON parse failed: {e}"}
+
+    draft_subject = data.get("draft_subject") or f"Re: {subject}"
+    draft_body = data.get("draft_body") or ""
+
+    if not draft_body.strip():
+        return {"ok": False, "error": "draft_failed", "details": "empty draft body"}
+
+    reasoning = (
+        f"On-demand draft requested by Matthew via chat. Query: '{query}'."
+        + (f" Instruction: {instruction}" if instruction else "")
+    )
+
+    draft_id = save_draft(
+        account=account,
+        message_id=message_id,
+        from_addr=from_addr,
+        subject=subject,
+        snippet=snippet,
+        draft_to=from_addr,
+        draft_subject=draft_subject,
+        draft_body=draft_body,
+        reasoning=reasoning,
+    )
+
+    if not draft_id:
+        # save_draft returned None — ON CONFLICT (already drafted for this msg)
+        return {
+            "ok": False,
+            "error": "draft_failed",
+            "details": "Draft already exists for this email — open Email Drafts to see it.",
+        }
+
+    return {
+        "ok": True,
+        "draft_id": draft_id,
+        "matched_email": {
+            "id": message_id,
+            "from": from_addr,
+            "subject": subject,
+            "account": account,
+        },
+        "draft_subject": draft_subject,
+        "draft_body": draft_body,
+    }

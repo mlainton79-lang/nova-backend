@@ -71,6 +71,12 @@ COMMAND_PATTERNS = [
     # Daily review
     (r"^(?:how(?:'s| was) (?:today|the day)|end of day|daily review|what happened today|recap today)\??$", 'daily_review'),
     (r'review (?:the )?day', 'daily_review'),
+    # N1.email-draft-A: chat-driven on-demand email reply drafting.
+    # Group 1 = search query (sender / subject keywords).
+    # Group 2 (optional) = instruction telling Tony what to say.
+    (r"draft (?:a |the )?reply to (?:the )?(.+?)(?: email)?(?:\s+saying\s+(.+))?$", 'draft_email_reply'),
+    (r"reply to (?:the )?(.+?) email\s+saying\s+(.+)$", 'draft_email_reply'),
+    (r"draft (?:an? )?email reply (?:to|about)\s+(.+?)(?:\s+saying\s+(.+))?$", 'draft_email_reply'),
 ]
 
 
@@ -138,7 +144,50 @@ async def execute_command(command: Dict) -> str:
     elif cmd == "daily_review":
         return await _daily_review()
 
+    elif cmd == "draft_email_reply":
+        query = args[0] if args and len(args) >= 1 and args[0] else ""
+        instruction = args[1] if args and len(args) >= 2 and args[1] else None
+        return await _draft_email_reply(query, instruction)
+
     return ""
+
+
+async def _draft_email_reply(query: str, instruction: Optional[str] = None) -> str:
+    """
+    Chat handler for "draft a reply to ..." — bypasses the autonomous
+    classifier and asks Tony to draft directly. Replies in plain text;
+    Matthew opens Email Drafts to review/edit/approve/send.
+    """
+    query = (query or "").strip()
+    if not query:
+        return "What email do you want me to draft a reply to?"
+
+    from app.core.email_drafter import draft_single_reply
+    result = await draft_single_reply(query, instruction)
+
+    if not result.get("ok"):
+        err = result.get("error", "")
+        if err == "no_match":
+            return (
+                f"I couldn't find an email matching '{query}'. "
+                f"Try clearer search terms — sender name or subject keywords."
+            )
+        if err == "multiple_matches":
+            candidates = result.get("candidates", [])
+            lines = [f"I found {len(candidates)} emails matching '{query}'. Which one?"]
+            for i, c in enumerate(candidates, 1):
+                sender = (c.get("from", "") or "").split("<")[0].strip() or c.get("from", "(unknown)")
+                subject = c.get("subject", "(no subject)")
+                lines.append(f"{i}. {sender} — {subject}")
+            return "\n".join(lines)
+        if err == "search_failed":
+            return f"Couldn't search Gmail right now: {result.get('details', 'unknown')}"
+        return f"I had trouble drafting that reply: {result.get('details', err or 'unknown')}"
+
+    matched = result.get("matched_email", {})
+    sender = (matched.get("from", "") or "").split("<")[0].strip() or matched.get("from", "(unknown)")
+    subject = matched.get("subject", "(no subject)")
+    return f"Drafted a reply to {sender} re: '{subject}'. Open Email Drafts to review and send."
 
 
 async def _approve_build() -> str:

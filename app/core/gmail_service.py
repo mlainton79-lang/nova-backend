@@ -173,9 +173,51 @@ async def get_email_body(email: str, message_id: str) -> dict:
 
 async def send_email(email: str, to: str, subject: str, body: str, reply_to_id: str = None) -> bool:
     token = await refresh_access_token(email)
-    message_str = f"To: {to}\r\nSubject: {subject}\r\n\r\n{body}"
+
+    # N1.email-draft-A: thread replies into the original conversation.
+    # Set In-Reply-To + References headers and pass Gmail threadId on the
+    # send body. Best-effort: any failure to fetch the original metadata
+    # falls through to a non-threaded send rather than blocking the user.
+    in_reply_to_header = ""
+    references_header = ""
+    thread_id = None
+    if reply_to_id:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as meta_client:
+                meta_resp = await meta_client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{reply_to_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"format": "metadata", "metadataHeaders": ["Message-Id", "References"]},
+                )
+                if meta_resp.status_code == 200:
+                    meta = meta_resp.json()
+                    thread_id = meta.get("threadId")
+                    headers_list = meta.get("payload", {}).get("headers", [])
+                    msg_id_value = next(
+                        (h["value"] for h in headers_list if h.get("name", "").lower() == "message-id"),
+                        None,
+                    )
+                    refs_value = next(
+                        (h["value"] for h in headers_list if h.get("name", "").lower() == "references"),
+                        "",
+                    )
+                    if msg_id_value:
+                        in_reply_to_header = f"In-Reply-To: {msg_id_value}\r\n"
+                        references_header = f"References: {(refs_value + ' ' + msg_id_value).strip()}\r\n"
+        except Exception as e:
+            print(f"[GMAIL] Threading metadata fetch failed for {reply_to_id}: {e}")
+
+    message_str = (
+        f"To: {to}\r\n"
+        f"Subject: {subject}\r\n"
+        f"{in_reply_to_header}"
+        f"{references_header}"
+        f"\r\n{body}"
+    )
     raw = base64.urlsafe_b64encode(message_str.encode()).decode()
     payload = {"raw": raw}
+    if thread_id:
+        payload["threadId"] = thread_id
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
         return resp.status_code == 200
