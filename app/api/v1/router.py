@@ -40,6 +40,8 @@ from app.api.v1.endpoints import voice
 router.include_router(voice.router, tags=["voice"])
 from app.api.v1.endpoints import drafts
 router.include_router(drafts.router, tags=["drafts"])
+from app.api.v1.endpoints import vinted_jobs as vinted_jobs_endpoints
+router.include_router(vinted_jobs_endpoints.router, tags=["vinted_jobs"])
 from app.api.v1.endpoints import documents
 router.include_router(documents.router, tags=["documents"])
 from app.api.v1.endpoints import daily_review

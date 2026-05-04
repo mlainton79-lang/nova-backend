@@ -1,0 +1,34 @@
+# Dockerfile for Tony's Vinted operator worker.
+# Runs once per invocation against a job_id passed via CLI arg or
+# VINTED_JOB_ID env var. Designed for Railway "run on demand" service.
+#
+# Hard rules (see vinted_worker/safety.py):
+# - Worker NEVER clicks Publish/Upload-item/Post-item.
+# - Vinted creds live ONLY in env vars, NEVER baked into the image.
+# - storageState lives ONLY on the mounted /data volume.
+
+FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+
+WORKDIR /app
+
+# Backend deps (worker imports app.core.vinted_jobs + app.core.pending_actions)
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy backend code so worker can import app.core.*
+COPY app/ ./app/
+
+# Copy worker package + its deps
+COPY vinted_worker/ ./vinted_worker/
+RUN pip install --no-cache-dir -r vinted_worker/requirements.txt
+
+# Volume mount expected at /data on the Railway service
+ENV DATA_ROOT=/data
+ENV PHOTO_BASE=/data/vinted_jobs
+ENV STORAGE_STATE_DIR=/data/vinted_state
+ENV PYTHONUNBUFFERED=1
+
+# Entry: worker runs once per invocation. Pass job_id via:
+#   railway run python -m vinted_worker.operator <job_id>
+# OR set VINTED_JOB_ID env var before invoking.
+CMD ["python", "-m", "vinted_worker.operator"]
