@@ -655,6 +655,22 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             chain = ["gemini"]
             provider_key = "gemini"
 
+    # N1.email-draft-A.fix: Pending Action Router runs FIRST so a numeric
+    # reply to "which email?" resolves to the chosen candidate before regex
+    # dispatch or LLM gets a look at the message.
+    try:
+        from app.core.command_parser import _check_pending_action
+        pending_response = await _check_pending_action(request.message)
+        if pending_response:
+            log_request(provider="pending_action", message=request.message,
+                        reply=pending_response, ok=True)
+            async def _pending_stream():
+                yield "data: " + json.dumps({"type": "chunk", "text": pending_response}) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+            return StreamingResponse(_pending_stream(), media_type="text/event-stream")
+    except Exception as e:
+        print(f"[CHAT_STREAM] Pending action check: {e}")
+
     # Command parser — handle action commands instantly
     try:
         from app.core.command_parser import detect_command, execute_command

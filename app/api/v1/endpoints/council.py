@@ -201,6 +201,22 @@ async def _post_response_tasks(message: str, reply: str):
 async def council(req: ChatRequest, _=Depends(verify_token)):
     start = time.time()
 
+    # N1.email-draft-A.fix: Pending Action Router runs FIRST so a numeric
+    # reply to "which email?" resolves to the chosen candidate before regex
+    # dispatch or Council deliberation gets a look at the message.
+    try:
+        from app.core.command_parser import _check_pending_action
+        pending_response = await _check_pending_action(req.message)
+        if pending_response:
+            log_request(provider="pending_action", message=req.message,
+                        reply=pending_response[:500], ok=True)
+            return CouncilResponse(
+                ok=True, provider="council", reply=pending_response,
+                latency_ms=int((time.time() - start) * 1000)
+            )
+    except Exception as e:
+        print(f"[COUNCIL] Pending action check: {e}")
+
     # Check for action commands first — don't waste Council on things we can do directly
     try:
         from app.core.command_parser import detect_command, execute_command

@@ -404,12 +404,32 @@ async def scan_and_draft_replies() -> Dict:
     return results
 
 
+def _parse_date_to_ts(date_str: str) -> int:
+    """Best-effort RFC-2822 date string to unix timestamp for sort. 0 on failure."""
+    if not date_str:
+        return 0
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(date_str)
+        return int(dt.timestamp())
+    except Exception:
+        return 0
+
+
 async def draft_single_reply(query: str, instruction: Optional[str] = None) -> Dict:
     """
-    Chat-driven on-demand drafting. Find email by query, draft reply, persist.
+    Chat-driven on-demand drafting. Find email by query (sender-priority),
+    draft reply, persist.
 
-    Bypasses the autonomous _needs_reply classifier — Matthew explicitly asked,
-    no needs-reply check required.
+    Bypasses the autonomous _needs_reply classifier — Matthew explicitly asked.
+
+    Search strategy (N1.email-draft-A.fix):
+      1. from:QUERY  — most precise, sender match
+      2. subject:QUERY — subject match (only if no sender hits)
+      3. broad QUERY — body-only, last resort
+
+    Candidates ranked sender > subject > body, then by date desc.
+    Body-only matches no longer pollute the top of candidate lists.
 
     Args:
         query: search terms ("Pharmacy2U", "CQC inspection", "Western Circle")
@@ -420,23 +440,71 @@ async def draft_single_reply(query: str, instruction: Optional[str] = None) -> D
                      "draft_subject": str, "draft_body": str}
         On no match: {"ok": False, "error": "no_match", "query": str}
         On multiple matches: {"ok": False, "error": "multiple_matches",
-                              "candidates": [{id, from, subject, snippet, account}, ...]}
+                              "candidates": [{id, from, subject, snippet,
+                                              account, match_reason}, ...]}
         On other failure: {"ok": False, "error": "search_failed"|"draft_failed",
                            "details": str}
     """
-    from app.core.gmail_service import search_all_accounts, get_email_body
+    from app.core.gmail_service import search_all_accounts
 
+    query_clean = (query or "").strip()
+    if not query_clean:
+        return {"ok": False, "error": "no_match", "query": query or ""}
+
+    matches: list = []
+
+    # Strategy 1: from: operator (sender match)
     try:
-        matches = await search_all_accounts(query, max_per_account=5)
+        from_matches = await search_all_accounts(f"from:{query_clean}", max_per_account=5)
+        for m in from_matches:
+            m["match_reason"] = "sender"
+        matches.extend(from_matches)
     except Exception as e:
-        return {"ok": False, "error": "search_failed", "details": str(e)}
+        print(f"[EMAIL DRAFTER] from: search failed: {e}")
+
+    # Strategy 2: subject: operator (only if no sender matches)
+    if not matches:
+        try:
+            subject_matches = await search_all_accounts(f"subject:{query_clean}", max_per_account=5)
+            for m in subject_matches:
+                m["match_reason"] = "subject"
+            matches.extend(subject_matches)
+        except Exception as e:
+            print(f"[EMAIL DRAFTER] subject: search failed: {e}")
+
+    # Strategy 3: broad search — body-only, last resort
+    if not matches:
+        try:
+            broad_matches = await search_all_accounts(query_clean, max_per_account=5)
+            for m in broad_matches:
+                m["match_reason"] = "body"
+            matches.extend(broad_matches)
+        except Exception as e:
+            return {"ok": False, "error": "search_failed", "details": str(e)}
+
+    # Dedupe by message_id (same email may surface in multiple strategies)
+    seen = set()
+    unique_matches: list = []
+    for m in matches:
+        mid = m.get("id")
+        if mid and mid not in seen:
+            seen.add(mid)
+            unique_matches.append(m)
+    matches = unique_matches
 
     if not matches:
         return {"ok": False, "error": "no_match", "query": query}
 
     if len(matches) > 1:
-        # Sort by date desc, take top 5
-        sorted_matches = sorted(matches, key=lambda m: m.get("date", ""), reverse=True)[:5]
+        # Rank: sender(0) > subject(1) > body(2), then by date desc
+        rank_order = {"sender": 0, "subject": 1, "body": 2}
+        sorted_matches = sorted(
+            matches,
+            key=lambda m: (
+                rank_order.get(m.get("match_reason", "body"), 3),
+                -_parse_date_to_ts(m.get("date", "")),
+            ),
+        )[:5]
         candidates = [
             {
                 "id": m.get("id"),
@@ -444,25 +512,48 @@ async def draft_single_reply(query: str, instruction: Optional[str] = None) -> D
                 "subject": m.get("subject", ""),
                 "snippet": m.get("snippet", "")[:200],
                 "account": m.get("account", ""),
+                "match_reason": m.get("match_reason", "body"),
             }
             for m in sorted_matches
         ]
         return {"ok": False, "error": "multiple_matches", "candidates": candidates}
 
-    # Exactly one match — fetch full body and draft.
-    email_meta = matches[0]
-    account = email_meta.get("account", "")
-    message_id = email_meta.get("id", "")
-    from_addr = email_meta.get("from", "")
-    subject = email_meta.get("subject", "")
-    snippet = email_meta.get("snippet", "")
+    # Exactly one match — draft via the bypass-search path
+    m = matches[0]
+    return await draft_reply_to_message(
+        account=m.get("account", ""),
+        message_id=m.get("id", ""),
+        instruction=instruction,
+        original_query=query,
+    )
+
+
+async def draft_reply_to_message(
+    account: str,
+    message_id: str,
+    instruction: Optional[str] = None,
+    original_query: Optional[str] = None,
+) -> Dict:
+    """
+    Draft a reply to an exact message (no search). Used after candidate
+    selection from the Pending Action Router — bypasses both _needs_reply
+    and any further search.
+    """
+    from app.core.gmail_service import get_email_body
+
+    if not account or not message_id:
+        return {"ok": False, "error": "draft_failed", "details": "missing account or message_id"}
 
     try:
         full = await get_email_body(account, message_id)
+        if not full:
+            return {"ok": False, "error": "draft_failed", "details": "email not found"}
+        from_addr = full.get("from", "") or ""
+        subject = full.get("subject", "") or ""
+        snippet = full.get("snippet", "") or ""
         body_text = (full.get("body", "") or snippet)[:4000]
     except Exception as e:
-        print(f"[EMAIL DRAFTER] body fetch failed for {message_id}: {e}")
-        body_text = snippet
+        return {"ok": False, "error": "draft_failed", "details": f"body fetch failed: {e}"}
 
     world_context = await _get_world_context()
     instruction_block = (
@@ -509,7 +600,8 @@ Respond in JSON only:
         return {"ok": False, "error": "draft_failed", "details": "empty draft body"}
 
     reasoning = (
-        f"On-demand draft requested by Matthew via chat. Query: '{query}'."
+        "On-demand draft (selected by Matthew via chat)."
+        + (f" Original query: '{original_query}'." if original_query else "")
         + (f" Instruction: {instruction}" if instruction else "")
     )
 
@@ -526,7 +618,6 @@ Respond in JSON only:
     )
 
     if not draft_id:
-        # save_draft returned None — ON CONFLICT (already drafted for this msg)
         return {
             "ok": False,
             "error": "draft_failed",

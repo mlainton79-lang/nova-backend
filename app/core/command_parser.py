@@ -157,12 +157,17 @@ async def _draft_email_reply(query: str, instruction: Optional[str] = None) -> s
     Chat handler for "draft a reply to ..." — bypasses the autonomous
     classifier and asks Tony to draft directly. Replies in plain text;
     Matthew opens Email Drafts to review/edit/approve/send.
+
+    On multiple_matches, stores a Pending Action so a numeric reply
+    ("3", "the third one") resolves to that exact email.
     """
     query = (query or "").strip()
     if not query:
         return "What email do you want me to draft a reply to?"
 
     from app.core.email_drafter import draft_single_reply
+    from app.core.pending_actions import create_pending_action
+
     result = await draft_single_reply(query, instruction)
 
     if not result.get("ok"):
@@ -174,6 +179,15 @@ async def _draft_email_reply(query: str, instruction: Optional[str] = None) -> s
             )
         if err == "multiple_matches":
             candidates = result.get("candidates", [])
+            # N1.email-draft-A.fix: persist candidate list so a follow-up
+            # numeric reply resolves to the chosen email instead of
+            # re-running the search.
+            create_pending_action(
+                action_type="email_draft_selection",
+                original_query=query,
+                candidates=candidates,
+                instruction=instruction,
+            )
             lines = [f"I found {len(candidates)} emails matching '{query}'. Which one?"]
             for i, c in enumerate(candidates, 1):
                 sender = (c.get("from", "") or "").split("<")[0].strip() or c.get("from", "(unknown)")
@@ -188,6 +202,61 @@ async def _draft_email_reply(query: str, instruction: Optional[str] = None) -> s
     sender = (matched.get("from", "") or "").split("<")[0].strip() or matched.get("from", "(unknown)")
     subject = matched.get("subject", "(no subject)")
     return f"Drafted a reply to {sender} re: '{subject}'. Open Email Drafts to review and send."
+
+
+async def _check_pending_action(message: str) -> Optional[str]:
+    """
+    N1.email-draft-A.fix: Pending Action Router.
+
+    If a recent pending action is awaiting user response (e.g. "which
+    email?"), try to resolve this message as a selection. On clear
+    selection, execute the resolution and return the response text.
+    On no selection (out of range, ambiguous, unrelated text), return
+    None so the message falls through to regex command parsing / LLM.
+
+    Reusable across operator workflows (email draft, Vinted disambiguation,
+    calendar selection, approval gates).
+    """
+    from app.core.pending_actions import (
+        get_active_pending_action, consume_pending_action, parse_selection,
+    )
+
+    pending = get_active_pending_action(session_key="default")
+    if not pending:
+        return None
+
+    if pending["action_type"] == "email_draft_selection":
+        candidates = pending.get("candidates", []) or []
+        if not candidates:
+            return None
+        selection = parse_selection(message, len(candidates))
+        if selection is None:
+            # Not a clear selection — let it fall through. User might be
+            # asking something unrelated, or saying "actually nevermind".
+            return None
+
+        chosen = candidates[selection - 1]
+        consume_pending_action(pending["id"])
+
+        from app.core.email_drafter import draft_reply_to_message
+        result = await draft_reply_to_message(
+            account=chosen.get("account", ""),
+            message_id=chosen.get("id", ""),
+            instruction=pending.get("instruction"),
+            original_query=pending.get("original_query"),
+        )
+
+        if not result.get("ok"):
+            err = result.get("error", "")
+            return f"Couldn't draft that one: {result.get('details', err or 'unknown')}"
+
+        matched = result.get("matched_email", {})
+        sender = (matched.get("from", "") or "").split("<")[0].strip() or matched.get("from", "(unknown)")
+        subject = matched.get("subject", "(no subject)")
+        return f"Drafted a reply to {sender} re: '{subject}'. Open Email Drafts to review and send."
+
+    # Unknown action_type — leave pending as-is (don't consume); fall through.
+    return None
 
 
 async def _approve_build() -> str:
