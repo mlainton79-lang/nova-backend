@@ -206,27 +206,77 @@ def draft_already_exists(message_id: str) -> bool:
 
 def save_draft(account: str, message_id: str, from_addr: str, subject: str,
                snippet: str, draft_to: str, draft_subject: str,
-               draft_body: str, reasoning: str) -> Optional[int]:
+               draft_body: str, reasoning: str) -> Dict:
+    """
+    Persist a draft reply. Returns a Dict so callers can distinguish
+    duplicate-pending from real database error.
+
+    Returns:
+      {"ok": True, "draft_id": int}                  — inserted
+      {"ok": False, "reason": "duplicate_pending"}   — pending draft already
+                                                       exists for this message
+      {"ok": False, "reason": "db_error",            — INSERT or schema fault
+       "details": str}
+
+    N1.email-draft-A.fix.2: was returning Optional[int]; the misleading
+    None-on-error behaviour caused fix.1 to mis-report DB failures as
+    "Draft already exists". Lazy partial unique index on
+    (original_message_id) WHERE status='pending' replaces the missing
+    full-unique constraint that ON CONFLICT silently failed against.
+    """
+    conn = None
+    cur = None
     try:
         conn = get_conn()
         cur = conn.cursor()
+        # Lazy idempotent partial unique index — best-effort.
+        # If creation fails (e.g. transient conflict), the INSERT below may
+        # still succeed when the index already exists from a prior call.
+        try:
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_tony_email_drafts_pending_msg
+                ON tony_email_drafts (original_message_id)
+                WHERE status = 'pending'
+            """)
+            conn.commit()
+        except Exception as idx_err:
+            print(f"[EMAIL_DRAFTS] index ensure failed: {idx_err}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         cur.execute("""
-            INSERT INTO tony_email_drafts
-            (account, original_message_id, original_from, original_subject,
-             original_snippet, draft_to, draft_subject, draft_body, tony_reasoning)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (original_message_id) DO NOTHING
+            INSERT INTO tony_email_drafts (
+                account, original_message_id, original_from, original_subject,
+                original_snippet, draft_to, draft_subject, draft_body,
+                tony_reasoning, status, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', NOW())
+            ON CONFLICT (original_message_id) WHERE status = 'pending' DO NOTHING
             RETURNING id
         """, (account, message_id, from_addr, subject, snippet[:500],
               draft_to, draft_subject, draft_body, reasoning))
         row = cur.fetchone()
         conn.commit()
-        cur.close()
-        conn.close()
-        return row[0] if row else None
+        if row:
+            return {"ok": True, "draft_id": row[0]}
+        return {"ok": False, "reason": "duplicate_pending"}
     except Exception as e:
         print(f"[EMAIL DRAFTER] Save failed: {e}")
-        return None
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return {"ok": False, "reason": "db_error", "details": str(e)}
+    finally:
+        try:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 async def _call_gemini(prompt: str, max_tokens: int = 2000) -> Optional[str]:
@@ -370,7 +420,7 @@ async def scan_and_draft_replies() -> Dict:
             if not draft:
                 continue
 
-            draft_id = save_draft(
+            save_result = save_draft(
                 account=draft["account"],
                 message_id=draft["message_id"],
                 from_addr=draft["from"],
@@ -382,6 +432,15 @@ async def scan_and_draft_replies() -> Dict:
                 reasoning=draft["reasoning"]
             )
 
+            if not save_result["ok"]:
+                reason = save_result.get("reason", "?")
+                if reason == "duplicate_pending":
+                    print(f"[EMAIL DRAFTER] Skipped — pending draft already exists for {draft.get('subject','?')[:60]}")
+                else:
+                    results["errors"].append(f"save_draft: {save_result.get('details', reason)}")
+                continue
+
+            draft_id = save_result["draft_id"]
             if draft_id:
                 results["drafts_created"] += 1
                 # Create an alert so Matthew knows
@@ -605,7 +664,7 @@ Respond in JSON only:
         + (f" Instruction: {instruction}" if instruction else "")
     )
 
-    draft_id = save_draft(
+    save_result = save_draft(
         account=account,
         message_id=message_id,
         from_addr=from_addr,
@@ -617,11 +676,19 @@ Respond in JSON only:
         reasoning=reasoning,
     )
 
-    if not draft_id:
+    if save_result["ok"]:
+        draft_id = save_result["draft_id"]
+    elif save_result.get("reason") == "duplicate_pending":
         return {
             "ok": False,
             "error": "draft_failed",
-            "details": "Draft already exists for this email — open Email Drafts to see it.",
+            "details": "A pending draft already exists for this email — open Email Drafts to review it.",
+        }
+    else:
+        return {
+            "ok": False,
+            "error": "draft_failed",
+            "details": f"Could not save draft: {save_result.get('details', 'database error')}",
         }
 
     return {
