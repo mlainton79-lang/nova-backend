@@ -96,6 +96,8 @@ from app.api.v1.endpoints import email_triage
 router.include_router(email_triage.router, tags=["triage"])
 from app.api.v1.endpoints import health_dashboard
 router.include_router(health_dashboard.router, tags=["health"])
+from app.api.v1.endpoints import status as status_endpoint
+router.include_router(status_endpoint.router, tags=["status"])
 from app.api.v1.endpoints import self_improvement
 router.include_router(self_improvement.router, tags=["self_improvement"])
 from app.api.v1.endpoints import fabrication
