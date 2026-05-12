@@ -203,6 +203,10 @@ from app.api.v1.router import router as v1_router
 
 app = FastAPI(title="Nova Backend", version="1.0.0")
 
+import logfire
+logfire.configure(service_name="nova-backend")
+logfire.instrument_fastapi(app)
+
 app.include_router(v1_router, prefix="/api/v1")
 
 import asyncio
