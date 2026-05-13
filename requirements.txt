@@ -12,4 +12,4 @@ cryptography
 gtts
 reportlab
 pyyaml==6.0.2
-logfire[fastapi]==4.32.1
+logfire[fastapi,psycopg2]==4.32.1
