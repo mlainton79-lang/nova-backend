@@ -2,6 +2,13 @@ import os
 import psycopg2
 from fastapi import FastAPI, Request
 
+# Logfire setup: configure once at module load, before any DB or HTTP work.
+# instrument_psycopg() must run before the startup cleanup's psycopg2.connect()
+# (R1.3 Part 2 — full DB observability across web + nova-backend cron).
+import logfire
+logfire.configure(service_name="nova-backend")
+logfire.instrument_psycopg()
+
 def _one_time_ccj_cleanup_sync():
     """
     One-off cleanup: wipe Western Circle / CCJ from Tony's active memory.
@@ -203,8 +210,6 @@ from app.api.v1.router import router as v1_router
 
 app = FastAPI(title="Nova Backend", version="1.0.0")
 
-import logfire
-logfire.configure(service_name="nova-backend")
 logfire.instrument_fastapi(app)
 
 app.include_router(v1_router, prefix="/api/v1")

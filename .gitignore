@@ -11,3 +11,7 @@ venv/
 storage_state.json
 *.storage_state.json
 vinted_worker/.env
+
+# R1.3 Part 2 transient artefacts — backups and edit scripts, never commit
+app/main.py.bak.r1_3_part2_subitem1
+r1_3_part2_subitem1.py
