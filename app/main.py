@@ -6,8 +6,23 @@ from fastapi import FastAPI, Request
 # instrument_psycopg() must run before the startup cleanup's psycopg2.connect()
 # (R1.3 Part 2 — full DB observability across web + nova-backend cron).
 import logfire
-logfire.configure(service_name="nova-backend")
+logfire.configure(
+    service_name="nova-backend",
+    # Explicit ScrubbingOptions() keeps Logfire's strong default
+    # scrubbing (password / secret / api_key / credential / session /
+    # cookie / ssn / credit_card / private_key / jwt / auth) ON and
+    # VISIBLE in source — a deliberate choice, not an invisible default.
+    scrubbing=logfire.ScrubbingOptions(),
+)
 logfire.instrument_psycopg()
+# ── MEMORIAL SAFETY — do not change this line without reading this ──
+# instrument_httpx() is called BARE on purpose. Do NOT add capture_all,
+# capture_request_body, or capture_response_body. Bare = request
+# metadata only (timing, status, model, cost) and NEVER request/response
+# bodies. LLM prompt + response text carries grief, family, banking and
+# work-mode context — it must never reach the Logfire dashboard.
+# This is a protection (R1.3 Part 2 sub-item 4b), not an oversight.
+# ───────────────────────────────────────────────────────────────────
 logfire.instrument_httpx()
 
 def _one_time_ccj_cleanup_sync():

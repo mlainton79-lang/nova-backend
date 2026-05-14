@@ -20,3 +20,7 @@ r1_3_part2_subitem1.py
 vinted_worker/operator.py.bak.r1_3_part2_subitem3
 vinted_worker/requirements.txt.bak.r1_3_part2_subitem3
 r1_3_part2_subitem3.py
+
+# R1.3 Part 2 sub-item 4b transient artefacts
+app/main.py.bak.r1_3_part2_subitem4b
+r1_3_part2_subitem4b.py
