@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 import logfire
 logfire.configure(service_name="nova-backend")
 logfire.instrument_psycopg()
+logfire.instrument_httpx()
 
 def _one_time_ccj_cleanup_sync():
     """
