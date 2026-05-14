@@ -22,6 +22,15 @@ from playwright.async_api import async_playwright
 
 from . import config, login, state_check, vinted_actions, safety
 
+# Logfire setup: the Vinted worker runs as its own process on the
+# peaceful-harmony Railway service, separate from the web app. It needs its
+# own configure() call. service_name "vinted-worker" keeps these traces
+# distinct from the web service's "nova-backend" traces in Logfire.
+# (R1.3 Part 2 sub-item 3 — observability for the operator worker.)
+import logfire
+logfire.configure(service_name="vinted-worker")
+logfire.instrument_psycopg()
+
 
 def _import_backend():
     """Defer backend imports — the worker container has /app on path."""
@@ -319,4 +328,9 @@ if __name__ == "__main__":
     if errors:
         print(f"[VINTED_WORKER] config errors: {errors}", file=sys.stderr)
         sys.exit(2)
-    sys.exit(asyncio.run(run_job(job_id)))
+    # Wrap the whole job in a manual span. Logfire has no Playwright
+    # auto-instrumentation, so this span is what makes each job run a
+    # visible trace; the instrument_psycopg() DB spans nest inside it.
+    with logfire.span("vinted job", job_id=job_id):
+        exit_code = asyncio.run(run_job(job_id))
+    sys.exit(exit_code)
