@@ -24,3 +24,5 @@ r1_3_part2_subitem3.py
 # R1.3 Part 2 sub-item 4b transient artefacts
 app/main.py.bak.r1_3_part2_subitem4b
 r1_3_part2_subitem4b.py
+dbg_r15_step1.py
+dbg_r15_*.py
