@@ -104,3 +104,56 @@ def record_run(
     except Exception as e:
         print(f"[RUN_LEDGER] record_run failed: {e}")
         return None
+
+
+def _row_to_dict(row, cols):
+    out = {}
+    for i, c in enumerate(cols):
+        v = row[i]
+        if hasattr(v, "isoformat"):
+            v = v.isoformat()
+        out[c] = v
+    return out
+
+
+_LEDGER_COLUMNS = [
+    "id", "action_type", "trigger", "summary", "status",
+    "result", "trace_id", "created_at", "completed_at", "metadata",
+]
+
+
+def recent_runs(limit: int = 50, action_type: Optional[str] = None) -> List[Dict]:
+    """Return the most recent ledger rows, newest first.
+
+    The read side of the audit spine - what a Tony Status screen calls to show
+    "here is what Tony has been doing". Optionally filter to one action_type.
+    Never raises - returns [] on error.
+    """
+    init_run_ledger_table()
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        if action_type:
+            cur.execute("""
+                SELECT id, action_type, trigger, summary, status,
+                       result, trace_id, created_at, completed_at, metadata_json
+                FROM tony_run_ledger
+                WHERE action_type = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (action_type, limit))
+        else:
+            cur.execute("""
+                SELECT id, action_type, trigger, summary, status,
+                       result, trace_id, created_at, completed_at, metadata_json
+                FROM tony_run_ledger
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (limit,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [_row_to_dict(r, _LEDGER_COLUMNS) for r in rows]
+    except Exception as e:
+        print(f"[RUN_LEDGER] recent_runs failed: {e}")
+        return []
