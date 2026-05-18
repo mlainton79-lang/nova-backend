@@ -60,3 +60,47 @@ def init_run_ledger_table():
         conn.close()
     except Exception as e:
         print(f"[RUN_LEDGER] init failed: {e}")
+
+
+def record_run(
+    action_type: str,
+    trigger: Optional[str] = None,
+    summary: Optional[str] = None,
+    status: str = "started",
+    result: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[int]:
+    """Append one row to the run ledger. Returns the new row id, or None on error.
+
+    The single write path for the audit spine. Any autonomous action calls this
+    to record that it happened. Never raises - a ledger failure must not take
+    down the action it was trying to record.
+    """
+    init_run_ledger_table()
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO tony_run_ledger (
+                action_type, trigger, summary, status,
+                result, trace_id, metadata_json, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            RETURNING id
+        """, (
+            action_type,
+            trigger,
+            summary,
+            status,
+            result,
+            trace_id,
+            psycopg2.extras.Json(metadata or {}),
+        ))
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return new_id
+    except Exception as e:
+        print(f"[RUN_LEDGER] record_run failed: {e}")
+        return None
