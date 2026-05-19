@@ -1,8 +1,8 @@
 name: Nova database backup
 
 # R1.7 — off-platform backup to Backblaze B2.
-# Step 3: pg_dump of the live database, uploaded as a workflow artifact.
-# B2 upload and JSONL critical-table exports are added in later steps.
+# Step 4: pg_dump of the live database, uploaded to a Backblaze B2 bucket.
+# JSONL critical-table exports are added in a later step.
 
 on:
   schedule:
@@ -31,6 +31,19 @@ jobs:
           mkdir -p backup-output
           pg_dump -Fc "$DATABASE_PUBLIC_URL" -f "backup-output/nova-db-${STAMP}.dump"
           ls -lh backup-output
+
+      - name: Upload dump to Backblaze B2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+        run: |
+          aws s3 cp backup-output/ "s3://${B2_BUCKET}/" \
+            --recursive \
+            --endpoint-url "https://${B2_ENDPOINT}"
+          echo "Upload complete. Listing bucket:"
+          aws s3 ls "s3://${B2_BUCKET}/" --endpoint-url "https://${B2_ENDPOINT}"
 
       - name: Upload dump as artifact
         uses: actions/upload-artifact@v4
