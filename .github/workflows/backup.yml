@@ -1,8 +1,9 @@
 name: Nova database backup
 
 # R1.7 — off-platform backup to Backblaze B2.
-# Step 4: pg_dump of the live database, uploaded to a Backblaze B2 bucket.
-# JSONL critical-table exports are added in a later step.
+# Step 5: pg_dump + per-table JSONL exports, all uploaded to Backblaze B2.
+# Credential-bearing tables are excluded from the plaintext JSONL exports
+# (they remain captured inside the encrypted pg_dump).
 
 on:
   schedule:
@@ -32,7 +33,30 @@ jobs:
           pg_dump -Fc "$DATABASE_PUBLIC_URL" -f "backup-output/nova-db-${STAMP}.dump"
           ls -lh backup-output
 
-      - name: Upload dump to Backblaze B2
+      - name: Export critical tables as JSONL
+        env:
+          DATABASE_PUBLIC_URL: ${{ secrets.DATABASE_PUBLIC_URL }}
+        run: |
+          export PATH=/usr/lib/postgresql/18/bin:$PATH
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          mkdir -p backup-output/jsonl-${STAMP}
+          # Tables excluded from plaintext JSONL — they hold credentials/tokens.
+          # Still captured inside the pg_dump above; not safe as readable JSONL.
+          EXCLUDE="tony_banking_tokens gmail_accounts push_tokens tony_config"
+          TABLES=$(psql "$DATABASE_PUBLIC_URL" -At -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
+          for T in $TABLES; do
+            if echo "$EXCLUDE" | grep -qw "$T"; then
+              echo "skip (sensitive): $T"
+              continue
+            fi
+            psql "$DATABASE_PUBLIC_URL" -At \
+              -c "SELECT row_to_json(t) FROM \"$T\" t" \
+              > "backup-output/jsonl-${STAMP}/${T}.jsonl"
+            echo "exported: $T ($(wc -l < backup-output/jsonl-${STAMP}/${T}.jsonl) rows)"
+          done
+          ls -lh backup-output/jsonl-${STAMP}
+
+      - name: Upload backup to Backblaze B2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
@@ -43,11 +67,11 @@ jobs:
             --recursive \
             --endpoint-url "https://${B2_ENDPOINT}"
           echo "Upload complete. Listing bucket:"
-          aws s3 ls "s3://${B2_BUCKET}/" --endpoint-url "https://${B2_ENDPOINT}"
+          aws s3 ls "s3://${B2_BUCKET}/" --recursive --endpoint-url "https://${B2_ENDPOINT}"
 
-      - name: Upload dump as artifact
+      - name: Upload backup as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nova-db-dump
+          name: nova-db-backup
           path: backup-output/
           retention-days: 7
