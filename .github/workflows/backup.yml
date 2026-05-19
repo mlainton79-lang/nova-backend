@@ -1,8 +1,8 @@
 name: Nova database backup
 
 # R1.7 — off-platform backup to Backblaze B2.
-# Step 2: skeleton only. Proves the schedule fires and a job runs green.
-# pg_dump, JSONL exports, and B2 upload are added in later steps.
+# Step 3: pg_dump of the live database, uploaded as a workflow artifact.
+# B2 upload and JSONL critical-table exports are added in later steps.
 
 on:
   schedule:
@@ -14,5 +14,25 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      - name: Placeholder
-        run: echo "Nova backup workflow reached. R1.7 step 2 skeleton — backup logic added in later steps."
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+
+      - name: Dump database
+        env:
+          DATABASE_PUBLIC_URL: ${{ secrets.DATABASE_PUBLIC_URL }}
+        run: |
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          mkdir -p backup-output
+          pg_dump -Fc "$DATABASE_PUBLIC_URL" -f "backup-output/nova-db-${STAMP}.dump"
+          ls -lh backup-output
+
+      - name: Upload dump as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-db-dump
+          path: backup-output/
+          retention-days: 7
