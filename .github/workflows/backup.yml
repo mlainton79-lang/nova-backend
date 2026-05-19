@@ -25,6 +25,8 @@ jobs:
         env:
           DATABASE_PUBLIC_URL: ${{ secrets.DATABASE_PUBLIC_URL }}
         run: |
+          export PATH=/usr/lib/postgresql/18/bin:$PATH
+          pg_dump --version
           STAMP=$(date -u +%Y%m%d-%H%M%S)
           mkdir -p backup-output
           pg_dump -Fc "$DATABASE_PUBLIC_URL" -f "backup-output/nova-db-${STAMP}.dump"
