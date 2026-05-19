@@ -1,0 +1,18 @@
+name: Nova database backup
+
+# R1.7 — off-platform backup to Backblaze B2.
+# Step 2: skeleton only. Proves the schedule fires and a job runs green.
+# pg_dump, JSONL exports, and B2 upload are added in later steps.
+
+on:
+  schedule:
+    # 03:17 UTC daily — odd minute to avoid the top-of-hour load spike on GitHub's runners.
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "Nova backup workflow reached. R1.7 step 2 skeleton — backup logic added in later steps."
