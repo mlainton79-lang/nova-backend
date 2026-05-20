@@ -2,8 +2,8 @@ name: Nova restore drill
 
 # R1.8 — restore drill for the off-platform backup.
 # "If it doesn't restore, the backup doesn't exist."
-# Step 3: download the latest pg_dump from Backblaze B2 onto the runner.
-# pg_restore and verification are added in later steps.
+# Step 4: pg_restore the downloaded dump into the scratch Postgres container.
+# Verification queries are added in the next step.
 
 on:
   workflow_dispatch: {}
@@ -71,3 +71,25 @@ jobs:
           echo "=== local file ==="
           ls -lh "restore-input/${LATEST}"
           echo "${LATEST}" > restore-input/.selected-dump-name
+
+      - name: Restore dump into scratch Postgres
+        env:
+          PGPASSWORD: postgres
+        run: |
+          export PATH=/usr/lib/postgresql/18/bin:$PATH
+          pg_restore --version
+          DUMP_NAME=$(cat restore-input/.selected-dump-name)
+          echo "=== restoring: $DUMP_NAME ==="
+          pg_restore \
+            --host=localhost \
+            --port=5432 \
+            --username=postgres \
+            --dbname=nova_restore \
+            --no-owner \
+            --no-privileges \
+            --exit-on-error \
+            --verbose \
+            "restore-input/${DUMP_NAME}" 2>&1 | tail -n 100
+          echo "=== restore complete ==="
+          echo "=== scratch DB table count ==="
+          psql -h localhost -U postgres -d nova_restore -t -c "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';"
