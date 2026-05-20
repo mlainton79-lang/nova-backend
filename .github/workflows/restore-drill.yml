@@ -2,13 +2,15 @@ name: Nova restore drill
 
 # R1.8 — restore drill for the off-platform backup.
 # "If it doesn't restore, the backup doesn't exist."
-# Step 5b: verification split into structural (all key tables must exist)
-# and populated (tables we know have data must have rows). The three
-# currently-empty key tables (tony_run_ledger, tony_journal,
-# tony_diary_entries) are tracked structurally and will graduate to the
-# populated list when they start carrying data.
+# Runs weekly (Sunday 04:37 UTC) and on-demand via workflow_dispatch.
+# Spins up a pgvector-equipped scratch Postgres, restores the latest dump
+# from B2, and verifies the result. Sunday 04:37 sits well after the
+# daily backup cron (03:17 UTC) so the drill always tests fresh data.
 
 on:
+  schedule:
+    # Sunday 04:37 UTC — weekly cadence; odd minute, off-peak.
+    - cron: '37 4 * * 0'
   workflow_dispatch: {}
 
 jobs:
