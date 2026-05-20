@@ -283,6 +283,58 @@ def _restore_drill_workflow():
     return _workflow_status("restore-drill.yml")
 
 
+# ─────────── infrastructure: external services (elevenlabs) ───────────
+
+ELEVENLABS_API_BASE = "https://api.elevenlabs.io"
+ELEVENLABS_HTTP_TIMEOUT_S = 4.0
+
+
+def _elevenlabs_check():
+    """Light health check on ElevenLabs - Tony\'s voice provider.
+
+    GET /v1/voices is the lightest possible call that exercises auth: a 200
+    confirms the API key is valid and the service is reachable; 401 means
+    the key is wrong or revoked; anything else is a service-side issue.
+
+    Returns: {status, latency_ms, http_code, error?}. Never raises.
+    """
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        return {"status": "error", "error": "no ELEVENLABS_API_KEY env"}
+
+    url = f"{ELEVENLABS_API_BASE}/v1/voices"
+    headers = {"xi-api-key": api_key, "Accept": "application/json"}
+
+    t0 = time.perf_counter()
+    try:
+        with httpx.Client(timeout=ELEVENLABS_HTTP_TIMEOUT_S) as client:
+            r = client.get(url, headers=headers)
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+    except Exception as e:
+        return {
+            "status": "error",
+            "latency_ms": round((time.perf_counter() - t0) * 1000),
+            "error": _trunc(e),
+        }
+
+    if r.status_code == 200:
+        return {"status": "ok", "latency_ms": latency_ms, "http_code": 200}
+    if r.status_code == 401:
+        return {
+            "status": "error",
+            "latency_ms": latency_ms,
+            "http_code": 401,
+            "error": "invalid or expired ELEVENLABS_API_KEY",
+        }
+    return {
+        "status": "error",
+        "latency_ms": latency_ms,
+        "http_code": r.status_code,
+        "error": _trunc(r.text, 100),
+    }
+
+
+
 # ─────────── C) providers (env-presence only) ───────────
 
 PROVIDER_KEYS = [
@@ -363,7 +415,7 @@ async def tony_status(_=Depends(verify_token)):
     backend = {"status": "ok", "uptime_seconds": int(time.time() - STARTED_AT)}
 
     try:
-        db_check, last_mem, sync_fe, sync_be, pending, gmail, activity, backup_wf, drill_wf = await asyncio.wait_for(
+        db_check, last_mem, sync_fe, sync_be, pending, gmail, activity, backup_wf, drill_wf, elevenlabs = await asyncio.wait_for(
             asyncio.gather(
                 _run(_check_db, timeout=DB_PING_TIMEOUT_S),
                 _run(_last_memory_write),
@@ -374,6 +426,7 @@ async def tony_status(_=Depends(verify_token)):
                 _run(_recent_activity),
                 _run(_backup_workflow),
                 _run(_restore_drill_workflow),
+                _run(_elevenlabs_check),
             ),
             timeout=TOTAL_TIMEOUT_S,
         )
@@ -386,6 +439,7 @@ async def tony_status(_=Depends(verify_token)):
         activity = []
         backup_wf = None
         drill_wf = None
+        elevenlabs = None
 
     # State fields fall back to spec'd null/empty shapes if a check errored out.
     # (database keeps its own envelope; that's the spec'd shape there.)
@@ -422,6 +476,7 @@ async def tony_status(_=Depends(verify_token)):
         "infrastructure": {
             "backup_workflow": backup_wf,
             "restore_drill_workflow": drill_wf,
+            "elevenlabs": elevenlabs,
         },
         "identity": _identity(),
     }

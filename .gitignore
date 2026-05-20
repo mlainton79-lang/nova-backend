@@ -30,3 +30,5 @@ dbg_status_a1.py
 *.bak.dbg_status_a1
 dbg_status_a2.py
 *.bak.dbg_status_a2
+dbg_status_a3.py
+*.bak.dbg_status_a3
