@@ -2,9 +2,8 @@ name: Nova restore drill
 
 # R1.8 — restore drill for the off-platform backup.
 # "If it doesn't restore, the backup doesn't exist."
-# Step 2: skeleton. Spins up a pgvector-capable scratch Postgres as a service
-# container and proves we can connect to it. B2 download, pg_restore, and
-# verification are added in later steps.
+# Step 3: download the latest pg_dump from Backblaze B2 onto the runner.
+# pg_restore and verification are added in later steps.
 
 on:
   workflow_dispatch: {}
@@ -45,3 +44,30 @@ jobs:
           psql -h localhost -U postgres -d nova_restore -c "SELECT version();"
           echo "=== pgvector availability ==="
           psql -h localhost -U postgres -d nova_restore -c "SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector';"
+
+      - name: Download latest dump from Backblaze B2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+        run: |
+          mkdir -p restore-input
+          echo "=== bucket contents (.dump files) ==="
+          aws s3 ls "s3://${B2_BUCKET}/" --endpoint-url "https://${B2_ENDPOINT}" | grep -E 'nova-db-.*\.dump$' | sort
+          LATEST=$(aws s3 ls "s3://${B2_BUCKET}/" --endpoint-url "https://${B2_ENDPOINT}" \
+            | grep -E 'nova-db-.*\.dump$' \
+            | sort \
+            | tail -n 1 \
+            | awk '{print $NF}')
+          if [ -z "$LATEST" ]; then
+            echo "ERROR: no nova-db-*.dump found in bucket"
+            exit 1
+          fi
+          echo "=== selected dump ==="
+          echo "Restoring from: $LATEST"
+          aws s3 cp "s3://${B2_BUCKET}/${LATEST}" "restore-input/${LATEST}" \
+            --endpoint-url "https://${B2_ENDPOINT}"
+          echo "=== local file ==="
+          ls -lh "restore-input/${LATEST}"
+          echo "${LATEST}" > restore-input/.selected-dump-name
