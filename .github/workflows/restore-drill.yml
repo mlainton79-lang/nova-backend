@@ -2,8 +2,9 @@ name: Nova restore drill
 
 # R1.8 — restore drill for the off-platform backup.
 # "If it doesn't restore, the backup doesn't exist."
-# Step 4: pg_restore the downloaded dump into the scratch Postgres container.
-# Verification queries are added in the next step.
+# Step 5: verify the restored scratch DB has the right shape and contents.
+# Three checks: table count >= 50; eight key tables have rows; one sample
+# row from tony_facts reads as parseable JSON.
 
 on:
   workflow_dispatch: {}
@@ -93,3 +94,64 @@ jobs:
           echo "=== restore complete ==="
           echo "=== scratch DB table count ==="
           psql -h localhost -U postgres -d nova_restore -t -c "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';"
+
+      - name: Verify restored database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          export PATH=/usr/lib/postgresql/18/bin:$PATH
+          PSQL="psql -h localhost -U postgres -d nova_restore -t -A"
+          FAIL=0
+
+          echo "=== check 1: table count >= 50 ==="
+          TABLE_COUNT=$($PSQL -c "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';")
+          echo "tables in public schema: $TABLE_COUNT"
+          if [ "$TABLE_COUNT" -lt 50 ]; then
+            echo "FAIL: only $TABLE_COUNT tables restored, expected >= 50"
+            FAIL=1
+          else
+            echo "PASS: $TABLE_COUNT tables present"
+          fi
+
+          echo ""
+          echo "=== check 2: key tables have rows ==="
+          # These are the irreplaceable, accumulated-self tables.
+          # Names match the LIVE schema (from R1.7's JSONL export log),
+          # not the source-code CREATE TABLE statements.
+          KEY_TABLES="tony_run_ledger memories semantic_memories tony_facts tony_journal tony_diary_entries tony_behaviour_rules tony_corrections"
+          for T in $KEY_TABLES; do
+            EXISTS=$($PSQL -c "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='$T';")
+            if [ -z "$EXISTS" ]; then
+              echo "  $T: TABLE MISSING"
+              FAIL=1
+              continue
+            fi
+            ROWS=$($PSQL -c "SELECT count(*) FROM \"$T\";")
+            echo "  $T: $ROWS rows"
+            if [ "$ROWS" -lt 1 ]; then
+              echo "    FAIL: $T is empty, expected at least 1 row"
+              FAIL=1
+            fi
+          done
+
+          echo ""
+          echo "=== check 3: sample row from tony_facts parses as JSON ==="
+          SAMPLE=$($PSQL -c "SELECT row_to_json(t) FROM tony_facts t LIMIT 1;")
+          if [ -z "$SAMPLE" ]; then
+            echo "FAIL: could not read a sample row from tony_facts"
+            FAIL=1
+          else
+            echo "$SAMPLE" | python3 -c "import sys, json; json.loads(sys.stdin.read()); print('PASS: sample row is valid JSON')" || {
+              echo "FAIL: sample row from tony_facts is not parseable JSON"
+              FAIL=1
+            }
+          fi
+
+          echo ""
+          if [ "$FAIL" -eq 0 ]; then
+            echo "=== RESTORE DRILL PASSED ==="
+            echo "Backup is provably restorable."
+          else
+            echo "=== RESTORE DRILL FAILED ==="
+            exit 1
+          fi
