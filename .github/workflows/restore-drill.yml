@@ -2,9 +2,11 @@ name: Nova restore drill
 
 # R1.8 — restore drill for the off-platform backup.
 # "If it doesn't restore, the backup doesn't exist."
-# Step 5: verify the restored scratch DB has the right shape and contents.
-# Three checks: table count >= 50; eight key tables have rows; one sample
-# row from tony_facts reads as parseable JSON.
+# Step 5b: verification split into structural (all key tables must exist)
+# and populated (tables we know have data must have rows). The three
+# currently-empty key tables (tony_run_ledger, tony_journal,
+# tony_diary_entries) are tracked structurally and will graduate to the
+# populated list when they start carrying data.
 
 on:
   workflow_dispatch: {}
@@ -114,11 +116,14 @@ jobs:
           fi
 
           echo ""
-          echo "=== check 2: key tables have rows ==="
-          # These are the irreplaceable, accumulated-self tables.
-          # Names match the LIVE schema (from R1.7's JSONL export log),
-          # not the source-code CREATE TABLE statements.
+          echo "=== check 2a: key tables exist (structural) ==="
+          # All eight irreplaceable, accumulated-self tables must EXIST in the
+          # restored DB. A missing table is a real backup failure. Three of
+          # them are not yet populated on the live DB; that's tracked in 2b.
           KEY_TABLES="tony_run_ledger memories semantic_memories tony_facts tony_journal tony_diary_entries tony_behaviour_rules tony_corrections"
+          # Tables that we currently know are empty on the live DB. Will be
+          # moved into POPULATED_TABLES below when they start carrying data.
+          EMPTY_EXPECTED="tony_run_ledger tony_journal tony_diary_entries"
           for T in $KEY_TABLES; do
             EXISTS=$($PSQL -c "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='$T';")
             if [ -z "$EXISTS" ]; then
@@ -126,6 +131,20 @@ jobs:
               FAIL=1
               continue
             fi
+            ROWS=$($PSQL -c "SELECT count(*) FROM \"$T\";")
+            if echo " $EMPTY_EXPECTED " | grep -q " $T "; then
+              echo "  $T: present ($ROWS rows — empty expected, not yet populated)"
+            else
+              echo "  $T: present ($ROWS rows)"
+            fi
+          done
+
+          echo ""
+          echo "=== check 2b: populated tables have rows ==="
+          # The subset of KEY_TABLES we know currently carry data on the live
+          # DB. Empty here = real data loss, fail the drill.
+          POPULATED_TABLES="memories semantic_memories tony_facts tony_behaviour_rules tony_corrections"
+          for T in $POPULATED_TABLES; do
             ROWS=$($PSQL -c "SELECT count(*) FROM \"$T\";")
             echo "  $T: $ROWS rows"
             if [ "$ROWS" -lt 1 ]; then
