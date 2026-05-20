@@ -1,0 +1,47 @@
+name: Nova restore drill
+
+# R1.8 — restore drill for the off-platform backup.
+# "If it doesn't restore, the backup doesn't exist."
+# Step 2: skeleton. Spins up a pgvector-capable scratch Postgres as a service
+# container and proves we can connect to it. B2 download, pg_restore, and
+# verification are added in later steps.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+
+    services:
+      scratch-postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nova_restore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Install PostgreSQL 18 client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+
+      - name: Confirm scratch Postgres is up and pgvector is available
+        env:
+          PGPASSWORD: postgres
+        run: |
+          export PATH=/usr/lib/postgresql/18/bin:$PATH
+          psql --version
+          echo "=== version ==="
+          psql -h localhost -U postgres -d nova_restore -c "SELECT version();"
+          echo "=== pgvector availability ==="
+          psql -h localhost -U postgres -d nova_restore -c "SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector';"
