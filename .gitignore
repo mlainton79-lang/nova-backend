@@ -26,3 +26,5 @@ app/main.py.bak.r1_3_part2_subitem4b
 r1_3_part2_subitem4b.py
 dbg_r15_step1.py
 dbg_r15_*.py
+dbg_status_a1.py
+*.bak.dbg_status_a1

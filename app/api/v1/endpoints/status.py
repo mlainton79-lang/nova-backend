@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.security import verify_token
 from app.core.gmail_service import get_conn
+from app.core.run_ledger import recent_runs
 from app.core import config
 
 router = APIRouter()
@@ -167,6 +168,38 @@ def _gmail_accounts():
     return out
 
 
+# ─────────── state.recent_activity ───────────
+
+RECENT_ACTIVITY_LIMIT = 10
+
+
+def _recent_activity():
+    """Latest rows from tony_run_ledger - what Tony has actually been doing.
+
+    recent_runs() never raises (returns [] on error) so we don't need extra
+    guarding here beyond the standard _run() timeout wrapper.
+
+    Returns a list of dicts with ISO-Z timestamps in place of raw datetimes,
+    matching the rest of status.py's serialisation contract.
+    """
+    rows = recent_runs(limit=RECENT_ACTIVITY_LIMIT)
+    out = []
+    for r in rows:
+        out.append({
+            "id": r.get("id"),
+            "action_type": r.get("action_type"),
+            "trigger": r.get("trigger"),
+            "summary": r.get("summary"),
+            "status": r.get("status"),
+            "result": r.get("result"),
+            "trace_id": r.get("trace_id"),
+            "created_at": _ts(r.get("created_at")),
+            "completed_at": _ts(r.get("completed_at")),
+            "metadata": r.get("metadata"),
+        })
+    return out
+
+
 # ─────────── C) providers (env-presence only) ───────────
 
 PROVIDER_KEYS = [
@@ -247,7 +280,7 @@ async def tony_status(_=Depends(verify_token)):
     backend = {"status": "ok", "uptime_seconds": int(time.time() - STARTED_AT)}
 
     try:
-        db_check, last_mem, sync_fe, sync_be, pending, gmail = await asyncio.wait_for(
+        db_check, last_mem, sync_fe, sync_be, pending, gmail, activity = await asyncio.wait_for(
             asyncio.gather(
                 _run(_check_db, timeout=DB_PING_TIMEOUT_S),
                 _run(_last_memory_write),
@@ -255,6 +288,7 @@ async def tony_status(_=Depends(verify_token)):
                 _run(lambda: _codebase_sync("backend")),
                 _run(_pending_actions_count),
                 _run(_gmail_accounts),
+                _run(_recent_activity),
             ),
             timeout=TOTAL_TIMEOUT_S,
         )
@@ -264,6 +298,7 @@ async def tony_status(_=Depends(verify_token)):
         sync_fe = sync_be = None
         pending = None
         gmail = []
+        activity = []
 
     # State fields fall back to spec'd null/empty shapes if a check errored out.
     # (database keeps its own envelope; that's the spec'd shape there.)
@@ -277,6 +312,8 @@ async def tony_status(_=Depends(verify_token)):
         pending = None
     if _is_err_envelope(gmail):
         gmail = []
+    if _is_err_envelope(activity):
+        activity = []
 
     return {
         "ok": True,
@@ -293,6 +330,7 @@ async def tony_status(_=Depends(verify_token)):
             "last_codebase_sync_backend": sync_be,
             "pending_actions_count": pending,
             "gmail_accounts": gmail,
+            "recent_activity": activity,
         },
         "identity": _identity(),
     }
