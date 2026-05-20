@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends
 
 from app.core.security import verify_token
 from app.core.gmail_service import get_conn
+import httpx
+
 from app.core.run_ledger import recent_runs
 from app.core import config
 
@@ -200,6 +202,87 @@ def _recent_activity():
     return out
 
 
+# ─────────── infrastructure: github actions workflows ───────────
+
+GITHUB_API_BASE = "https://api.github.com"
+GITHUB_REPO = "mlainton79-lang/nova-backend"
+WORKFLOW_HTTP_TIMEOUT_S = 4.0
+
+
+def _workflow_status(workflow_filename: str):
+    """Latest run of a named GitHub Actions workflow file.
+
+    Answers: did the cron fire on time? did it succeed? when?
+    Used for backup.yml (daily) and restore-drill.yml (weekly + on-demand).
+
+    Returns a dict with name, status, conclusion, started_at, completed_at,
+    age_hours, html_url, or an error envelope. Authoritative source for
+    backup freshness because GitHub knows when its own cron fired.
+
+    Requires GITHUB_TOKEN env var. Repo is private; unauthenticated calls 404.
+    """
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_PAT")
+    if not token:
+        return {"status": "error", "error": "no GITHUB_TOKEN env"}
+
+    url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/actions/workflows/{workflow_filename}/runs"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    params = {"per_page": 1}
+
+    try:
+        with httpx.Client(timeout=WORKFLOW_HTTP_TIMEOUT_S) as client:
+            r = client.get(url, headers=headers, params=params)
+        if r.status_code != 200:
+            return {"status": "error", "error": f"http {r.status_code}: {_trunc(r.text, 100)}"}
+        data = r.json()
+    except Exception as e:
+        return {"status": "error", "error": _trunc(e)}
+
+    runs = data.get("workflow_runs") or []
+    if not runs:
+        return {"status": "ok", "workflow": workflow_filename, "last_run": None}
+
+    run = runs[0]
+
+    # Parse created_at / updated_at for age calculation.
+    age_hours = None
+    started_iso = run.get("run_started_at") or run.get("created_at")
+    completed_iso = run.get("updated_at") if run.get("status") == "completed" else None
+    try:
+        if started_iso:
+            started_dt = datetime.fromisoformat(started_iso.replace("Z", "+00:00"))
+            age_hours = round((datetime.now(timezone.utc) - started_dt).total_seconds() / 3600.0, 1)
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "workflow": workflow_filename,
+        "last_run": {
+            "id": run.get("id"),
+            "status": run.get("status"),
+            "conclusion": run.get("conclusion"),
+            "started_at": started_iso,
+            "completed_at": completed_iso,
+            "age_hours": age_hours,
+            "html_url": run.get("html_url"),
+            "event": run.get("event"),
+        },
+    }
+
+
+def _backup_workflow():
+    return _workflow_status("backup.yml")
+
+
+def _restore_drill_workflow():
+    return _workflow_status("restore-drill.yml")
+
+
 # ─────────── C) providers (env-presence only) ───────────
 
 PROVIDER_KEYS = [
@@ -280,7 +363,7 @@ async def tony_status(_=Depends(verify_token)):
     backend = {"status": "ok", "uptime_seconds": int(time.time() - STARTED_AT)}
 
     try:
-        db_check, last_mem, sync_fe, sync_be, pending, gmail, activity = await asyncio.wait_for(
+        db_check, last_mem, sync_fe, sync_be, pending, gmail, activity, backup_wf, drill_wf = await asyncio.wait_for(
             asyncio.gather(
                 _run(_check_db, timeout=DB_PING_TIMEOUT_S),
                 _run(_last_memory_write),
@@ -289,6 +372,8 @@ async def tony_status(_=Depends(verify_token)):
                 _run(_pending_actions_count),
                 _run(_gmail_accounts),
                 _run(_recent_activity),
+                _run(_backup_workflow),
+                _run(_restore_drill_workflow),
             ),
             timeout=TOTAL_TIMEOUT_S,
         )
@@ -299,6 +384,8 @@ async def tony_status(_=Depends(verify_token)):
         pending = None
         gmail = []
         activity = []
+        backup_wf = None
+        drill_wf = None
 
     # State fields fall back to spec'd null/empty shapes if a check errored out.
     # (database keeps its own envelope; that's the spec'd shape there.)
@@ -331,6 +418,10 @@ async def tony_status(_=Depends(verify_token)):
             "pending_actions_count": pending,
             "gmail_accounts": gmail,
             "recent_activity": activity,
+        },
+        "infrastructure": {
+            "backup_workflow": backup_wf,
+            "restore_drill_workflow": drill_wf,
         },
         "identity": _identity(),
     }
