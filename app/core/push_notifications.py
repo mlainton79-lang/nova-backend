@@ -185,8 +185,9 @@ async def get_fcm_access_token() -> Optional[str]:
 async def send_push(title: str, body: str, data: dict = None) -> bool:
     """Send FCM V1 push notification."""
     token = get_push_token()
-    
-    if FIREBASE_PROJECT_ID and FIREBASE_SERVICE_ACCOUNT and token:
+    service_account = get_firebase_credentials()
+
+    if FIREBASE_PROJECT_ID and service_account and token:
         try:
             access_token = await get_fcm_access_token()
             if access_token:
