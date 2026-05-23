@@ -2,6 +2,8 @@ import os
 import psycopg2
 from fastapi import FastAPI, Request
 
+from app.observability import record_run_event, EventSeverity, EVENT_TYPES
+
 # Logfire setup: configure once at module load, before any DB or HTTP work.
 # instrument_psycopg() must run before the startup cleanup's psycopg2.connect()
 # (R1.3 Part 2 — full DB observability across web + nova-backend cron).
@@ -316,7 +318,21 @@ async def startup_event():
         schedule_daily_diary()
     except Exception as e:
         print(f"[STARTUP] Task queue setup failed: {e}")
+        record_run_event(
+            event_type=EVENT_TYPES["WORKER_INIT_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="startup.task_queue",
+            message="Task queue setup failed during web service startup",
+            error_class=type(e).__name__,
+            error_message=str(e),
+        )
     print("[STARTUP] Tony autonomous loop started")
+    record_run_event(
+        event_type=EVENT_TYPES["WORKER_STARTED"],
+        severity=EventSeverity.INFO,
+        subsystem="startup.web",
+        message="Web service startup_event() completed",
+    )
 
     # Migrate existing memories to semantic index on first run
     async def _migrate():
@@ -325,6 +341,14 @@ async def startup_event():
             await migrate_existing_memories()
         except Exception as e:
             print(f"[STARTUP] Semantic migration failed: {e}")
+            record_run_event(
+                event_type=EVENT_TYPES["WORKER_INIT_FAILED"],
+                severity=EventSeverity.ERROR,
+                subsystem="startup.semantic_migration",
+                message="Semantic memory migration failed during web service startup",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
     asyncio.create_task(_migrate())
 
     # Deduplicate memories on startup
@@ -335,6 +359,14 @@ async def startup_event():
             await deduplicate_memories()
         except Exception as e:
             print(f"[STARTUP] Memory dedup failed: {e}")
+            record_run_event(
+                event_type=EVENT_TYPES["WORKER_INIT_FAILED"],
+                severity=EventSeverity.ERROR,
+                subsystem="startup.memory_dedup",
+                message="Memory deduplication failed during web service startup",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
     asyncio.create_task(_dedup())
 
     # Run self-repair cycle on startup
@@ -346,6 +378,14 @@ async def startup_event():
             print(f"[STARTUP] Self-repair: {result.get('health', {}).get('overall', 'unknown')}")
         except Exception as e:
             print(f"[STARTUP] Self-repair failed: {e}")
+            record_run_event(
+                event_type=EVENT_TYPES["WORKER_INIT_FAILED"],
+                severity=EventSeverity.ERROR,
+                subsystem="startup.self_repair",
+                message="Self-repair cycle failed during web service startup",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
     asyncio.create_task(_self_repair())
 
 @app.get("/")
