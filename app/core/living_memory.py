@@ -27,6 +27,8 @@ from datetime import datetime
 from typing import Dict, Optional
 from app.core.model_router import gemini, gemini_json
 
+from app.observability import record_run_event, EventSeverity, EVENT_TYPES
+
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
@@ -162,6 +164,14 @@ def update_section(section: str, content: str):
         conn.close()
     except Exception as e:
         print(f"[LIVING_MEMORY] update_section failed: {e}")
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="memory.tony_living_memory",
+            message="update_section INSERT/UPDATE on tony_living_memory failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+        )
 
 
 async def update_from_conversation(message: str, reply: str):

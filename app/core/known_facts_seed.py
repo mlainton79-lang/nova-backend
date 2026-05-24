@@ -15,6 +15,8 @@ import os
 import psycopg2
 from typing import List, Dict
 
+from app.observability import record_run_event, EventSeverity, EVENT_TYPES
+
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
@@ -109,4 +111,12 @@ def seed_bedrock_facts() -> Dict:
         return {"ok": True, "seeded": seeded, "already_present": already,
                 "total_bedrock": len(BEDROCK_FACTS)}
     except Exception as e:
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="memory.tony_facts",
+            message="Bedrock fact seed write failed in known_facts_seed.seed_bedrock_facts",
+            error_class=type(e).__name__,
+            error_message=str(e),
+        )
         return {"ok": False, "error": str(e)}

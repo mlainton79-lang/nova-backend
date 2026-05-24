@@ -24,6 +24,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from app.core.model_router import gemini_json
 
+from app.observability import record_run_event, EventSeverity, EVENT_TYPES
+
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
@@ -120,6 +122,14 @@ async def store_episode(episode: Dict, date: str = None) -> bool:
         return True
     except Exception as e:
         print(f"[EPISODIC] Store failed: {e}")
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="memory.tony_episodic_memory",
+            message="store_episode INSERT into tony_episodic_memory failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+        )
         return False
 
 

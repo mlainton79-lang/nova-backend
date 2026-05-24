@@ -19,6 +19,8 @@ import httpx
 from typing import List, Optional, Dict
 from datetime import datetime
 
+from app.observability import record_run_event, EventSeverity, EVENT_TYPES
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 
@@ -134,6 +136,14 @@ async def add_semantic_memory(category: str, text: str, importance: float = 1.0)
         return True
     except Exception as e:
         print(f"[SEMANTIC_MEMORY] Add failed: {e}")
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="memory.semantic_memories",
+            message="add_semantic_memory INSERT into semantic_memories failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+        )
         return False
 
 

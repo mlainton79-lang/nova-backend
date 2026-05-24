@@ -21,6 +21,8 @@ import psycopg2
 from typing import List, Dict, Optional
 from datetime import datetime
 
+from app.observability import record_run_event, EventSeverity, EVENT_TYPES
+
 
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
@@ -210,11 +212,27 @@ def save_facts(facts: List[Dict], source: str = "conversation"):
                 saved += 1
             except Exception as e:
                 print(f"[FACTS] Save error for {f}: {e}")
+                record_run_event(
+                    event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+                    severity=EventSeverity.ERROR,
+                    subsystem="memory.tony_facts",
+                    message="Per-fact INSERT into tony_facts failed inside save_facts loop",
+                    error_class=type(e).__name__,
+                    error_message=str(e),
+                )
         cur.close()
         conn.close()
         return saved
     except Exception as e:
         print(f"[FACTS] Save batch failed: {e}")
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="memory.tony_facts",
+            message="save_facts batch failed before per-fact INSERT loop completed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+        )
         return 0
 
 
