@@ -4,13 +4,19 @@ Design contract: nova-docs/ops/evidence/2026-05-25/SESSION_BRIEF_ebay_oauth_desi
 
 Routes:
 - GET /api/v1/ebay/auth/{env}/init    (verify_token)  → {auth_url, env}
-- GET /api/v1/ebay/connect/{env}      (public)        → 302 to eBay authorize
 - GET /api/v1/ebay/oauth/callback     (public)        → exchanges code, saves tokens
 - GET /api/v1/ebay/status             (verify_token)  → presence + expiry per env
 
 The callback is a SINGLE endpoint for both envs; environment rides inside the
 OAuth `state` parameter as f"{env}:{nonce}". This matches the URL registered in
 the eBay Dev Portal against both RuNames; per-env callback paths are not used.
+
+There is intentionally NO public /ebay/connect/{env} 302 wrapper (the design
+brief originally called for one matching the gmail pattern). Codex flagged
+that public init would let an unauthenticated visitor consent with their own
+account, and the callback's INSERT…ON CONFLICT (environment) DO UPDATE would
+silently overwrite Nova's token row. Consent must start at the authenticated
+/auth/{env}/init route; the operator opens the returned auth_url in a browser.
 
 HTML responses (callback success/error pages) never include token values. All
 echoed strings are html.escape()'d as defence in depth — env values are already
@@ -19,7 +25,7 @@ validated against {sandbox, prod} by the time they reach the templates.
 
 import html
 from fastapi import APIRouter, Depends, HTTPException, Path
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 
 from app.core.security import verify_token
 from app.core.ebay_oauth import (
@@ -52,20 +58,6 @@ async def ebay_auth_init(env: str = Path(...), _=Depends(verify_token)):
             detail="eBay OAuth init failed; check server logs (selling.ebay.oauth subsystem)",
         )
     return {"auth_url": url, "env": env}
-
-
-@router.get("/ebay/connect/{env}")
-async def ebay_connect(env: str = Path(...)):
-    """Public browser-friendly redirect (matches gmail/connect pattern). No bearer
-    token because it's opened directly in a browser tab."""
-    env = _validate_env(env)
-    url = get_auth_url(env)
-    if not url:
-        return HTMLResponse(
-            _error_html("Failed to generate eBay auth URL — see server logs."),
-            status_code=503,
-        )
-    return RedirectResponse(url=url)
 
 
 @router.get("/ebay/oauth/callback")

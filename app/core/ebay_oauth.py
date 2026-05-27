@@ -247,10 +247,15 @@ def consume_state(state: str) -> Optional[str]:
         try:
             conn.autocommit = True
             with conn.cursor() as cur:
+                # created_at predicate enforces the 10-min TTL atomically at
+                # consume time. Without it, an expired row stays usable until
+                # the next get_auth_url() sweeps it (codex review session 4,
+                # finding 2). Belt-and-braces against the init-time sweep.
                 cur.execute(
                     """
                     DELETE FROM tony_ebay_oauth_states
                     WHERE state_token = %s AND environment = %s
+                      AND created_at > NOW() - INTERVAL '10 minutes'
                     RETURNING 1
                     """,
                     (nonce, env),
