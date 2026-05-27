@@ -59,15 +59,16 @@ _CONFIG = {
 
 _VALID_ENVS = frozenset(_CONFIG.keys())
 
-# commerce.identity.readonly is here to populate ebay_user_id on the token row
-# at consent time. If we never end up consuming ebay_user_id downstream, this
-# scope can be dropped — but each scope removal triggers re-consent, so leave
-# it unless storage hygiene becomes a problem.
+# commerce.identity.readonly is temporarily removed (2026-05-28) to isolate
+# whether the sandbox consent params-strip is caused by this scope not being
+# enabled on the sandbox keyset. fetch_ebay_user_id will return None on the
+# next consent (best-effort, non-fatal — token row saves with ebay_user_id NULL).
+# Re-add after diagnosis is complete.
 _SCOPES = [
     "https://api.ebay.com/oauth/api_scope",
     "https://api.ebay.com/oauth/api_scope/sell.inventory",
     "https://api.ebay.com/oauth/api_scope/sell.account",
-    "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+    # "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
 ]
 
 
