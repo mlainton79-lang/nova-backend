@@ -82,7 +82,8 @@ async def ebay_oauth_callback(
         return HTMLResponse(
             _error_html(
                 "State token unknown, expired (>10 min), or environment mismatch. "
-                "Start the consent flow again from /api/v1/ebay/connect/{env}."
+                "Restart the consent flow from the authenticated "
+                "/api/v1/ebay/auth/{env}/init endpoint via Nova."
             ),
             status_code=400,
         )
