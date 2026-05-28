@@ -83,11 +83,19 @@ async def refresh_access_token(email: str) -> Optional[str]:
     """
     try:
         conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT access_token, refresh_token, token_expiry FROM gmail_accounts WHERE email = %s", (email,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT access_token, refresh_token, token_expiry FROM gmail_accounts WHERE email = %s",
+                    (email,),
+                )
+                row = cur.fetchone()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
         if not row:
             record_run_event(
                 event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
@@ -147,11 +155,18 @@ async def refresh_access_token(email: str) -> Optional[str]:
         new_expiry = datetime.utcnow() + timedelta(seconds=data.get("expires_in", 3600))
         try:
             conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("UPDATE gmail_accounts SET access_token = %s, token_expiry = %s, updated_at = NOW() WHERE email = %s", (new_access, new_expiry, email))
-            conn.commit()
-            cur.close()
-            conn.close()
+            try:
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE gmail_accounts SET access_token = %s, token_expiry = %s, updated_at = NOW() WHERE email = %s",
+                        (new_access, new_expiry, email),
+                    )
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
             # The new token is valid in-memory; persistence failure is non-
             # fatal for this call (we'll just re-mint on the next read) but
