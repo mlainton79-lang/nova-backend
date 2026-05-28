@@ -106,6 +106,8 @@ from app.api.v1.endpoints import expenses
 router.include_router(expenses.router, tags=["expenses"])
 from app.api.v1.endpoints import ebay
 router.include_router(ebay.router, tags=["ebay"])
+from app.api.v1.endpoints import drafts_selling
+router.include_router(drafts_selling.router, tags=["drafts_selling"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
@@ -161,6 +163,7 @@ _inits = [
     ("app.core.repository_intelligence","init_repo_intel_tables",     "Repo intelligence"),
     ("app.core.run_ledger",            "init_run_ledger_table",      "Run ledger"),
     ("app.core.ebay_oauth",            "init_ebay_oauth_tables",     "eBay OAuth"),
+    ("app.selling.drafts",             "init_drafts_table",          "Selling drafts"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
     ("app.core.seed_capabilities_v1",      "run_once",                 "Capabilities v1.1 seed"),
 ]
