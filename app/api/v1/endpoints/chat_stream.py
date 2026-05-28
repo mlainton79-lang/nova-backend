@@ -18,6 +18,7 @@ from app.core.security import verify_token
 from app.core.injection_filter import check_injection
 from app.core.logger import log_request
 from app.core.secrets_redact import redact
+from app.observability import EVENT_TYPES, EventSeverity, record_run_event
 
 router = APIRouter()
 
@@ -528,6 +529,23 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
     """Fire and forget — runs after streaming completes."""
     tasks = []
 
+    # Post-response organ failures were previously print()'d to stdout — no
+    # tony_run_events row, no /api/v1/status visibility. Same observability
+    # gap as chat.py per the 2026-05-28 audit P1.4. Each handler now writes a
+    # WARNING run_event with the organ-specific subsystem and message/reply
+    # *lengths* (never the content — user message + model reply stay out of
+    # the logs).
+    def _organ_failed(subsystem: str, organ_label: str, e: Exception) -> None:
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.WARNING,
+            subsystem=subsystem,
+            message=f"{organ_label}: post-response update failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+            metadata={"message_len": len(message), "reply_len": len(reply), "provider": provider},
+        )
+
     async def _memory():
         try:
             from app.core.instant_memory import extract_and_save_instant_memory
@@ -536,42 +554,42 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
             for fact in facts:
                 add_memory("auto", fact)
         except Exception as e:
-            print(f"[POST] Memory: {e}")
+            _organ_failed("memory.instant", "instant_memory", e)
 
     async def _living_memory():
         try:
             from app.core.living_memory import update_from_conversation
             await update_from_conversation(message, reply)
         except Exception as e:
-            print(f"[POST] Living memory: {e}")
+            _organ_failed("memory.living", "living_memory", e)
 
     async def _fact_extraction():
         try:
             from app.core.fact_extractor import process_conversation_turn
             await process_conversation_turn(message, reply)
         except Exception as e:
-            print(f"[POST] Fact extraction: {e}")
+            _organ_failed("memory.facts", "fact_extractor", e)
 
     async def _fabrication_check():
         try:
             from app.core.fabrication_detector import check_and_log
             await check_and_log(message, reply)
         except Exception as e:
-            print(f"[POST] Fabrication check: {e}")
+            _organ_failed("memory.fabrication", "fabrication_detector", e)
 
     async def _world_model():
         try:
             from app.core.world_model import update_world_model
             await update_world_model(message, reply)
         except Exception as e:
-            print(f"[POST] World model: {e}")
+            _organ_failed("memory.world_model", "world_model", e)
 
     async def _episodic():
         try:
             from app.core.episodic_memory import process_conversation_for_episode
             await process_conversation_for_episode(message, reply)
         except Exception as e:
-            print(f"[POST] Episodic: {e}")
+            _organ_failed("memory.episodic", "episodic_memory", e)
 
     async def _learning():
         try:
@@ -579,7 +597,7 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
             await log_conversation(message, reply, provider)
             await analyse_conversation_for_learning(message, reply, provider)
         except Exception as e:
-            print(f"[POST] Learning: {e}")
+            _organ_failed("memory.learning", "learning", e)
 
     async def _patterns():
         try:
@@ -588,21 +606,21 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
             now = datetime.utcnow()
             await analyse_message_for_patterns(message, now.hour, now.weekday())
         except Exception as e:
-            print(f"[POST] Patterns: {e}")
+            _organ_failed("memory.patterns", "pattern_recognition", e)
 
     async def _goals():
         try:
             from app.core.goal_detector import detect_and_create_goal
             await detect_and_create_goal(message, reply)
         except Exception as e:
-            print(f"[POST] Goals: {e}")
+            _organ_failed("memory.goals", "goal_detector", e)
 
     async def _self_eval():
         try:
             from app.core.self_eval import evaluate_response
             await evaluate_response(message, reply, provider)
         except Exception as e:
-            print(f"[POST] Self-eval: {e}")
+            _organ_failed("memory.self_eval", "self_eval", e)
 
     await asyncio.gather(
         _memory(), _living_memory(), _world_model(), _episodic(),
@@ -917,7 +935,15 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                                 source="vision_extraction",
                             )
                 except Exception as e:
-                    print(f"[DOC_AUTO_INGEST] Failed: {e}")
+                    record_run_event(
+                        event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+                        severity=EventSeverity.WARNING,
+                        subsystem="memory.document",
+                        message="document auto-ingest failed (streaming post-response)",
+                        error_class=type(e).__name__,
+                        error_message=str(e),
+                        metadata={"reply_len": len(full or "")},
+                    )
             asyncio.create_task(_ingest_doc())
 
         except Exception as e:

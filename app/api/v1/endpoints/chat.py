@@ -18,6 +18,7 @@ from app.providers.claude_adapter import ClaudeAdapter
 from app.providers.groq_adapter import GroqAdapter
 from app.providers.mistral_adapter import MistralAdapter
 from app.providers.openrouter_adapter import OpenRouterAdapter
+from app.observability import EVENT_TYPES, EventSeverity, record_run_event
 
 router = APIRouter()
 
@@ -48,6 +49,24 @@ async def _build_full_prompt(req: ChatRequest) -> str:
 
 async def _post_response_tasks(message: str, reply: str, provider: str):
     """Same post-response work as chat_stream — fires concurrently."""
+    # Post-response organ failures were previously swallowed silently (8 bare
+    # `except: pass` + 1 print-only site), violating AGENTS.md observability
+    # discipline and hiding active failures in living memory / world model /
+    # episodic / learning / goals / self-eval / facts / fabrication. P1.4 fix
+    # from the 2026-05-28 audit: each handler now writes a WARNING run_event
+    # with organ-specific subsystem and message/reply *lengths* (never the
+    # content itself — PII / model output bytes stay out of the logs).
+    def _organ_failed(subsystem: str, organ_label: str, e: Exception) -> None:
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.WARNING,
+            subsystem=subsystem,
+            message=f"{organ_label}: post-response update failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+            metadata={"message_len": len(message), "reply_len": len(reply), "provider": provider},
+        )
+
     async def _instant_memory():
         try:
             from app.core.instant_memory import extract_and_save_instant_memory
@@ -56,64 +75,64 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
             for fact in facts:
                 add_memory("auto", fact)
         except Exception as e:
-            print(f"[CHAT POST] Memory: {e}")
+            _organ_failed("memory.instant", "instant_memory", e)
 
     async def _living_memory():
         try:
             from app.core.living_memory import update_from_conversation
             await update_from_conversation(message, reply)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.living", "living_memory", e)
 
     async def _world_model():
         try:
             from app.core.world_model import update_world_model
             await update_world_model(message, reply)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.world_model", "world_model", e)
 
     async def _episodic():
         try:
             from app.core.episodic_memory import process_conversation_for_episode
             await process_conversation_for_episode(message, reply)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.episodic", "episodic_memory", e)
 
     async def _learning():
         try:
             from app.core.learning import log_conversation, analyse_conversation_for_learning
             await log_conversation(message, reply, provider)
             await analyse_conversation_for_learning(message, reply, provider)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.learning", "learning", e)
 
     async def _goals():
         try:
             from app.core.goal_detector import detect_and_create_goal
             await detect_and_create_goal(message, reply)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.goals", "goal_detector", e)
 
     async def _self_eval():
         try:
             from app.core.self_eval import evaluate_response
             await evaluate_response(message, reply, provider)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.self_eval", "self_eval", e)
 
     async def _fact_extraction():
         try:
             from app.core.fact_extractor import process_conversation_turn
             await process_conversation_turn(message, reply)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.facts", "fact_extractor", e)
 
     async def _fabrication_check():
         try:
             from app.core.fabrication_detector import check_and_log
             await check_and_log(message, reply)
-        except Exception:
-            pass
+        except Exception as e:
+            _organ_failed("memory.fabrication", "fabrication_detector", e)
 
     await asyncio.gather(
         _instant_memory(), _living_memory(), _world_model(),
@@ -172,7 +191,21 @@ async def _ingest_document_if_present(
                     source="vision_extraction",
                 )
     except Exception as e:
-        print(f"[DOC_AUTO_INGEST] Failed: {e}")
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.WARNING,
+            subsystem="memory.document",
+            message="document auto-ingest failed (post-response)",
+            error_class=type(e).__name__,
+            error_message=str(e),
+            metadata={
+                "doc_name": (document_name or "")[:80],
+                "doc_mime": (document_mime or "")[:60],
+                "doc_text_len": len(document_text or ""),
+                "reply_len": len(reply or ""),
+                "had_image": bool(had_image),
+            },
+        )
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -295,7 +328,16 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
         try:
             from app.core.artifact_extractor import extract_artifacts
             artifacts = extract_artifacts(reply, request.message)
-        except Exception:
+        except Exception as e:
+            record_run_event(
+                event_type=EVENT_TYPES["CAPABILITY_DEGRADED"],
+                severity=EventSeverity.WARNING,
+                subsystem="chat.artifacts",
+                message="artifact extraction failed; returning empty list",
+                error_class=type(e).__name__,
+                error_message=str(e),
+                metadata={"reply_len": len(reply or "")},
+            )
             artifacts = []
 
         resp = ChatResponse(
