@@ -625,6 +625,12 @@ async def _post_response_tasks(message: str, reply: str, provider: str):
     await asyncio.gather(
         _memory(), _living_memory(), _world_model(), _episodic(),
         _learning(), _patterns(), _goals(), _self_eval(),
+        # _fact_extraction + _fabrication_check were defined but not in the
+        # gather() — dead code pre-audit. Codex review on P1.4 caught it; the
+        # P1.4 observability backfill instrumented two organs that never ran.
+        # Wiring them in here so the new memory.facts / memory.fabrication
+        # subsystems are actually exercised, matching chat.py's gather list.
+        _fact_extraction(), _fabrication_check(),
         return_exceptions=True
     )
 
