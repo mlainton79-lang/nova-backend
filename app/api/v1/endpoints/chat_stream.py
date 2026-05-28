@@ -283,29 +283,39 @@ _VISION_STREAM_PROVIDERS = frozenset({"claude", "gemini"})
 _NON_VISION_STREAM_PROVIDERS = frozenset({"openai", "groq", "mistral", "openrouter"})
 
 
-def _get_stream(provider: str, message: str, history: list,
-                system_prompt: str, image_base64: str = None):
-    """Route to the correct real streaming generator.
+def _normalise_stream_provider(provider: str, image_base64: str = None) -> str:
+    """Return the provider that will actually be used by the SSE dispatcher.
 
-    Two defensive sanitisations applied before the actual dispatch (P1.1 +
-    P1.3 from the 2026-05-28 audit):
+    Two normalisations:
 
     1. **Image-drop trap.** Only `claude_stream` and `gemini_stream` accept
-       `image_base64`. `openai_stream`, `groq_stream`, `mistral_stream`, and
-       `openrouter_stream` have no image parameter — passing an image to
-       them through this dispatcher silently dropped it. If an image is
-       present and the routed provider is one of the four non-vision
-       streams, re-route to Gemini and record a CAPABILITY_DEGRADED warning
-       so the routed-away decision is visible in tony_run_events.
+       `image_base64`. The other four stream functions have no image
+       parameter — passing an image to them silently dropped it. If an
+       image is present and the routed provider is one of the four
+       non-vision streams, return `"gemini"` and record a
+       CAPABILITY_DEGRADED warning event so the routed-away decision is
+       visible in tony_run_events.
 
-    2. **Council trap.** The smart router can return `provider='council'`
-       for complex-reasoning prompts. Council mode is a 4-round non-
-       streaming deliberation that the SSE dispatcher can't fulfil; the
-       old code fell through to gemini_stream while the wire still emitted
-       `provider:'council'`. Belt-and-braces guard here in case any caller
-       reaches _get_stream with provider='council' without going through
-       the smart router (which now sets is_streaming=True and routes
-       around Council itself).
+    2. **Council trap.** Smart router with `is_streaming=True` already
+       routes around Council, so this guard only fires when a caller
+       reaches the streaming dispatcher with `provider='council'`
+       directly (e.g. manual /chat/stream with provider='council').
+       Return `"gemini"` and record a CAPABILITY_UNAVAILABLE warning.
+
+    Idempotent: calling this twice with an already-normalised provider
+    is a no-op (the conditions both check `provider in <bad set>` which
+    fails after the first rewrite). That lets the outer streaming loop
+    normalise before dispatch — making the effective provider visible
+    for SSE labelling, log_request, and post-response tasks — and lets
+    `_get_stream` call this same helper as a belt-and-braces guard
+    without double-emitting events.
+
+    Closes the label-vs-reality mismatch from codex-review-p1bundle.md
+    finding 1 (the original commit rewrote `provider` locally inside
+    `_get_stream` but the outer loop's `actual_provider = candidate`
+    line still preserved the pre-normalisation value, so SSE wire +
+    telemetry mislabelled both the council fallback and the image-on-
+    non-vision-provider re-route).
     """
     if image_base64 and provider in _NON_VISION_STREAM_PROVIDERS:
         record_run_event(
@@ -315,7 +325,7 @@ def _get_stream(provider: str, message: str, history: list,
             message=f"image present but {provider} stream drops it; re-routing to gemini",
             metadata={"requested_provider": provider, "actual_provider": "gemini", "had_image": True},
         )
-        provider = "gemini"
+        return "gemini"
 
     if provider == "council":
         record_run_event(
@@ -325,7 +335,22 @@ def _get_stream(provider: str, message: str, history: list,
             message="council selected on streaming path; falling back to gemini (smart router should have caught this)",
             metadata={"requested_provider": "council", "actual_provider": "gemini", "had_image": bool(image_base64)},
         )
-        provider = "gemini"
+        return "gemini"
+
+    return provider
+
+
+def _get_stream(provider: str, message: str, history: list,
+                system_prompt: str, image_base64: str = None):
+    """Route to the correct real streaming generator.
+
+    Calls `_normalise_stream_provider` as a belt-and-braces safety net so
+    direct callers (anything that doesn't go through the outer chat_stream
+    loop) still get the image-drop / council guards. The helper is
+    idempotent, so the outer loop's pre-dispatch normalisation doesn't
+    cause a second event.
+    """
+    provider = _normalise_stream_provider(provider, image_base64)
 
     if provider == "claude":
         return claude_stream(message, history, system_prompt, image_base64=image_base64)
@@ -897,35 +922,46 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                         f"chain exhausted budget after attempts: {errors}"
                     )
 
+                # Codex review (codex-review-p1bundle.md finding 1): the
+                # image/council reroute logic lives in
+                # _normalise_stream_provider. Call it BEFORE dispatch so the
+                # SSE wire event, log_request, and post-response tasks all
+                # see the effective provider — not the pre-normalisation
+                # candidate. Errors below also use effective_candidate so
+                # the failure log matches what was actually attempted.
+                effective_candidate = _normalise_stream_provider(
+                    candidate, request.image_base64
+                )
+
                 try:
                     iterator, first_chunk = await asyncio.wait_for(
                         _try_stream_first_chunk(
-                            candidate, request.message, request.history, sp,
+                            effective_candidate, request.message, request.history, sp,
                             request.image_base64,
                         ),
                         timeout=remaining,
                     )
-                    actual_provider = candidate
+                    actual_provider = effective_candidate
                     break
                 except StopAsyncIteration:
-                    err = f"{candidate}: produced no chunks"
+                    err = f"{effective_candidate}: produced no chunks"
                     errors.append(err)
                     if is_auto_mode and i < len(chain) - 1:
-                        print(f"[CHAT_STREAM] auto: {candidate} produced no chunks, trying {chain[i+1]}")
+                        print(f"[CHAT_STREAM] auto: {effective_candidate} produced no chunks, trying {chain[i+1]}")
                         continue
                     raise RuntimeError(err)
                 except asyncio.TimeoutError:
-                    err = f"{candidate}: first-chunk timeout"
+                    err = f"{effective_candidate}: first-chunk timeout"
                     errors.append(err)
                     if is_auto_mode and i < len(chain) - 1:
-                        print(f"[CHAT_STREAM] auto: {candidate} timed out (first-chunk), trying {chain[i+1]}")
+                        print(f"[CHAT_STREAM] auto: {effective_candidate} timed out (first-chunk), trying {chain[i+1]}")
                         continue
                     raise RuntimeError(err)
                 except Exception as e:
-                    err = f"{candidate}: {type(e).__name__}: {redact(str(e))[:300]}"
+                    err = f"{effective_candidate}: {type(e).__name__}: {redact(str(e))[:300]}"
                     errors.append(err)
                     if is_auto_mode and i < len(chain) - 1:
-                        print(f"[CHAT_STREAM] auto: {candidate} failed ({err}), trying {chain[i+1]}")
+                        print(f"[CHAT_STREAM] auto: {effective_candidate} failed ({err}), trying {chain[i+1]}")
                         continue
                     raise
 
