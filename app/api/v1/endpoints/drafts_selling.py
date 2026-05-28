@@ -136,46 +136,76 @@ async def create_draft_from_photos(
     #    include the new draft_id.
     decoded: List[dict] = []
     total_bytes = 0
+
+    def _reject(ordinal: int, reason: str, status_code: int, detail: str, **extra) -> None:
+        """Log a WARNING run_event for a deliberate client-input reject, then
+        raise HTTPException. Metadata stays minimal — ordinal + reason + small
+        scalars only — never the image bytes themselves.
+
+        Coverage of these explicit-reject paths was promised by the commit
+        note; pre-Codex review they raised without an event row, which made
+        ingress rejects invisible in tony_run_events (codex-review-drafts-
+        brick.md finding 3).
+        """
+        record_run_event(
+            event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+            severity=EventSeverity.WARNING,
+            subsystem="selling.drafts",
+            message=f"from-photos: ingress reject ({reason})",
+            metadata={"ordinal": ordinal, "reason": reason, **extra},
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
+
     for ordinal, item in enumerate(raw_items):
         try:
             raw_b64 = item.get("base64") or ""
             claimed_mime = (item.get("mime") or "").lower()
             if claimed_mime not in _MIME_TO_EXT:
-                raise HTTPException(
+                _reject(
+                    ordinal, "unsupported_mime",
                     status_code=415,
                     detail=f"image {ordinal}: unsupported mime {claimed_mime!r}",
+                    claimed_mime=claimed_mime,
                 )
             try:
                 image_bytes = base64.b64decode(raw_b64, validate=True)
             except Exception:
-                raise HTTPException(
+                _reject(
+                    ordinal, "invalid_base64",
                     status_code=400,
                     detail=f"image {ordinal}: invalid base64",
                 )
 
             size = len(image_bytes)
             if size == 0:
-                raise HTTPException(
+                _reject(
+                    ordinal, "empty_decode",
                     status_code=400,
                     detail=f"image {ordinal}: empty after decode",
                 )
             if size > _MAX_IMAGE_BYTES:
-                raise HTTPException(
+                _reject(
+                    ordinal, "per_image_byte_limit",
                     status_code=413,
                     detail=f"image {ordinal}: {size} bytes exceeds per-image limit {_MAX_IMAGE_BYTES}",
+                    size_bytes=size, limit=_MAX_IMAGE_BYTES,
                 )
             total_bytes += size
             if total_bytes > _MAX_REQUEST_BYTES:
-                raise HTTPException(
+                _reject(
+                    ordinal, "request_byte_budget",
                     status_code=413,
                     detail=f"request exceeds {_MAX_REQUEST_BYTES} byte budget",
+                    total_bytes=total_bytes, limit=_MAX_REQUEST_BYTES,
                 )
 
             sniffed = _sniff_mime(image_bytes)
             if sniffed is None or sniffed not in _MIME_TO_EXT:
-                raise HTTPException(
+                _reject(
+                    ordinal, "magic_byte_sniff_failed",
                     status_code=415,
                     detail=f"image {ordinal}: bytes don't match a supported image format",
+                    sniffed=sniffed,
                 )
             # Defence in depth: if the caller's claimed mime disagrees with
             # the sniffed mime, trust the sniff (extension follows the sniff).

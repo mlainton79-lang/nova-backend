@@ -29,6 +29,7 @@ Module discipline (per AGENTS.md):
 
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -43,6 +44,31 @@ from app.observability import EVENT_TYPES, EventSeverity, record_run_event
 # tony_vinted_jobs photo convention.
 _STORAGE_BASE = os.environ.get("NOVA_DRAFT_STORAGE_BASE", "/data")
 _DRAFTS_SUBDIR = "drafts"
+
+# Allow-list for stage_image_bytes input validation. The endpoint currently
+# passes a UUID + an extension derived from MIME sniff, but stage_image_bytes
+# is a public helper — future callers must not be trusted to pre-validate.
+_VALID_EXTS = frozenset({"jpg", "jpeg", "png", "webp"})
+
+# Strict basename pattern: alphanumeric + hyphen + underscore only. No path
+# separators, no '..', no leading dot. UUIDs (str(uuid.uuid4())) match this.
+_SAFE_BASENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write the entire buffer to fd, looping over short writes.
+
+    `os.write()` is allowed to perform a partial write without raising. A
+    single unchecked call could land a truncated file while the caller's DB
+    record still describes the full payload — silent corruption. This helper
+    retries until everything is written or a real OSError is raised.
+    """
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(f"os.write returned {written}; expected > 0")
+        view = view[written:]
 
 
 def _get_conn():
@@ -406,30 +432,81 @@ def stage_image_bytes(
     on any failure. The endpoint caller is responsible for delete-on-batch-
     failure cleanup (see drafts_selling endpoint).
 
-    Atomic write: temp file in the same directory → fsync(file) → fsync(dir) →
-    os.replace into final name. This survives a mid-write crash without
-    leaving a half-written final file visible.
+    Input validation (defence in depth — public helper, can't trust callers):
+    - `image_id` must match _SAFE_BASENAME_RE (no path separators, no '..',
+      no leading dot). UUIDs pass. A malicious image_id like '../escape'
+      would otherwise let stage_image_bytes write outside the photo dir.
+    - `ext` must be in _VALID_EXTS after lstrip('.'). Anything else is
+      rejected before any disk work.
+    - The computed `final_path` is re-checked to be inside the draft's
+      photo dir after `os.path.abspath` collapses any segments — paired
+      defence against future call-site bugs.
+
+    Atomic write: temp file in the same directory → write-all (loops over
+    short writes) → fsync(file) → os.replace into final name → best-effort
+    fsync(dir). This survives a mid-write crash without leaving a half-
+    written final file visible. The write-all loop is essential because
+    raw `os.write()` is allowed to perform partial writes without raising.
     """
     try:
-        photo_dir = get_photo_dir(draft_id)
-        os.makedirs(photo_dir, exist_ok=True)
+        # 1. Input validation (rejects malicious callers + future bugs).
+        if not isinstance(image_id, str) or not _SAFE_BASENAME_RE.fullmatch(image_id):
+            record_run_event(
+                event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+                severity=EventSeverity.WARNING,
+                subsystem="selling.drafts",
+                message="stage_image_bytes: image_id failed strict-basename validation",
+                metadata={"draft_id": draft_id, "image_id_repr": repr(image_id)[:80]},
+            )
+            return None
 
-        # Strip any leading dot from ext for consistency.
-        safe_ext = ext.lstrip(".") or "jpg"
+        safe_ext = (ext or "").lstrip(".").lower()
+        if safe_ext not in _VALID_EXTS:
+            record_run_event(
+                event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+                severity=EventSeverity.WARNING,
+                subsystem="selling.drafts",
+                message="stage_image_bytes: ext not in allow-list",
+                metadata={"draft_id": draft_id, "ext": safe_ext},
+            )
+            return None
+
+        photo_dir = get_photo_dir(draft_id)
         final_name = f"{image_id}.{safe_ext}"
-        final_path = os.path.join(photo_dir, final_name)
+        final_path = os.path.abspath(os.path.join(photo_dir, final_name))
+
+        # 2. Containment check on the resolved final_path. With the
+        #    basename + ext validation above this is redundant in practice,
+        #    but it's the same shape as resolve_image_path()'s guard and
+        #    guarantees no escape if either validation is ever loosened.
+        photo_dir_abs = os.path.abspath(photo_dir)
+        if not (
+            final_path == photo_dir_abs
+            or final_path.startswith(photo_dir_abs + os.sep)
+        ):
+            record_run_event(
+                event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+                severity=EventSeverity.WARNING,
+                subsystem="selling.drafts",
+                message="stage_image_bytes: final_path escaped photo_dir",
+                metadata={"draft_id": draft_id, "image_id": image_id},
+            )
+            return None
+
+        os.makedirs(photo_dir, exist_ok=True)
         tmp_path = final_path + ".tmp"
 
+        # 3. Write the full payload — _write_all loops over short os.write().
         fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
         try:
-            os.write(fd, image_bytes)
+            _write_all(fd, image_bytes)
             os.fsync(fd)
         finally:
             os.close(fd)
 
         os.replace(tmp_path, final_path)
 
-        # fsync the directory so the rename is durable on disk too.
+        # 4. fsync the directory so the rename is durable on disk too.
         try:
             dir_fd = os.open(photo_dir, os.O_RDONLY)
             try:
@@ -441,10 +518,18 @@ def stage_image_bytes(
             # safety but isn't required for correctness on most volumes.
             pass
 
-        # Return the path RELATIVE to NOVA_DRAFT_STORAGE_BASE, for storage in
-        # images_json. Operators resolve via resolve_image_path().
+        # 5. Return the path RELATIVE to NOVA_DRAFT_STORAGE_BASE for storage
+        #    in images_json. Operators resolve via resolve_image_path().
         return os.path.join(_DRAFTS_SUBDIR, str(draft_id), "photos", final_name)
     except Exception as e:
+        # Best-effort cleanup of any partial tmp file left behind so a retry
+        # doesn't trip on stale state.
+        try:
+            tmp_candidate = locals().get("tmp_path")
+            if tmp_candidate and os.path.exists(tmp_candidate):
+                os.remove(tmp_candidate)
+        except Exception:
+            pass
         record_run_event(
             event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
             severity=EventSeverity.ERROR,

@@ -204,7 +204,77 @@ def test_11_delete_draft_removes_row():
     assert drafts.get_draft(did) is None
 
 
-def test_12_interlock_check_enforced_by_db():
+def test_12_stage_image_bytes_rejects_path_escape_image_id():
+    """image_id with '..' or '/' must be rejected before any disk work
+    (codex review finding 2: hardening against future callers that don't
+    pre-validate)."""
+    did = drafts.create_draft(source=TEST_SOURCE)
+    for bad_id in ("../escape", "abc/def", ".hidden", "with spaces", ""):
+        assert drafts.stage_image_bytes(did, bad_id, b"\xff\xd8\xff\x00data", "jpg") is None, \
+            f"image_id={bad_id!r} should be rejected"
+    # ensure no file was written under the photo dir
+    photo_dir = drafts.get_photo_dir(did)
+    assert not os.path.isdir(photo_dir) or os.listdir(photo_dir) == [], \
+        f"unexpected files staged in {photo_dir}"
+
+
+def test_13_stage_image_bytes_rejects_bad_ext():
+    """ext outside the allow-list (jpg/jpeg/png/webp) must be rejected."""
+    did = drafts.create_draft(source=TEST_SOURCE)
+    for bad_ext in ("exe", "tiff", "../", "", "JPG;rm"):
+        assert drafts.stage_image_bytes(did, "img-x", b"\xff\xd8\xff\x00data", bad_ext) is None, \
+            f"ext={bad_ext!r} should be rejected"
+
+
+def test_14_stage_image_bytes_survives_short_write():
+    """os.write() can return a short count without raising. The internal
+    _write_all loop must keep writing until everything lands; if it ever
+    returned, the staged file would be truncated while DB metadata still
+    described the full payload (codex review finding 1)."""
+    import builtins
+    real_write = os.write
+    real_open = os.open
+
+    # Capture which fd belongs to our staged temp file so we only mess
+    # with writes on that fd — other fsync/replace/etc. shouldn't break.
+    staged_fds: List[int] = []
+
+    def mock_open(path, flags, *args, **kw):
+        fd = real_open(path, flags, *args, **kw)
+        if isinstance(path, str) and path.endswith(".tmp"):
+            staged_fds.append(fd)
+        return fd
+
+    def mock_write(fd, buf):
+        if fd in staged_fds:
+            # Write only the first byte at a time so the loop is exercised
+            # heavily and any "first chunk only" bug would surface as a
+            # 1-byte file.
+            return real_write(fd, buf[:1])
+        return real_write(fd, buf)
+
+    did = drafts.create_draft(source=TEST_SOURCE)
+    payload = b"\xff\xd8\xff\xe0" + b"PAYLOAD" * 50  # 354 bytes, big enough that 1-byte writes loop a lot
+    os.write = mock_write
+    os.open = mock_open
+    try:
+        rel = drafts.stage_image_bytes(did, "shortwrite-test", payload, "jpg")
+    finally:
+        os.write = real_write
+        os.open = real_open
+
+    assert rel is not None, "stage_image_bytes should still succeed under short writes"
+    resolved = drafts.resolve_image_path({"storage": "railway_volume", "path": rel})
+    assert resolved is not None
+    with open(resolved, "rb") as f:
+        on_disk = f.read()
+    assert on_disk == payload, \
+        f"file content truncated under short writes: got {len(on_disk)}B, expected {len(payload)}B"
+
+    drafts.delete_staged_images(did)
+
+
+def test_15_interlock_check_enforced_by_db():
     """The DB CHECK constraint rejects status='approved' while
     approval_state='pending_review'. Direct SQL because the module's
     update_draft_fields can be called with status='approved' — the DB
@@ -251,7 +321,10 @@ if __name__ == "__main__":
         ("resolve_image_path rejects sibling dir",                test_9_resolve_image_path_rejects_sibling_directory),
         ("stage_image_bytes writes + round-trips",                test_10_stage_image_bytes_writes_and_round_trips),
         ("delete_draft removes row",                              test_11_delete_draft_removes_row),
-        ("interlock CHECK rejects status=approved on pending",    test_12_interlock_check_enforced_by_db),
+        ("stage_image_bytes rejects path-escape image_id",        test_12_stage_image_bytes_rejects_path_escape_image_id),
+        ("stage_image_bytes rejects bad ext",                     test_13_stage_image_bytes_rejects_bad_ext),
+        ("stage_image_bytes survives short writes",               test_14_stage_image_bytes_survives_short_write),
+        ("interlock CHECK rejects status=approved on pending",    test_15_interlock_check_enforced_by_db),
     ]
     for name, fn in tests:
         run_test(name, fn)
