@@ -279,9 +279,54 @@ async def openrouter_stream(message: str, history: list, system_prompt: str):
                     continue
 
 
+_VISION_STREAM_PROVIDERS = frozenset({"claude", "gemini"})
+_NON_VISION_STREAM_PROVIDERS = frozenset({"openai", "groq", "mistral", "openrouter"})
+
+
 def _get_stream(provider: str, message: str, history: list,
                 system_prompt: str, image_base64: str = None):
-    """Route to the correct real streaming generator."""
+    """Route to the correct real streaming generator.
+
+    Two defensive sanitisations applied before the actual dispatch (P1.1 +
+    P1.3 from the 2026-05-28 audit):
+
+    1. **Image-drop trap.** Only `claude_stream` and `gemini_stream` accept
+       `image_base64`. `openai_stream`, `groq_stream`, `mistral_stream`, and
+       `openrouter_stream` have no image parameter — passing an image to
+       them through this dispatcher silently dropped it. If an image is
+       present and the routed provider is one of the four non-vision
+       streams, re-route to Gemini and record a CAPABILITY_DEGRADED warning
+       so the routed-away decision is visible in tony_run_events.
+
+    2. **Council trap.** The smart router can return `provider='council'`
+       for complex-reasoning prompts. Council mode is a 4-round non-
+       streaming deliberation that the SSE dispatcher can't fulfil; the
+       old code fell through to gemini_stream while the wire still emitted
+       `provider:'council'`. Belt-and-braces guard here in case any caller
+       reaches _get_stream with provider='council' without going through
+       the smart router (which now sets is_streaming=True and routes
+       around Council itself).
+    """
+    if image_base64 and provider in _NON_VISION_STREAM_PROVIDERS:
+        record_run_event(
+            event_type=EVENT_TYPES["CAPABILITY_DEGRADED"],
+            severity=EventSeverity.WARNING,
+            subsystem="chat.stream_dispatch",
+            message=f"image present but {provider} stream drops it; re-routing to gemini",
+            metadata={"requested_provider": provider, "actual_provider": "gemini", "had_image": True},
+        )
+        provider = "gemini"
+
+    if provider == "council":
+        record_run_event(
+            event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+            severity=EventSeverity.WARNING,
+            subsystem="chat.stream_dispatch",
+            message="council selected on streaming path; falling back to gemini (smart router should have caught this)",
+            metadata={"requested_provider": "council", "actual_provider": "gemini", "had_image": bool(image_base64)},
+        )
+        provider = "gemini"
+
     if provider == "claude":
         return claude_stream(message, history, system_prompt, image_base64=image_base64)
     elif provider == "openai":
@@ -663,6 +708,13 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                 has_image=has_image,
                 has_document=has_doc,
                 document_length=doc_len,
+                # P1.3: tell the router this is the SSE streaming path so it
+                # routes Council requests to Claude instead — Council mode
+                # does 4-round non-streaming deliberation that doesn't fit
+                # SSE. Without this flag the router used to return
+                # provider='council', _get_stream fell through to Gemini,
+                # and the wire signal mislabelled it as Council.
+                is_streaming=True,
             )
             primary = choice["provider"]
             fallbacks = choice.get("fallbacks", []) or []

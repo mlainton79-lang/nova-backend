@@ -294,12 +294,28 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
 
     try:
         adapter = adapter_cls()
-        if provider_key == "claude":
+        # P1.2 from the 2026-05-28 audit: ClaudeAdapter and GeminiAdapter
+        # both accept `image_base64`; the rest don't. Previously only Claude
+        # got the image, so any image request that smart-routed to Gemini
+        # (the documented vision default) silently lost its image — Gemini
+        # responded text-only as if no image was attached. If the user has
+        # manually picked a non-vision adapter while an image is present,
+        # the image will still be dropped at the adapter — log that with a
+        # CAPABILITY_DEGRADED warning so it's visible in tony_run_events.
+        if provider_key in ("claude", "gemini"):
             reply = await adapter.chat(
                 request.message, request.history, system_prompt,
                 image_base64=request.image_base64
             )
         else:
+            if request.image_base64:
+                record_run_event(
+                    event_type=EVENT_TYPES["CAPABILITY_DEGRADED"],
+                    severity=EventSeverity.WARNING,
+                    subsystem="chat.non_stream_dispatch",
+                    message=f"image present but {provider_key} adapter has no image support; sending text-only",
+                    metadata={"provider": provider_key, "had_image": True},
+                )
             reply = await adapter.chat(
                 request.message, request.history, system_prompt
             )

@@ -157,12 +157,20 @@ def choose_provider(
     has_image: bool = False,
     has_document: bool = False,
     document_length: int = 0,
+    is_streaming: bool = False,
 ) -> Dict:
     """
     Pick the best provider for this request, honouring SKIP_PROVIDERS
     so temporarily-unavailable providers (e.g. Claude when out of
     credits) get transparently replaced by the first usable fallback.
     Returns {provider, rationale, fallbacks}.
+
+    is_streaming=True is set by callers that consume the result via the
+    SSE streaming dispatcher (chat_stream._get_stream). Council mode is
+    a 4-round non-streaming deliberation that doesn't fit SSE, so the
+    streaming branch routes around it. P1.3 from the 2026-05-28 audit
+    closes the "fake streaming Council" gap where the SSE wire used to
+    label Gemini single-provider responses as Council.
     """
     raw = _choose_provider_raw(
         message,
@@ -170,6 +178,7 @@ def choose_provider(
         has_image=has_image,
         has_document=has_document,
         document_length=document_length,
+        is_streaming=is_streaming,
     )
     return _apply_skip(raw)
 
@@ -180,6 +189,7 @@ def _choose_provider_raw(
     has_image: bool = False,
     has_document: bool = False,
     document_length: int = 0,
+    is_streaming: bool = False,
 ) -> Dict:
     """Routing logic before SKIP_PROVIDERS is applied. Kept as a
     separate function so the skip layer is easy to reason about and
@@ -247,6 +257,15 @@ def _choose_provider_raw(
 
     # Deep reasoning → Council mode (multi-brain)
     if classify["is_reasoning"] and classify["length"] > 6:
+        if is_streaming:
+            # Council's 4-round deliberation can't be SSE-streamed coherently.
+            # In streaming context, fall back to Claude (best reasoning) +
+            # Gemini fallback so the wire label matches the actual provider.
+            return {
+                "provider": "claude",
+                "rationale": "complex reasoning (streaming) — Council not supported on SSE, using Claude",
+                "fallbacks": ["gemini"],
+            }
         return {
             "provider": "council",
             "rationale": "complex reasoning — Council mode",
