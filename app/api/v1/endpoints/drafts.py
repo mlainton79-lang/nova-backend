@@ -87,9 +87,13 @@ async def send_draft(
             draft_body=effective_body,
         )
         mark_draft_sent(draft_id)
-        from app.core.self_eval import verify_email_sent
-        await verify_email_sent(draft["draft_to"], effective_subject, draft["account"])
-        return {"ok": True, "message": "Draft sent and verified"}
+        # Post-send verification (verify_email_sent in self_eval) is not yet
+        # implemented; previously this raised ImportError on every successful
+        # send and returned HTTP 500 to the client even though the email had
+        # actually left and the row was marked sent. Removed here; if/when a
+        # real verification path is added (e.g. confirming the message lands
+        # in the sent folder), reinstate then.
+        return {"ok": True, "message": "Draft sent"}
     else:
         return {"ok": False, "error": "Send failed — check Gmail auth"}
 

@@ -3,8 +3,10 @@ import base64
 import httpx
 import psycopg2
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 import urllib.parse
+
+from app.observability import EVENT_TYPES, EventSeverity, record_run_event
 
 GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID", "")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
@@ -67,34 +69,114 @@ async def exchange_code(code: str) -> dict:
         resp.raise_for_status()
         return resp.json()
 
-async def refresh_access_token(email: str) -> str:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT access_token, refresh_token, token_expiry FROM gmail_accounts WHERE email = %s", (email,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    if not row:
-        raise ValueError(f"No account found for {email}")
-    access_tok, refresh_tok, expiry = row
-    if expiry and datetime.utcnow() < expiry - timedelta(minutes=5):
-        return access_tok
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            "https://oauth2.googleapis.com/token",
-            data={"refresh_token": refresh_tok, "client_id": GMAIL_CLIENT_ID, "client_secret": GMAIL_CLIENT_SECRET, "grant_type": "refresh_token"}
-        )
-        resp.raise_for_status()
+async def refresh_access_token(email: str) -> Optional[str]:
+    """Return a valid access token for `email`, refreshing via Google OAuth if
+    needed. Returns None on any failure (no account row, revoked refresh
+    token, network error, DB error) and logs a WARNING event so callers and
+    `/api/v1/status` see the account in a "needs re-auth" state.
+
+    Previously this raised on revoked refresh tokens (Google returns 400/401
+    on a stale grant), which propagated uncaught through `list_emails`,
+    `send_email`, etc. and surfaced as HTTP 500 from any Gmail-touching
+    endpoint. Closing that gap is P0.2 from the 2026-05-28 working-state
+    audit (nova-docs/ops/evidence/2026-05-28/WORKING_STATE_AUDIT_*.md).
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT access_token, refresh_token, token_expiry FROM gmail_accounts WHERE email = %s", (email,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            record_run_event(
+                event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+                severity=EventSeverity.WARNING,
+                subsystem="gmail.refresh",
+                message=f"refresh_access_token: no gmail_accounts row for {email}",
+                metadata={"email": email},
+            )
+            return None
+        access_tok, refresh_tok, expiry = row
+        if expiry and datetime.utcnow() < expiry - timedelta(minutes=5):
+            return access_tok
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={"refresh_token": refresh_tok, "client_id": GMAIL_CLIENT_ID, "client_secret": GMAIL_CLIENT_SECRET, "grant_type": "refresh_token"}
+                )
+        except httpx.TimeoutException as e:
+            record_run_event(
+                event_type=EVENT_TYPES["PROVIDER_TIMEOUT"],
+                severity=EventSeverity.WARNING,
+                subsystem="gmail.refresh",
+                message="refresh_access_token: Google token endpoint timeout",
+                error_class=type(e).__name__,
+                error_message=str(e),
+                metadata={"email": email},
+            )
+            return None
+
+        if resp.status_code != 200:
+            # Google returns 400 invalid_grant on a revoked / expired refresh
+            # token. Body may include a short error code; don't echo any
+            # token-shaped values into the event metadata.
+            record_run_event(
+                event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+                severity=EventSeverity.WARNING,
+                subsystem="gmail.refresh",
+                message=f"refresh_access_token: Google returned {resp.status_code} (account needs re-auth)",
+                metadata={"email": email, "status": resp.status_code},
+            )
+            return None
+
         data = resp.json()
-    new_access = data["access_token"]
-    new_expiry = datetime.utcnow() + timedelta(seconds=data.get("expires_in", 3600))
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("UPDATE gmail_accounts SET access_token = %s, token_expiry = %s, updated_at = NOW() WHERE email = %s", (new_access, new_expiry, email))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return new_access
+        new_access = data.get("access_token")
+        if not new_access:
+            record_run_event(
+                event_type=EVENT_TYPES["PROVIDER_ERROR"],
+                severity=EventSeverity.ERROR,
+                subsystem="gmail.refresh",
+                message="refresh_access_token: response missing access_token field",
+                metadata={"email": email},
+            )
+            return None
+
+        new_expiry = datetime.utcnow() + timedelta(seconds=data.get("expires_in", 3600))
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("UPDATE gmail_accounts SET access_token = %s, token_expiry = %s, updated_at = NOW() WHERE email = %s", (new_access, new_expiry, email))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            # The new token is valid in-memory; persistence failure is non-
+            # fatal for this call (we'll just re-mint on the next read) but
+            # worth recording.
+            record_run_event(
+                event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+                severity=EventSeverity.WARNING,
+                subsystem="gmail.refresh",
+                message="refresh_access_token: DB update failed; returning new token unpersisted",
+                error_class=type(e).__name__,
+                error_message=str(e),
+                metadata={"email": email},
+            )
+        return new_access
+    except Exception as e:
+        record_run_event(
+            event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
+            severity=EventSeverity.ERROR,
+            subsystem="gmail.refresh",
+            message="refresh_access_token failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+            metadata={"email": email},
+        )
+        return None
 
 async def get_user_email(access_token: str) -> str:
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -130,6 +212,8 @@ def get_all_accounts() -> List[str]:
 
 async def list_emails(email: str, query: str = "", max_results: int = 20, label: str = "INBOX") -> list:
     token = await refresh_access_token(email)
+    if not token:
+        return []
     async with httpx.AsyncClient(timeout=8.0) as client:
         params = {"maxResults": min(max_results, 10)}
         if label:
@@ -153,6 +237,8 @@ async def list_emails(email: str, query: str = "", max_results: int = 20, label:
 
 async def get_email_body(email: str, message_id: str) -> dict:
     token = await refresh_access_token(email)
+    if not token:
+        return {}
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}", headers={"Authorization": f"Bearer {token}"}, params={"format": "full"})
         resp.raise_for_status()
@@ -173,6 +259,8 @@ async def get_email_body(email: str, message_id: str) -> dict:
 
 async def send_email(email: str, to: str, subject: str, body: str, reply_to_id: str = None) -> bool:
     token = await refresh_access_token(email)
+    if not token:
+        return False
 
     # N1.email-draft-A: thread replies into the original conversation.
     # Set In-Reply-To + References headers and pass Gmail threadId on the
@@ -224,12 +312,16 @@ async def send_email(email: str, to: str, subject: str, body: str, reply_to_id: 
 
 async def trash_email(email: str, message_id: str) -> bool:
     token = await refresh_access_token(email)
+    if not token:
+        return False
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/trash", headers={"Authorization": f"Bearer {token}"})
         return resp.status_code == 200
 
 async def delete_email(email: str, message_id: str) -> bool:
     token = await refresh_access_token(email)
+    if not token:
+        return False
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.delete(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}", headers={"Authorization": f"Bearer {token}"})
         return resp.status_code == 204
@@ -268,6 +360,8 @@ async def search_all_accounts(query: str, max_per_account: int = 10, label: str 
 async def deep_search_account(email: str, query: str, max_results: int = 200) -> list:
     """Paginated search - fetches ALL matching emails up to max_results. For case building etc."""
     token = await refresh_access_token(email)
+    if not token:
+        return []
     all_messages = []
     page_token = None
     async with httpx.AsyncClient(timeout=60.0) as client:
