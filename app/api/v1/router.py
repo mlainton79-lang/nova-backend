@@ -108,6 +108,8 @@ from app.api.v1.endpoints import ebay
 router.include_router(ebay.router, tags=["ebay"])
 from app.api.v1.endpoints import drafts_selling
 router.include_router(drafts_selling.router, tags=["drafts_selling"])
+from app.api.v1.endpoints import debug_events
+router.include_router(debug_events.router, tags=["debug"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
