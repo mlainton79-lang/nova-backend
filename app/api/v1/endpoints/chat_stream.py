@@ -81,7 +81,8 @@ async def gemini_stream(message: str, history: list, system_prompt: str,
                         text = part.get("text", "")
                         if text:
                             yield text
-                except Exception:
+                except Exception as e:
+                    _record_chunk_parse_failure('gemini', e)
                     continue
 
 
@@ -131,7 +132,8 @@ async def claude_stream(message: str, history: list, system_prompt: str,
                         text = data.get("delta", {}).get("text", "")
                         if text:
                             yield text
-                except Exception:
+                except Exception as e:
+                    _record_chunk_parse_failure('claude', e)
                     continue
 
 
@@ -166,7 +168,8 @@ async def openai_stream(message: str, history: list, system_prompt: str):
                             .get("delta", {}).get("content", ""))
                     if text:
                         yield text
-                except Exception:
+                except Exception as e:
+                    _record_chunk_parse_failure('openai', e)
                     continue
 
 
@@ -201,7 +204,8 @@ async def groq_stream(message: str, history: list, system_prompt: str):
                             .get("delta", {}).get("content", ""))
                     if text:
                         yield text
-                except Exception:
+                except Exception as e:
+                    _record_chunk_parse_failure('groq', e)
                     continue
 
 
@@ -236,7 +240,8 @@ async def mistral_stream(message: str, history: list, system_prompt: str):
                             .get("delta", {}).get("content", ""))
                     if text:
                         yield text
-                except Exception:
+                except Exception as e:
+                    _record_chunk_parse_failure('mistral', e)
                     continue
 
 
@@ -275,12 +280,40 @@ async def openrouter_stream(message: str, history: list, system_prompt: str):
                             .get("delta", {}).get("content", ""))
                     if text:
                         yield text
-                except Exception:
+                except Exception as e:
+                    _record_chunk_parse_failure('openrouter', e)
                     continue
 
 
 _VISION_STREAM_PROVIDERS = frozenset({"claude", "gemini"})
 _NON_VISION_STREAM_PROVIDERS = frozenset({"openai", "groq", "mistral", "openrouter"})
+
+
+def _record_chunk_parse_failure(provider_name: str, e: Exception) -> None:
+    """Record a malformed-streaming-chunk event then continue the stream.
+
+    Previously the six provider streaming generators (gemini/claude/openai/
+    groq/mistral/openrouter) used a bare `except Exception: continue` to
+    skip chunks that failed JSON parsing. A user would silently lose part
+    of a response when one chunk was corrupt. P2.2 from the 2026-05-28
+    audit closes the visibility gap; the skip-and-continue behaviour is
+    retained because aborting the stream on a single bad chunk is worse,
+    but each skip now writes a WARNING to tony_run_events.
+
+    If a misbehaving provider produces many malformed chunks per request,
+    this could flood run_events at WARNING severity. The audit notes a
+    per-stream rate-limit as a future follow-up; emitting one event per
+    bad chunk is the right starting point so we can size the actual
+    failure surface first.
+    """
+    record_run_event(
+        event_type=EVENT_TYPES["PROVIDER_ERROR"],
+        severity=EventSeverity.WARNING,
+        subsystem=f"provider.{provider_name}.stream",
+        message=f"{provider_name} stream: chunk parse failed, skipping",
+        error_class=type(e).__name__,
+        error_message=str(e)[:300],
+    )
 
 
 def _normalise_stream_provider(provider: str, image_base64: str = None) -> str:

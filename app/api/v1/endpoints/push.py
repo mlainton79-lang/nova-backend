@@ -42,10 +42,22 @@ async def setup_firebase(service_account_json: str, _=Depends(verify_token)):
 
 @router.get("/push/status")
 async def push_status(_=Depends(verify_token)):
-    """Check push notification status."""
+    """Check push notification status.
+
+    P2.1 from the 2026-05-28 audit: this used to check the legacy
+    FIREBASE_SERVER_KEY env var, which has been obsolete since the FCM V1
+    migration (commit aa7e0f1). Push actually reads credentials via
+    get_firebase_credentials() which tries FIREBASE_SERVICE_ACCOUNT env var
+    then falls back to tony_config DB. Status check now mirrors that.
+    """
+    from app.core.push_notifications import get_firebase_credentials
     token = get_push_token()
+    firebase_configured = bool(get_firebase_credentials())
     return {
         "token_registered": bool(token),
-        "firebase_configured": bool(__import__('os').environ.get("FIREBASE_SERVER_KEY")),
-        "status": "ready" if token else "needs_token_registration"
+        "firebase_configured": firebase_configured,
+        "status": "ready" if (token and firebase_configured) else (
+            "needs_firebase_config" if not firebase_configured
+            else "needs_token_registration"
+        ),
     }

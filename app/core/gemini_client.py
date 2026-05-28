@@ -77,7 +77,23 @@ def _looks_like_deprecation_400(status: int, body_text: str) -> bool:
 
 
 def _should_fallback(status: int, body_text: str) -> bool:
-    return status in _DEPRECATION_STATUSES or _looks_like_deprecation_400(status, body_text)
+    """Return True when the primary pro model should be abandoned for this
+    request and the fallback pro model tried instead.
+
+    Triggers:
+    - 404 / 410: model retired or rebranded ("model not found" 400s too)
+    - 429 / 502 / 503 / 504: capacity / transient infra failures on the
+      primary endpoint. P2.5 from the 2026-05-28 audit: previously these
+      raised GeminiClientError directly, so a rate-limit on the preview
+      model surfaced to the user even though the stable fallback was
+      healthy. Falling back at the primary's expense is the right
+      availability tradeoff for chat-facing traffic.
+    """
+    return (
+        status in _DEPRECATION_STATUSES
+        or status in _TRANSIENT_STATUSES
+        or _looks_like_deprecation_400(status, body_text)
+    )
 
 
 def _should_retry_transient(status: int) -> bool:
@@ -203,9 +219,10 @@ async def generate_content(
         last_status, last_body = status, body_text
 
         if tier == "pro" and _should_fallback(status, body_text):
+            reason = "capacity" if status in _TRANSIENT_STATUSES else "deprecation"
             log.warning(
-                "[GEMINI_CLIENT] %s: deprecation signal (HTTP %d) on %s, falling back",
-                caller, status, model,
+                "[GEMINI_CLIENT] %s: %s signal (HTTP %d) on %s, falling back",
+                caller, reason, status, model,
             )
             _cache_mark_fallback()
             if is_last:
