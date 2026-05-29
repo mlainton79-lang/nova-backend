@@ -934,6 +934,7 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
     async def gen():
         parts = []
         actual_provider = None
+        failures = {}
         try:
             if not chain:
                 raise RuntimeError("empty provider chain")
@@ -977,22 +978,28 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                     actual_provider = effective_candidate
                     break
                 except StopAsyncIteration:
-                    err = f"{effective_candidate}: produced no chunks"
+                    reason = "produced no chunks"
+                    err = f"{effective_candidate}: {reason}"
                     errors.append(err)
+                    failures[effective_candidate] = reason
                     if is_auto_mode and i < len(chain) - 1:
                         print(f"[CHAT_STREAM] auto: {effective_candidate} produced no chunks, trying {chain[i+1]}")
                         continue
                     raise RuntimeError(err)
                 except asyncio.TimeoutError:
-                    err = f"{effective_candidate}: first-chunk timeout"
+                    reason = "first-chunk timeout"
+                    err = f"{effective_candidate}: {reason}"
                     errors.append(err)
+                    failures[effective_candidate] = reason
                     if is_auto_mode and i < len(chain) - 1:
                         print(f"[CHAT_STREAM] auto: {effective_candidate} timed out (first-chunk), trying {chain[i+1]}")
                         continue
                     raise RuntimeError(err)
                 except Exception as e:
-                    err = f"{effective_candidate}: {type(e).__name__}: {redact(str(e))[:300]}"
+                    reason = f"{type(e).__name__}: {redact(str(e))[:300]}"
+                    err = f"{effective_candidate}: {reason}"
                     errors.append(err)
+                    failures[effective_candidate] = reason
                     if is_auto_mode and i < len(chain) - 1:
                         print(f"[CHAT_STREAM] auto: {effective_candidate} failed ({err}), trying {chain[i+1]}")
                         continue
@@ -1081,6 +1088,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                         reply="", latency_ms=int((time.time() - start) * 1000),
                         ok=False, error=safe_error)
 
+        if failures:
+            yield "data: " + json.dumps({"type": "failures", "failures": failures}) + "\n\n"
         yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
