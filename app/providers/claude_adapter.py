@@ -54,4 +54,11 @@ class ClaudeAdapter(ProviderAdapter):
             if response.status_code >= 400:
                 raise RuntimeError(f"Claude {response.status_code}: {redact(response.text)[:500]}")
             data = response.json()
-            return data["content"][0]["text"].strip()
+            try:
+                return data["content"][0]["text"].strip()
+            except (KeyError, IndexError, TypeError, AttributeError) as e:
+                keys = list(data.keys())[:5] if isinstance(data, dict) else []
+                raise ValueError(
+                    "provider response shape change: missing or invalid "
+                    f"content[0].text; got keys={keys}"
+                ) from e

@@ -54,4 +54,11 @@ class GeminiAdapter(ProviderAdapter):
             if response.status_code >= 400:
                 raise RuntimeError(f"Gemini {response.status_code}: {redact(response.text)[:500]}")
             data = response.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            try:
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except (KeyError, IndexError, TypeError, AttributeError) as e:
+                keys = list(data.keys())[:5] if isinstance(data, dict) else []
+                raise ValueError(
+                    "provider response shape change: missing or invalid "
+                    f"candidates[0].content.parts[0].text; got keys={keys}"
+                ) from e

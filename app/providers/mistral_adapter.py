@@ -25,4 +25,11 @@ class MistralAdapter(ProviderAdapter):
             if response.status_code >= 400:
                 raise RuntimeError(f"Mistral {response.status_code}: {redact(response.text)[:500]}")
             data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            try:
+                return data["choices"][0]["message"]["content"].strip()
+            except (KeyError, IndexError, TypeError, AttributeError) as e:
+                keys = list(data.keys())[:5] if isinstance(data, dict) else []
+                raise ValueError(
+                    "provider response shape change: missing or invalid "
+                    f"choices[0].message.content; got keys={keys}"
+                ) from e
