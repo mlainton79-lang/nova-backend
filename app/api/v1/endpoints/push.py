@@ -3,8 +3,7 @@ from fastapi import APIRouter, Depends
 from app.core.security import verify_token
 from app.core.push_notifications import (
     save_push_token, get_push_token,
-    send_push, tony_notify, init_push_table,
-    store_config, init_config_table
+    send_push, tony_notify, store_config,
 )
 
 router = APIRouter()
@@ -12,7 +11,6 @@ router = APIRouter()
 @router.post("/push/register")
 async def register_token(token: str, platform: str = "android", _=Depends(verify_token)):
     """Register Matthew's device for push notifications."""
-    init_push_table()
     save_push_token(token, platform)
     return {"ok": True, "message": "Tony can now reach you directly"}
 
@@ -36,7 +34,6 @@ async def setup_firebase(service_account_json: str, _=Depends(verify_token)):
         json.loads(service_account_json)  # validate it's valid JSON
     except Exception:
         return {"ok": False, "error": "Invalid JSON"}
-    init_config_table()
     ok = store_config("firebase_service_account", service_account_json)
     return {"ok": ok, "message": "Firebase credentials stored" if ok else "Storage failed"}
 

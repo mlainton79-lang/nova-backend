@@ -8,7 +8,7 @@ from typing import List
 from app.core.security import verify_token
 from app.core.codebase_sync import (
     store_files, get_codebase_summary, search_codebase,
-    get_codebase_stats, init_codebase_table
+    get_codebase_stats,
 )
 
 router = APIRouter()
@@ -27,7 +27,6 @@ class CodebaseSyncRequest(BaseModel):
 @router.post("/codebase/sync")
 async def sync_codebase(req: CodebaseSyncRequest, _=Depends(verify_token)):
     """Receive files from Android app and store them."""
-    init_codebase_table()
     file_map = {f.path: f.content for f in req.files}
     result = store_files(req.source, file_map)
     return result

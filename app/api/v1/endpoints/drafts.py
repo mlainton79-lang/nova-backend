@@ -9,7 +9,7 @@ from app.core.security import verify_token
 from app.core.email_drafter import (
     get_pending_drafts, get_draft_for_send,
     mark_draft_sent, mark_draft_dismissed, update_draft_fields,
-    scan_and_draft_replies, init_draft_tables
+    scan_and_draft_replies,
 )
 from app.core.gmail_service import send_email
 
@@ -29,7 +29,6 @@ class SendDraftRequest(BaseModel):
 @router.get("/drafts")
 async def list_drafts(_=Depends(verify_token)):
     """Get all draft replies Tony has prepared."""
-    init_draft_tables()
     drafts = get_pending_drafts()
     return {"ok": True, "drafts": drafts, "count": len(drafts)}
 
@@ -37,7 +36,6 @@ async def list_drafts(_=Depends(verify_token)):
 @router.post("/drafts/scan")
 async def trigger_draft_scan(_=Depends(verify_token)):
     """Manually trigger Tony to scan inbox and prepare draft replies."""
-    init_draft_tables()
     result = await scan_and_draft_replies()
     return {"ok": True, **result}
 

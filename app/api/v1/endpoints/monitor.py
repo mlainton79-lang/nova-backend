@@ -1,7 +1,7 @@
 """News monitoring and weather endpoints."""
 from fastapi import APIRouter, Depends
 from app.core.security import verify_token
-from app.core.news_monitor import tony_scan_news, add_watched_topic, get_unseen_news, init_news_tables
+from app.core.news_monitor import tony_scan_news, add_watched_topic, get_unseen_news
 from app.core.weather import get_weather
 
 router = APIRouter()
@@ -30,5 +30,4 @@ async def watch_topic(topic: str, keywords: str = None, _=Depends(verify_token))
 
 @router.get("/news/test")
 async def news_test(_=Depends(verify_token)):
-    init_news_tables()
     return {"status": "News monitoring active"}

@@ -166,6 +166,8 @@ _inits = [
     ("app.core.run_ledger",            "init_run_ledger_table",      "Run ledger"),
     ("app.core.ebay_oauth",            "init_ebay_oauth_tables",     "eBay OAuth"),
     ("app.selling.drafts",             "init_drafts_table",          "Selling drafts"),
+    ("app.core.push_notifications",    "init_push_table",            "Push notifications"),
+    ("app.core.push_notifications",    "init_config_table",          "Tony config"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
     ("app.core.seed_capabilities_v1",      "run_once",                 "Capabilities v1.1 seed"),
 ]
