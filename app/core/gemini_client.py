@@ -9,20 +9,30 @@ Fallback policy (pro tier only):
   - Primary:  GEMINI_PRO_PRIMARY  (default: gemini-3.1-pro-preview)
   - Fallback: GEMINI_PRO_FALLBACK (default: gemini-2.5-pro)
 
-  Triggered on HTTP 404, 410, or 400 with "model not found" /
-  "unsupported model" in the error message — Google's signals for
-  deprecated / retired models.
+  Transient statuses (429, 502, 503, 504) get one same-model retry via
+  `_call_with_transient_retry`. If the retry also fails transiently,
+  primary pro falls back to the stable pro model (P2.5 from the
+  2026-05-28 audit). Previously transient-after-retry raised
+  GeminiClientError immediately even when the fallback was healthy.
 
-  NOT triggered on 503, 429, 502, 504, timeouts, connection errors
-  (these are transient and retried once on the same model before
-  escalating).
+  Deprecation statuses (404, 410, or 400 with "model not found" /
+  "unsupported model" in the body — Google's signals for retired
+  models) trigger fallback immediately without same-model retry.
 
-  NOT triggered on 401, 403, other 400s (fatal — bad key, bad request
-  shape, safety block — raise immediately).
+  Transport errors (timeouts, connection errors) continue to the next
+  model without marking the fallback cache.
 
-Fallback cache: 1-hour TTL per pod. Once a deprecation signal hits the
-primary, this pod skips the primary for the next hour. Prevents the
-wasted round-trip every request after permanent deprecation.
+  Fatal (401, 403, other 400s — bad key, bad request shape, safety
+  block) raise immediately.
+
+Fallback cache: 1-hour TTL per pod. Activates on any condition that
+triggers `_should_fallback` (both deprecation and capacity signals).
+This pod skips the primary for the next hour. Prevents
+the wasted round-trip when the primary is persistently retired or
+load-shedded; the trade-off is that a single rate-limit makes the
+fallback "sticky" for the next hour. Acceptable for Nova's single-user
+workload; quota-aware behaviour is a future-tunable if higher-traffic
+deployments adopt this client.
 
 Flash tier is a passthrough to GEMINI_FLASH_MODEL (default:
 gemini-2.5-flash). No fallback — there's no flash-preview worth
@@ -171,12 +181,14 @@ async def generate_content(
 ) -> Dict[str, Any]:
     """Call Gemini generateContent and return the full response JSON.
 
-    tier="pro":   try primary, fall back to stable on deprecation signals.
+    tier="pro":   try primary, fall back to stable on deprecation signals
+                  (404/410/400-with-marker) OR on persistent capacity errors
+                  (429/502/503/504 after the same-model transient retry).
     tier="flash": passthrough to the configured flash model.
 
     Raises GeminiClientError on fatal errors (bad key, malformed request,
     safety block) or when both pro-tier models are exhausted. Transient
-    errors are retried once per model before escalating.
+    errors are retried once on the same model before falling back.
     """
     if tier not in ("pro", "flash"):
         raise ValueError(f"tier must be 'pro' or 'flash', got {tier!r}")
