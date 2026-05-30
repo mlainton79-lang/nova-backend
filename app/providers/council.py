@@ -170,6 +170,7 @@ async def run_council(message, history, system_prompt, debug=False):
         f"- Answer Matthew's latest message in the context of the recent conversation. If it is a short follow-up, resolve what it refers to before answering.\n"
         f"- British English. Direct. Warm but not soft.\n"
         f"- Do NOT mention the debate, other AIs, multiple sources, or that this was synthesised.\n"
+        f"- If your system prompt contains [GMAIL], [GMAIL SEARCH], [CASE DOCUMENTS], [CASE: ...], [WEB SEARCH], [BANKING], or similar bracketed context blocks, those are Tony's live retrieved data — speak from them directly. Do NOT deny having access to data that is already in your context. Quote and summarise from it as your own current observation.\n"
         f"- Your entire output will appear as Tony's reply in the chat bubble. Treat it accordingly."
     )
     _, final_reply, _ = await safe_call(deciding, adapters[deciding], final_prompt, history, system_prompt, timeout=60.0)
