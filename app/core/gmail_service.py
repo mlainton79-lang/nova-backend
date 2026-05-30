@@ -322,8 +322,85 @@ async def send_email(email: str, to: str, subject: str, body: str, reply_to_id: 
     if thread_id:
         payload["threadId"] = thread_id
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
-        return resp.status_code == 200
+        resp = await client.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+        )
+        body_text = (resp.text or "")[:500]
+        parsed = None
+        try:
+            parsed = resp.json() if resp.status_code == 200 else None
+        except Exception:
+            parsed = None
+        msg_id = (parsed or {}).get("id")
+        thread_id = (parsed or {}).get("threadId")
+
+        # Verification read — does Gmail confirm this message in this mailbox?
+        verify_status = None
+        verify_error = None
+        label_ids = []
+        if resp.status_code == 200 and msg_id:
+            try:
+                verify_resp = await client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"format": "metadata"},
+                )
+                verify_status = verify_resp.status_code
+                if verify_resp.status_code == 200:
+                    label_ids = verify_resp.json().get("labelIds", [])
+            except Exception as e:
+                verify_error = type(e).__name__
+
+        # Profile read — what mailbox does this token actually authenticate as?
+        # Directly settles the token/account mismatch hypothesis (where the
+        # `account` arg may not match the token's real mailbox).
+        profile_email = None
+        profile_error = None
+        try:
+            prof_resp = await client.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if prof_resp.status_code == 200:
+                profile_email = prof_resp.json().get("emailAddress")
+            else:
+                profile_error = f"http_{prof_resp.status_code}"
+        except Exception as e:
+            profile_error = type(e).__name__
+
+        # Tighter success contract: status 200 AND a parseable Gmail Message
+        # id present. A 200 with no id (or unparseable JSON) is treated as
+        # failure rather than silently swallowed.
+        success = resp.status_code == 200 and bool(msg_id)
+        try:
+            record_run_event(
+                event_type="gmail_send_observed",
+                severity=EventSeverity.INFO if success else EventSeverity.WARNING,
+                subsystem="gmail.send",
+                message=(
+                    f"send to={to} account={email} mailbox={profile_email} "
+                    f"status={resp.status_code} id={msg_id} thread={thread_id} "
+                    f"labels={label_ids} success={success}"
+                ),
+                metadata={
+                    "account": email,
+                    "mailbox_resolved": profile_email,
+                    "to": to,
+                    "status_code": resp.status_code,
+                    "returned_id": msg_id,
+                    "returned_thread_id": thread_id,
+                    "verified_labels": label_ids,
+                    "verification_status_code": verify_status,
+                    "verification_error_class": verify_error,
+                    "profile_error_class": profile_error,
+                    "response_text_preview": body_text,
+                },
+            )
+        except Exception:
+            pass
+        return success
 
 async def trash_email(email: str, message_id: str) -> bool:
     token = await refresh_access_token(email)
