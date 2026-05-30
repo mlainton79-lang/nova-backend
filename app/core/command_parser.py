@@ -34,6 +34,21 @@ COMMAND_PATTERNS = [
     # phrases like "please send draft 5 tomorrow" from accidentally opening a gate.
     (r'^send draft #?(\d+)\.?$', 'send_draft'),
     (r'^send #(\d+)\.?$', 'send_draft'),
+    # Drafts review — list pending email drafts so Matthew can pick one to send.
+    (r'^show (?:me )?(?:my |the )?drafts\??$', 'show_drafts'),
+    (r'^list (?:my |the )?drafts\??$', 'show_drafts'),
+    # Inbox scan (read-only) — list recent unread across all four Gmail accounts.
+    # No DB writes, no Gemini drafting. Quick "what's new in my inbox".
+    (r'^scan (?:my |the )?inbox\??$', 'scan_inbox'),
+    (r'^check (?:my |the )?inbox\??$', 'scan_inbox'),
+    (r'^read (?:my |the )?inbox\??$', 'scan_inbox'),
+    (r"^what(?:'s| is)? in (?:my |the )?inbox\??$", 'scan_inbox'),
+    # Scan + draft pipeline — read inbox AND prepare draft replies for the
+    # ones that need them. Heavier than `scan inbox` (writes draft rows,
+    # uses Gemini); kept on its own explicit phrase so it can't fire by
+    # accident on a casual "what's new" query.
+    (r'^draft (?:my )?replies\??$', 'scan_and_draft'),
+    (r'^scan and draft(?: replies)?\??$', 'scan_and_draft'),
     # Legacy `tony_email_queue` commands — quiesced. The queue has no
     # active producer; the new send path is `send draft N` with explicit
     # human approval. Patterns anchored so they only match when typed as
@@ -164,6 +179,15 @@ async def execute_command(command: Dict) -> str:
         except (TypeError, ValueError, IndexError):
             return "I didn't catch the draft ID. Try 'send draft 5' (or whatever the number is)."
         return await _send_draft_request(draft_id)
+
+    elif cmd == "show_drafts":
+        return await _show_drafts()
+
+    elif cmd == "scan_inbox":
+        return await _scan_inbox()
+
+    elif cmd == "scan_and_draft":
+        return await _scan_and_draft()
 
     elif cmd == "legacy_email_quiesced":
         return await _legacy_email_quiesced()
@@ -451,10 +475,102 @@ async def _legacy_email_quiesced() -> str:
     queue.
     """
     return (
-        "The legacy email queue is no longer used. "
-        "Open Email Drafts in the app to review drafts. "
-        "To send from chat, say 'send draft N' where N is the draft ID."
+        "The legacy email queue is no longer used. Try one of these:\n"
+        "  'show my drafts'   — list prepared drafts\n"
+        "  'scan my inbox'    — read recent unread\n"
+        "  'draft replies'    — scan inbox AND prepare draft replies\n"
+        "  'send draft N'     — send draft #N (asks for your approval first)\n"
+        "Or open Email Drafts in the app."
     )
+
+
+async def _show_drafts() -> str:
+    """List pending email drafts in chat so Matthew can pick one to send.
+
+    Read-only — pulls from get_pending_drafts() which already filters to
+    status='pending' and opportunistically reverts any stale 'sending' rows.
+    """
+    from app.core.email_drafter import get_pending_drafts
+    try:
+        drafts = get_pending_drafts()
+    except Exception as e:
+        return f"Couldn't read drafts: {e}"
+
+    if not drafts:
+        return "No pending email drafts."
+
+    lines = [f"You have {len(drafts)} pending draft{'s' if len(drafts) != 1 else ''}:"]
+    for d in drafts:
+        sender = (d.get("from", "") or "").split("<")[0].strip() or d.get("from", "(unknown sender)")
+        subject = d.get("original_subject") or d.get("draft_subject") or "(no subject)"
+        account = d.get("account") or "?"
+        lines.append(f"  #{d['id']} ({account}) — {sender}: {subject}")
+    lines.append("")
+    lines.append("Say 'send draft N' to open the approval gate for one.")
+    return "\n".join(lines)
+
+
+async def _scan_inbox() -> str:
+    """Read-only scan of recent unread email across all configured accounts.
+
+    Uses gmail_service.search_all_accounts with `is:unread newer_than:2d`.
+    Does NOT draft replies or modify any DB state. Pair with 'draft replies'
+    for the heavier scan-and-draft pipeline.
+    """
+    from app.core.gmail_service import search_all_accounts
+    try:
+        results = await search_all_accounts("is:unread newer_than:2d", max_per_account=10)
+    except Exception as e:
+        return f"Couldn't scan inbox: {e}"
+
+    if not results:
+        return "Nothing unread in the last 2 days across any of your accounts."
+
+    by_account: Dict[str, list] = {}
+    for r in results:
+        acc = r.get("account") or "(unknown account)"
+        by_account.setdefault(acc, []).append(r)
+
+    lines = [f"Found {len(results)} unread message{'s' if len(results) != 1 else ''} (last 2 days):"]
+    for acc in sorted(by_account.keys()):
+        msgs = by_account[acc]
+        lines.append("")
+        lines.append(f"{acc} — {len(msgs)} unread:")
+        for m in msgs[:5]:
+            sender = (m.get("from", "") or "").split("<")[0].strip() or "(unknown)"
+            subject = (m.get("subject") or "(no subject)")[:80]
+            lines.append(f"  • {sender}: {subject}")
+        if len(msgs) > 5:
+            lines.append(f"  ... and {len(msgs) - 5} more")
+    lines.append("")
+    lines.append("Say 'draft replies' to have me prepare drafts for any that need responses.")
+    return "\n".join(lines)
+
+
+async def _scan_and_draft() -> str:
+    """Run the full scan-and-draft pipeline — read inbox, classify, and
+    persist draft replies for emails that need responses. Matthew reviews
+    via 'show my drafts' and sends via 'send draft N' (approval gate).
+    """
+    from app.core.email_drafter import scan_and_draft_replies
+    try:
+        result = await scan_and_draft_replies()
+    except Exception as e:
+        return f"Couldn't run the scan-and-draft pipeline: {e}"
+
+    drafts_created = result.get("drafts_created", 0)
+    emails_checked = result.get("emails_checked", 0)
+    errors = result.get("errors", []) or []
+
+    lines = [
+        f"Scanned {emails_checked} email{'s' if emails_checked != 1 else ''}; "
+        f"prepared {drafts_created} draft{'s' if drafts_created != 1 else ''}."
+    ]
+    if drafts_created:
+        lines.append("Say 'show my drafts' to review, 'send draft N' to send.")
+    if errors:
+        lines.append(f"({len(errors)} error{'s' if len(errors) != 1 else ''} during scan — check logs.)")
+    return "\n".join(lines)
 
 
 async def _approve_build() -> str:
