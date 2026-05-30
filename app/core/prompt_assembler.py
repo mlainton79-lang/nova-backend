@@ -231,16 +231,8 @@ def _capability_state_block() -> str:
         lines.extend(sorted(high_risk))
         lines.append("")
 
-    # FIXME-N1.7: replace this hardcoded dormant line once overnight cognition is
-    # gated and activated. Currently true (cron service missing env vars, no
-    # overnight outputs produced). Will become false the moment N1.7-B ships.
     lines.append("Overnight cognition status:")
-    lines.append(
-        "- Dormant until N1.7 activation. The think_worker substrate exists "
-        "but cron service is missing required env vars, so no overnight tasks "
-        "have produced output. Do not claim overnight work has run unless "
-        "recent output exists in this conversation context."
-    )
+    lines.append(_get_overnight_status())
 
     return "\n".join(lines)
 
@@ -261,6 +253,43 @@ def _db_fetch(query: str, params=None):
         return rows
     except Exception:
         return []
+
+
+def _get_overnight_status() -> str:
+    """Live-queried status of Tony's overnight think_worker cron pass.
+
+    Replaces a previously hardcoded "Dormant until N1.7 activation" line that
+    became stale once the nova-backend cron service was activated. Queries
+    `tony_worker_log` so the status reflects current reality every prompt
+    assembly, and so a future cron failure will surface naturally instead
+    of silently lying.
+    """
+    rows = _db_fetch(
+        """
+        SELECT MAX(ran_at), COUNT(*),
+               SUM(CASE WHEN success THEN 1 ELSE 0 END)
+        FROM tony_worker_log
+        WHERE ran_at > NOW() - INTERVAL '36 hours'
+        """
+    )
+    if not rows or rows[0][0] is None:
+        return (
+            "- No overnight pass output in the last 36 hours. The "
+            "think_worker.py cron (nova-backend service, schedule "
+            "0 1 * * * UTC) may have stopped firing. Check tony_worker_log "
+            "directly before claiming overnight work has run."
+        )
+    last_ran, total, successes = rows[0]
+    last_ran_str = last_ran.strftime("%Y-%m-%d %H:%M") if last_ran else "unknown"
+    return (
+        f"- Last overnight pass: {last_ran_str} UTC, "
+        f"{successes or 0}/{total or 0} tasks succeeded. think_worker.py "
+        f"runs daily at 01:00 UTC via the nova-backend cron service. The "
+        f"substance produced (memory updates, insights, alerts) lives in "
+        f"tony_living_memory / tony_facts / tony_episodic_memory / "
+        f"semantic_memories — do NOT invent specifics about overnight "
+        f"outputs that aren't surfaced in this prompt's memory blocks."
+    )
 
 
 
