@@ -1,4 +1,5 @@
 import os
+import asyncio
 import base64
 import httpx
 import psycopg2
@@ -510,20 +511,41 @@ async def deep_search_all_accounts(query: str, max_per_account: int = 200) -> li
     return sorted(all_results, key=lambda x: x.get("date", ""), reverse=True)
 
 async def get_morning_summary() -> str:
+    """Fan out to all connected accounts IN PARALLEL and aggregate unread.
+
+    Previously serial (`for account in accounts: await list_emails(...)`),
+    which totalled ~4× per-account time and routinely blew the caller's
+    15s outer wait_for cap — leaving the Council's [GMAIL] block silently
+    empty and inviting provider fabrication. Parallel via asyncio.gather:
+    total runtime is now bounded by the slowest account, not the sum.
+    Each per-account failure is captured independently and surfaced as an
+    error line in the returned summary; one bad account no longer poisons
+    the rest.
+    """
     accounts = get_all_accounts()
     if not accounts:
         return "No Gmail accounts connected."
+
+    async def _fetch_one(account: str):
+        try:
+            emails = await list_emails(
+                account, query="is:unread newer_than:3d", max_results=20, label=""
+            )
+            return account, emails, None
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            print(f"[GMAIL] Morning summary failed for {account}: {err}")
+            return account, [], err
+
+    results = await asyncio.gather(*[_fetch_one(a) for a in accounts])
+
     all_emails = []
     errors = []
-    for account in accounts:
-        try:
-            # Try unread from last 3 days to be safe with timezone drift
-            emails = await list_emails(account, query="is:unread newer_than:3d", max_results=20, label="")
-            all_emails.extend(emails)
-        except Exception as e:
-            err_msg = f"{account}: {str(e)}"
-            errors.append(err_msg)
-            print(f"[GMAIL] Morning summary failed for {account}: {e}")
+    for account, emails, err in results:
+        all_emails.extend(emails)
+        if err:
+            errors.append(f"{account}: {err}")
+
     if not all_emails:
         if errors:
             return f"Gmail error(s): {'; '.join(errors)}"

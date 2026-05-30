@@ -90,7 +90,25 @@ async def _gather_council_context(req: ChatRequest) -> dict:
                 summary = await asyncio.wait_for(get_morning_summary(), timeout=15.0)
                 return f"[GMAIL]\n{summary}" if summary else ""
         except Exception as e:
-            print(f"[COUNCIL] Gmail: {e}")
+            # Capture the exception class — empty `str(e)` (e.g. asyncio.TimeoutError)
+            # would otherwise produce a useless `[COUNCIL] Gmail: ` print and hide
+            # the actual failure mode. Also surface to tony_run_events so the next
+            # auditor can find this without log scraping.
+            err_class = type(e).__name__
+            err_msg = str(e) or "(no message)"
+            print(f"[COUNCIL] Gmail: {err_class}: {err_msg}")
+            try:
+                from app.observability import record_run_event, EventSeverity
+                record_run_event(
+                    event_type="council_gmail_context_failed",
+                    severity=EventSeverity.WARNING,
+                    subsystem="council.context.gmail",
+                    message=f"_gather_council_context.gmail failed: {err_class}",
+                    error_class=err_class,
+                    error_message=err_msg[:300],
+                )
+            except Exception:
+                pass
         return ""
 
     async def _reasoning():
