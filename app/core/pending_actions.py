@@ -157,6 +157,82 @@ def consume_pending_action(action_id: int) -> bool:
         return False
 
 
+def consume_pending_action_atomic(action_id: int) -> bool:
+    """Atomically consume a pending action — only succeeds while it's still
+    'pending'. Use this in place of consume_pending_action() when racing
+    consumers could both reach the same action (e.g. two chat confirms
+    arriving simultaneously against the same approval gate).
+
+    Returns True iff this caller is the one that claimed the row.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_pending_actions
+            SET status = 'consumed'
+            WHERE id = %s AND status = 'pending'
+            RETURNING id
+        """, (action_id,))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        return row is not None
+    except Exception as e:
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="pending_action_consume_failed",
+                severity=EventSeverity.WARNING,
+                subsystem="pending_actions.consume_atomic",
+                message=f"consume_pending_action_atomic failed for id={action_id}",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
+        except Exception:
+            print(f"[PENDING_ACTIONS] consume_atomic failed: {e}")
+        return False
+
+
+def consume_pending_actions_by_type(action_type: str, session_key: str = "default") -> int:
+    """Atomically consume every pending action matching action_type + session_key.
+
+    Used at gate-open time to clear stale prior approvals so a new
+    'send draft N' can't race with an old 'yes' on a prior gate.
+    Returns the count of rows actually consumed.
+    """
+    init_pending_actions_table()
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_pending_actions
+            SET status = 'consumed'
+            WHERE action_type = %s AND session_key = %s AND status = 'pending'
+            RETURNING id
+        """, (action_type, session_key))
+        rows = cur.fetchall()
+        conn.commit()
+        cur.close()
+        conn.close()
+        return len(rows)
+    except Exception as e:
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="pending_action_consume_failed",
+                severity=EventSeverity.WARNING,
+                subsystem="pending_actions.consume_by_type",
+                message=f"consume_pending_actions_by_type failed for type={action_type}",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
+        except Exception:
+            print(f"[PENDING_ACTIONS] consume_by_type failed: {e}")
+        return 0
+
+
 def parse_selection(message: str, max_candidates: int) -> Optional[int]:
     """
     Parse a user message as a selection number.
@@ -190,4 +266,45 @@ def parse_selection(message: str, max_candidates: int) -> Optional[int]:
         if re.match(rf'^(?:the\s+)?{word}(?:\s+one)?\.?$', msg):
             return n if 1 <= n <= max_candidates else None
 
+    return None
+
+
+_APPROVAL_CONFIRM_PHRASES = frozenset({
+    "yes", "y", "yep", "yeah", "yup",
+    "yes please", "please send", "send please",
+    "send", "send it", "send it now", "ok send", "ok send it",
+    "confirm", "approved", "approve",
+})
+
+_APPROVAL_CANCEL_PHRASES = frozenset({
+    "no", "n", "nope",
+    "cancel", "abort", "stop",
+    "don't", "dont", "don't send", "dont send",
+    "don't send it", "dont send it", "do not send",
+    "wait", "hold on", "hold",
+    "not yet", "leave it", "never mind", "nevermind",
+})
+
+
+def parse_approval(message: str) -> Optional[str]:
+    """Parse a user message as a binary approval intent for irreversible
+    actions (e.g. an email send-approval gate).
+
+    Returns "confirm" or "cancel" on an exact whole-message whitelist match
+    (case-folded, stripped, terminal punctuation tolerated). Returns None
+    on anything else: typos, unrelated text, multi-sentence input, or
+    edit-intent like "yes but change the closing".
+
+    Critical contract: callers MUST NOT consume the underlying pending
+    action when this returns None. The gate stays open until the next
+    message resolves it or the TTL expires. This is the bias-toward-NOT-
+    firing lever the whole gate depends on.
+    """
+    if not message:
+        return None
+    msg = message.strip().lower().rstrip(".!?,")
+    if msg in _APPROVAL_CONFIRM_PHRASES:
+        return "confirm"
+    if msg in _APPROVAL_CANCEL_PHRASES:
+        return "cancel"
     return None

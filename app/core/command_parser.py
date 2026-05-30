@@ -29,11 +29,20 @@ def get_conn():
 
 
 COMMAND_PATTERNS = [
-    (r'approve email (\d+)', 'approve_email'),
-    (r'send email (\d+)', 'approve_email'),
-    (r'reject email (\d+)', 'reject_email'),
-    (r'show email (\d+)', 'show_email'),
-    (r'delete email (\d+)', 'reject_email'),
+    # New approval-gated chat send for email drafts (single trigger phrase per v2 design).
+    # Anchored — `re.search` is used at the dispatch site, so anchors prevent
+    # phrases like "please send draft 5 tomorrow" from accidentally opening a gate.
+    (r'^send draft #?(\d+)\.?$', 'send_draft'),
+    (r'^send #(\d+)\.?$', 'send_draft'),
+    # Legacy `tony_email_queue` commands — quiesced. The queue has no
+    # active producer; the new send path is `send draft N` with explicit
+    # human approval. Patterns anchored so they only match when typed as
+    # commands, not as substrings of unrelated chat.
+    (r'^approve email \d+\.?$', 'legacy_email_quiesced'),
+    (r'^send email \d+\.?$', 'legacy_email_quiesced'),
+    (r'^reject email \d+\.?$', 'legacy_email_quiesced'),
+    (r'^show email \d+\.?$', 'legacy_email_quiesced'),
+    (r'^delete email \d+\.?$', 'legacy_email_quiesced'),
     (r'create goal[:\s]+(.+)', 'create_goal'),
     (r'add goal[:\s]+(.+)', 'create_goal'),
     (r'complete goal[:\s]+(.+)', 'complete_goal'),
@@ -41,8 +50,8 @@ COMMAND_PATTERNS = [
     (r'what.s in my calendar', 'read_calendar'),
     (r'check my calendar', 'read_calendar'),
     (r'what have i got (today|tomorrow|this week)', 'read_calendar'),
-    (r'check.*emails?', 'check_email_queue'),
-    (r'any.*emails? (waiting|pending|to approve)', 'check_email_queue'),
+    (r'^check (?:my |the )?emails?\??$', 'legacy_email_quiesced'),
+    (r'^any emails? (?:waiting|pending|to approve)\??$', 'legacy_email_quiesced'),
     # Autonomous build approval
     (r'approve build', 'approve_build'),
     (r'deploy build', 'approve_build'),
@@ -149,6 +158,16 @@ async def execute_command(command: Dict) -> str:
         instruction = args[1] if args and len(args) >= 2 and args[1] else None
         return await _draft_email_reply(query, instruction)
 
+    elif cmd == "send_draft":
+        try:
+            draft_id = int(args[0])
+        except (TypeError, ValueError, IndexError):
+            return "I didn't catch the draft ID. Try 'send draft 5' (or whatever the number is)."
+        return await _send_draft_request(draft_id)
+
+    elif cmd == "legacy_email_quiesced":
+        return await _legacy_email_quiesced()
+
     return ""
 
 
@@ -218,7 +237,8 @@ async def _check_pending_action(message: str) -> Optional[str]:
     calendar selection, approval gates).
     """
     from app.core.pending_actions import (
-        get_active_pending_action, consume_pending_action, parse_selection,
+        get_active_pending_action, consume_pending_action,
+        consume_pending_action_atomic, parse_selection, parse_approval,
     )
 
     pending = get_active_pending_action(session_key="default")
@@ -255,8 +275,186 @@ async def _check_pending_action(message: str) -> Optional[str]:
         subject = matched.get("subject", "(no subject)")
         return f"Drafted a reply to {sender} re: '{subject}'. Open Email Drafts to review and send."
 
+    if pending["action_type"] == "email_draft_send_approval":
+        candidates = pending.get("candidates", []) or []
+        if not candidates:
+            return None
+        cand = candidates[0]
+        draft_id = cand.get("draft_id")
+        expected_hash = cand.get("body_hash")
+        account = cand.get("account")
+        base_meta = {
+            "pending_action_id": pending["id"],
+            "draft_id": draft_id,
+            "account": account,
+        }
+
+        intent = parse_approval(message)
+
+        # Unparseable — leave the gate open. Bias is toward NOT sending.
+        if intent is None:
+            return None
+
+        if intent == "cancel":
+            consumed = consume_pending_action_atomic(pending["id"])
+            if consumed:
+                _emit_gate_event("approval_gate_resolved_cancel", base_meta, severity="info")
+            return "OK, not sending. Draft is still in your queue."
+
+        # intent == "confirm"
+        consumed = consume_pending_action_atomic(pending["id"])
+        if not consumed:
+            # Another confirm already won the race. Silent drop.
+            _emit_gate_event("approval_gate_double_confirm", base_meta, severity="warning")
+            return None
+
+        from app.core.email_drafter import _send_draft_internal
+        result = await _send_draft_internal(draft_id, expected_hash=expected_hash)
+
+        if result.get("ok"):
+            _emit_gate_event("approval_gate_resolved_send", base_meta, severity="info")
+            return f"Sent. Draft #{draft_id} is in your Sent folder."
+
+        reason = result.get("reason", "unknown")
+        event_name = {
+            "not_pending": "approval_gate_aborted_missing",
+            "hash_drift": "approval_gate_aborted_drift",
+            "db_error": "approval_gate_claim_failed",
+            "send_failed": "approval_gate_send_failed",
+            "audit_anomaly": "approval_gate_send_failed",
+        }.get(reason, "approval_gate_send_failed")
+        _emit_gate_event(event_name, base_meta, severity="warning")
+
+        if reason == "not_pending":
+            return "That draft is no longer pending (already sent or dismissed)."
+        if reason == "hash_drift":
+            return (
+                "The draft has changed since I showed it to you. "
+                f"Re-issue 'send draft {draft_id}' to see the new version and approve."
+            )
+        if reason == "audit_anomaly":
+            # Email did go out — be honest about it.
+            return (
+                f"Sent. Draft #{draft_id} is in your Sent folder. "
+                "Audit trail had a hiccup; the row may still show as pending — check logs."
+            )
+        return "Send failed — check Gmail auth. Draft is still pending."
+
     # Unknown action_type — leave pending as-is (don't consume); fall through.
     return None
+
+
+def _emit_gate_event(event_name: str, metadata: dict, severity: str = "info") -> None:
+    """Best-effort observability for the email send-approval gate. Never raises."""
+    try:
+        from app.observability import record_run_event, EventSeverity
+        sev = {
+            "info": EventSeverity.INFO,
+            "warning": EventSeverity.WARNING,
+            "error": EventSeverity.ERROR,
+        }.get(severity, EventSeverity.INFO)
+        record_run_event(
+            event_type=event_name,
+            severity=sev,
+            subsystem="email.send_approval",
+            message=event_name,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+
+
+async def _send_draft_request(draft_id: int) -> str:
+    """Open an approval gate for an email draft. Shows the draft inline so
+    Matthew approves what he sees, then waits for an explicit confirm via
+    the Pending Action Router. NEVER sends here.
+    """
+    from datetime import datetime, timezone
+    from app.core.email_drafter import get_draft_for_send, _compute_draft_hash
+    from app.core.pending_actions import (
+        create_pending_action, consume_pending_actions_by_type,
+    )
+
+    draft = get_draft_for_send(draft_id)
+    if not draft:
+        return f"No pending draft with ID {draft_id} — already sent, dismissed, or never existed."
+
+    subject = draft.get("draft_subject") or ""
+    body = draft.get("draft_body") or ""
+    account = draft.get("account") or ""
+    to_addr = draft.get("draft_to") or ""
+
+    if len(subject) + len(body) > MAX_BODY_CHARS_FOR_CHAT_APPROVAL:
+        _emit_gate_event(
+            "approval_gate_too_large",
+            {"draft_id": draft_id, "account": account,
+             "size": len(subject) + len(body)},
+            severity="warning",
+        )
+        return (
+            "This draft is too long to safely confirm in chat. "
+            "Open Email Drafts to review and send."
+        )
+
+    body_hash = _compute_draft_hash(subject, body)
+
+    # Atomically retire any prior approval gate for this session so
+    # a new "send draft N" can't race with an old "yes" on a prior draft.
+    consume_pending_actions_by_type("email_draft_send_approval", session_key="default")
+
+    candidates = [{
+        "draft_id": draft_id,
+        "draft_to": to_addr,
+        "draft_subject": subject,
+        "account": account,
+        "body_hash": body_hash,
+        "shown_at": datetime.now(timezone.utc).isoformat(),
+    }]
+
+    pa_id = create_pending_action(
+        action_type="email_draft_send_approval",
+        original_query="",
+        candidates=candidates,
+        ttl_minutes=15,
+    )
+
+    if pa_id is None:
+        return "Couldn't open the approval gate (database error). Try again."
+
+    _emit_gate_event(
+        "approval_gate_opened",
+        {"pending_action_id": pa_id, "draft_id": draft_id, "account": account},
+        severity="info",
+    )
+
+    return (
+        f"Ready to send to {to_addr} from {account}:\n\n"
+        f"Subject: {subject}\n\n"
+        f"{body}\n\n"
+        f"Reply \"yes\" to send, \"no\" to cancel."
+    )
+
+
+MAX_BODY_CHARS_FOR_CHAT_APPROVAL = 8192
+
+
+async def _legacy_email_quiesced() -> str:
+    """Quiesce handler for the legacy `tony_email_queue` chat commands
+    (approve/send/reject/show/delete email N, check my emails, etc.).
+
+    The queue has no live producer — its scanner (`scan_for_actionable_emails`)
+    has been a no-op pass since the drafts brick replaced it, and nothing
+    else calls `queue_email_for_approval`. The new send path is the
+    approval-gated `send draft N`. HTTP endpoints and the table itself are
+    left alone for Android UI compatibility; this handler just closes the
+    chat-side dispatch so it can't accidentally route to a future-populated
+    queue.
+    """
+    return (
+        "The legacy email queue is no longer used. "
+        "Open Email Drafts in the app to review drafts. "
+        "To send from chat, say 'send draft N' where N is the draft ID."
+    )
 
 
 async def _approve_build() -> str:

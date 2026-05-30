@@ -8,10 +8,9 @@ from pydantic import BaseModel
 from app.core.security import verify_token
 from app.core.email_drafter import (
     get_pending_drafts, get_draft_for_send,
-    mark_draft_sent, mark_draft_dismissed, update_draft_fields,
-    scan_and_draft_replies,
+    mark_draft_dismissed, update_draft_fields,
+    scan_and_draft_replies, _send_draft_internal,
 )
-from app.core.gmail_service import send_email
 
 router = APIRouter()
 
@@ -52,48 +51,63 @@ async def send_draft(
     Trust anchors (account, recipient, original_message_id) come from the
     stored draft row. Optional `final_subject` / `final_body` in the request
     body let Matthew send an edited version without losing the audit chain.
+
+    Override flow (UI tap with edits):
+      1. Persist the edits to the row via update_draft_fields(). Status-guard
+         means it only takes if the row is still 'pending'. If persistence
+         fails (DB blip, concurrent claim) we DO NOT send — otherwise we'd
+         send the pre-edit DB content while the audit row would lie.
+      2. Then call _send_draft_internal() which atomically claims the row,
+         calls Gmail using trust anchors from the DB, and marks sent or
+         reverts on failure.
+
+    The chat approval-gate path goes through the same _send_draft_internal()
+    helper with an expected_hash; the HTTP path passes None (this endpoint
+    is its own authorisation).
     """
-    draft = get_draft_for_send(draft_id)
-    if not draft:
-        return {"ok": False, "error": "Draft not found or already actioned"}
+    has_subject_override = bool(overrides.final_subject and overrides.final_subject.strip())
+    has_body_override = bool(overrides.final_body and overrides.final_body.strip())
 
-    effective_subject = (
-        overrides.final_subject
-        if overrides.final_subject is not None and overrides.final_subject.strip()
-        else draft["draft_subject"]
-    )
-    effective_body = (
-        overrides.final_body
-        if overrides.final_body is not None and overrides.final_body.strip()
-        else draft["draft_body"]
-    )
+    if has_subject_override or has_body_override:
+        existing = get_draft_for_send(draft_id)
+        if not existing:
+            return {"ok": False, "error": "Draft not found or already actioned"}
 
-    sent = await send_email(
-        email=draft["account"],            # trust anchor — DB
-        to=draft["draft_to"],              # trust anchor — DB
-        subject=effective_subject,
-        body=effective_body,
-        reply_to_id=draft.get("original_message_id"),  # trust anchor — DB
-    )
-
-    if sent:
-        # Persist the final approved subject/body so the audit row reflects
-        # what was actually sent, not what was originally drafted.
-        update_draft_fields(
-            draft_id,
-            draft_subject=effective_subject,
-            draft_body=effective_body,
+        effective_subject = (
+            overrides.final_subject.strip() if has_subject_override
+            else existing["draft_subject"]
         )
-        mark_draft_sent(draft_id)
-        # Post-send verification (verify_email_sent in self_eval) is not yet
-        # implemented; previously this raised ImportError on every successful
-        # send and returned HTTP 500 to the client even though the email had
-        # actually left and the row was marked sent. Removed here; if/when a
-        # real verification path is added (e.g. confirming the message lands
-        # in the sent folder), reinstate then.
+        effective_body = (
+            overrides.final_body.strip() if has_body_override
+            else existing["draft_body"]
+        )
+
+        persisted = update_draft_fields(draft_id, effective_subject, effective_body)
+        if not persisted:
+            return {
+                "ok": False,
+                "error": (
+                    "Couldn't persist edits — draft may have been claimed for "
+                    "sending or is no longer pending."
+                ),
+            }
+
+    result = await _send_draft_internal(draft_id, expected_hash=None)
+
+    if result.get("ok"):
         return {"ok": True, "message": "Draft sent"}
-    else:
+
+    reason = result.get("reason", "unknown")
+    if reason == "not_pending":
+        return {"ok": False, "error": "Draft not found or already actioned"}
+    if reason == "send_failed":
         return {"ok": False, "error": "Send failed — check Gmail auth"}
+    if reason == "audit_anomaly":
+        # Email left Gmail but mark_draft_sent didn't take. Tell the UI it
+        # sent so the user isn't blocked; the audit anomaly is logged
+        # loudly by _send_draft_internal.
+        return {"ok": True, "message": "Draft sent (audit follow-up needed)"}
+    return {"ok": False, "error": f"Couldn't send: {reason}"}
 
 
 @router.post("/drafts/{draft_id}/dismiss")

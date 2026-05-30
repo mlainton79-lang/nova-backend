@@ -13,10 +13,11 @@ Drafts are stored in the DB. The alert tells Matthew they exist.
 import os
 import json
 import re
+import hashlib
 import httpx
 import psycopg2
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 BACKEND_URL = "https://web-production-be42b.up.railway.app"
@@ -45,8 +46,16 @@ def init_draft_tables():
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT NOW(),
                 actioned_at TIMESTAMP,
+                sending_at TIMESTAMP,
                 sent BOOLEAN DEFAULT FALSE
             )
+        """)
+        # `sending_at` was added later to track claim-for-send time so the
+        # stale-sending sweep can revert drafts stuck after a worker crash.
+        # Idempotent ALTER for already-deployed installations.
+        cur.execute("""
+            ALTER TABLE tony_email_drafts
+            ADD COLUMN IF NOT EXISTS sending_at TIMESTAMP
         """)
         # Index to avoid duplicate drafts for the same message
         cur.execute("""
@@ -62,8 +71,59 @@ def init_draft_tables():
         print(f"[EMAIL DRAFTER] Init failed: {e}")
 
 
+def _compute_draft_hash(draft_subject: str, draft_body: str) -> str:
+    """Canonical hash of (subject, body) for approval-gate binding.
+
+    Length-prefixed framing so a subject containing newlines can't merge
+    ambiguously with body. Used by claim_draft_for_send() when called from
+    the chat approval path to verify the draft hasn't changed since
+    Matthew was shown it.
+    """
+    s = draft_subject or ""
+    b = draft_body or ""
+    payload = f"subject:{len(s)}\n{s}\nbody:{len(b)}\n{b}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+_STALE_SENDING_SWEEP_MINUTES = 5
+
+
+def _sweep_stale_sending_drafts() -> int:
+    """Revert any draft stuck in 'sending' for > 5 minutes back to 'pending'.
+
+    Handles the case where the worker crashed between claim_draft_for_send()
+    and mark_draft_sent()/revert_draft_to_pending() — the draft would
+    otherwise be invisible to get_pending_drafts() forever. Threshold is
+    well above the 30s httpx send timeout. Called opportunistically before
+    pending-list reads. Idempotent.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_email_drafts
+            SET status = 'pending', sending_at = NULL
+            WHERE status = 'sending'
+              AND sending_at IS NOT NULL
+              AND sending_at < NOW() - INTERVAL '%s minutes'
+            RETURNING id
+        """ % _STALE_SENDING_SWEEP_MINUTES)
+        rows = cur.fetchall()
+        conn.commit()
+        cur.close()
+        conn.close()
+        return len(rows)
+    except Exception as e:
+        # Sweep failure is non-blocking — caller continues with whatever's pending.
+        print(f"[EMAIL DRAFTER] stale-sending sweep failed: {e}")
+        return 0
+
+
 def get_pending_drafts() -> List[Dict]:
     """Get all drafts Tony has prepared that haven't been actioned yet."""
+    # Resurface drafts stuck in 'sending' from a prior crash/timeout before
+    # we list. Non-blocking on its own failure.
+    _sweep_stale_sending_drafts()
     try:
         conn = get_conn()
         cur = conn.cursor()
@@ -94,20 +154,32 @@ def get_pending_drafts() -> List[Dict]:
         return []
 
 
-def mark_draft_sent(draft_id: int):
+def mark_draft_sent(draft_id: int) -> bool:
+    """Finalize a draft as sent. Status-guarded to only succeed while the
+    draft is in 'sending' — i.e. it was claimed via claim_draft_for_send()
+    first. Returns True iff exactly one row was updated.
+
+    A False return after a successful Gmail send is an audit anomaly
+    (the email left but the row didn't update) and is logged loudly by
+    the caller; the realistic case requiring 5+ minutes between claim and
+    mark is not achievable inside the 30s httpx send timeout.
+    """
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
             UPDATE tony_email_drafts
-            SET status = 'sent', sent = TRUE, actioned_at = NOW()
-            WHERE id = %s
+            SET status = 'sent', sent = TRUE, actioned_at = NOW(), sending_at = NULL
+            WHERE id = %s AND status = 'sending'
         """, (draft_id,))
+        rowcount = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
+        return rowcount == 1
     except Exception as e:
         print(f"[EMAIL DRAFTER] Mark sent failed: {e}")
+        return False
 
 
 def mark_draft_dismissed(draft_id: int):
@@ -166,9 +238,12 @@ def get_draft_for_send(draft_id: int) -> Optional[Dict]:
 
 def update_draft_fields(draft_id: int, draft_subject: str, draft_body: str) -> bool:
     """
-    Persist the final approved subject/body to the draft row before marking
-    sent. Audit row reflects what was actually sent, not what was originally
-    drafted.
+    Persist UI edits to a draft. Status-guarded to only succeed while the
+    draft is still 'pending' — once it's been claimed for sending (or
+    actually sent), edits are rejected so the audit row can't drift away
+    from what was actually approved + transmitted.
+
+    Returns True iff exactly one row was updated.
     """
     try:
         conn = get_conn()
@@ -176,15 +251,197 @@ def update_draft_fields(draft_id: int, draft_subject: str, draft_body: str) -> b
         cur.execute("""
             UPDATE tony_email_drafts
             SET draft_subject = %s, draft_body = %s
-            WHERE id = %s
+            WHERE id = %s AND status = 'pending'
         """, (draft_subject, draft_body, draft_id))
+        rowcount = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
-        return True
+        return rowcount == 1
     except Exception as e:
         print(f"[EMAIL DRAFTER] update_draft_fields failed: {e}")
         return False
+
+
+def claim_draft_for_send(draft_id: int, expected_hash: Optional[str] = None) -> Dict[str, Any]:
+    """Atomically transition draft pending → sending in one UPDATE.
+
+    Closes the TOCTOU race where two parallel sends (e.g. UI tap +
+    chat-confirm) could both pass a pre-claim status check and both
+    fire Gmail.
+
+    Args:
+        draft_id: the draft to claim
+        expected_hash: if provided, recompute the canonical hash from the
+                       claimed row and revert if it doesn't match. Used by
+                       the chat approval gate to bind the send to exactly
+                       what Matthew was shown. The HTTP UI path passes
+                       None (it's its own authorisation).
+
+    Returns:
+        {"ok": True, "account": str, "draft_to": str,
+         "original_message_id": Optional[str],
+         "draft_subject": str, "draft_body": str}   — claimed
+        {"ok": False, "reason": "not_pending"}      — couldn't claim
+        {"ok": False, "reason": "hash_drift"}       — claim reverted, hashes differ
+        {"ok": False, "reason": "db_error", "details": str}
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_email_drafts
+            SET status = 'sending', sending_at = NOW()
+            WHERE id = %s AND status = 'pending'
+            RETURNING account, draft_to, original_message_id, draft_subject, draft_body
+        """, (draft_id,))
+        row = cur.fetchone()
+        conn.commit()
+        if not row:
+            cur.close()
+            conn.close()
+            return {"ok": False, "reason": "not_pending"}
+
+        account, draft_to, orig_msg_id, draft_subject, draft_body = row
+
+        if expected_hash is not None:
+            actual_hash = _compute_draft_hash(draft_subject, draft_body)
+            if actual_hash != expected_hash:
+                # Approval was bound to a different (subject, body). Don't send.
+                cur.execute("""
+                    UPDATE tony_email_drafts
+                    SET status = 'pending', sending_at = NULL
+                    WHERE id = %s AND status = 'sending'
+                """, (draft_id,))
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"ok": False, "reason": "hash_drift"}
+
+        cur.close()
+        conn.close()
+        return {
+            "ok": True,
+            "account": account,
+            "draft_to": draft_to,
+            "original_message_id": orig_msg_id,
+            "draft_subject": draft_subject,
+            "draft_body": draft_body,
+        }
+    except Exception as e:
+        # Best-effort revert in case we got mid-flight.
+        try:
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute("""
+                UPDATE tony_email_drafts
+                SET status = 'pending', sending_at = NULL
+                WHERE id = %s AND status = 'sending'
+            """, (draft_id,))
+            conn2.commit()
+            cur2.close()
+            conn2.close()
+        except Exception:
+            pass
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="email_draft_claim_failed",
+                severity=EventSeverity.WARNING,
+                subsystem="email_drafter.claim",
+                message=f"claim_draft_for_send failed for draft_id={draft_id}",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
+        except Exception:
+            print(f"[EMAIL DRAFTER] claim_draft_for_send failed: {e}")
+        return {"ok": False, "reason": "db_error", "details": str(e)}
+
+
+def revert_draft_to_pending(draft_id: int) -> bool:
+    """Revert a claimed-for-send draft back to pending. Called when Gmail
+    send fails after a successful claim, or by the stale-sending sweep.
+
+    Returns True iff exactly one row was reverted.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE tony_email_drafts
+            SET status = 'pending', sending_at = NULL
+            WHERE id = %s AND status = 'sending'
+        """, (draft_id,))
+        rowcount = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        return rowcount == 1
+    except Exception as e:
+        print(f"[EMAIL DRAFTER] revert_draft_to_pending failed: {e}")
+        return False
+
+
+async def _send_draft_internal(draft_id: int, expected_hash: Optional[str] = None) -> Dict[str, Any]:
+    """Atomic claim → Gmail send → mark/revert. Shared by /drafts/{id}/send
+    (HTTP UI) and the chat approval-gate path.
+
+    Trust anchors (account, recipient, threading) come ONLY from the DB row
+    inside this helper — never from caller args. The UI persists overrides
+    via update_draft_fields() BEFORE calling this; the chat gate binds the
+    send to the hash of what Matthew was shown.
+
+    Args:
+        draft_id: the draft to send
+        expected_hash: chat-gate approval binding; None for HTTP-UI path
+
+    Returns:
+        {"ok": True}                                            — sent + audited
+        {"ok": False, "reason": "not_pending"}                  — couldn't claim
+        {"ok": False, "reason": "hash_drift"}                   — approval no longer matches row
+        {"ok": False, "reason": "db_error", "details"}          — DB error during claim
+        {"ok": False, "reason": "send_failed"}                  — Gmail send failed, row reverted
+        {"ok": False, "reason": "audit_anomaly"}                — sent but mark_draft_sent didn't take
+    """
+    from app.core.gmail_service import send_email
+
+    claim = claim_draft_for_send(draft_id, expected_hash=expected_hash)
+    if not claim["ok"]:
+        return claim
+
+    sent = await send_email(
+        email=claim["account"],
+        to=claim["draft_to"],
+        subject=claim["draft_subject"],
+        body=claim["draft_body"],
+        reply_to_id=claim.get("original_message_id"),
+    )
+
+    if not sent:
+        revert_draft_to_pending(draft_id)
+        return {"ok": False, "reason": "send_failed"}
+
+    marked = mark_draft_sent(draft_id)
+    if not marked:
+        # The email left Gmail but the audit row didn't update. Only
+        # reachable if the stale-sending sweep fired between claim and
+        # mark — i.e. > 5 minutes elapsed during an httpx call with a
+        # 30s timeout. Effectively impossible, but if it does happen
+        # we want it loud.
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="email_send_audit_anomaly",
+                severity=EventSeverity.ERROR,
+                subsystem="email_drafter.send_internal",
+                message=f"Gmail send succeeded but mark_draft_sent failed for draft_id={draft_id}",
+                metadata={"draft_id": draft_id},
+            )
+        except Exception:
+            print(f"[EMAIL DRAFTER] AUDIT ANOMALY: sent but mark failed for {draft_id}")
+        return {"ok": False, "reason": "audit_anomaly"}
+
+    return {"ok": True}
 
 
 def draft_already_exists(message_id: str) -> bool:
