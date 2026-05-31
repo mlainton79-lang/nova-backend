@@ -797,7 +797,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         pending_response = await _check_pending_action(request.message)
         if pending_response:
             log_request(provider="pending_action", message=request.message,
-                        reply=pending_response, ok=True)
+                        reply=pending_response, ok=True,
+                        task_type="pending_action", history=request.history)
             async def _pending_stream():
                 yield "data: " + json.dumps({"type": "chunk", "text": pending_response}) + "\n\n"
                 yield "data: " + json.dumps({"type": "done"}) + "\n\n"
@@ -813,7 +814,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             result_text = await execute_command(cmd)
             if result_text:
                 log_request(provider="command", message=request.message,
-                            reply=result_text, ok=True)
+                            reply=result_text, ok=True,
+                            task_type="command", history=request.history)
                 async def _cmd_stream():
                     yield "data: " + json.dumps({"type": "chunk", "text": result_text}) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
@@ -838,7 +840,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                     f"Carry on, ask me something else if you want."
                 )
                 log_request(provider="gap_detector", message=request.message,
-                            reply=ack, ok=True)
+                            reply=ack, ok=True,
+                            task_type="gap_detector", history=request.history)
                 async def _gap_stream():
                     yield "data: " + json.dumps({"type": "chunk", "text": ack}) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
@@ -852,7 +855,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
                     "Tell me the end result you want and I'll work around it with what I already have."
                 )
                 log_request(provider="gap_detector", message=request.message,
-                            reply=refusal, ok=True)
+                            reply=refusal, ok=True,
+                            task_type="gap_detector", history=request.history)
                 async def _refused_stream():
                     yield "data: " + json.dumps({"type": "chunk", "text": refusal}) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
@@ -961,6 +965,8 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             message=request.message,
             reply=deterministic,
             ok=True,
+            task_type="guard",
+            history=request.history,
         )
         async def _guard_stream():
             yield "data: " + json.dumps({"type": "chunk", "text": deterministic}) + "\n\n"
@@ -1067,7 +1073,13 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             full = "".join(parts)
             latency = int((time.time() - start) * 1000)
             log_request(provider=actual_provider, message=request.message,
-                        reply=full[:500], latency_ms=latency, ok=True)
+                        reply=full, latency_ms=latency, ok=True,
+                        full_context=sp, task_type="chat_stream",
+                        history=request.history,
+                        metadata={
+                            "image_present": bool(getattr(request, "image_base64", None)),
+                            "document_present": bool(request.document_text or request.document_base64),
+                        })
 
             # Fire post-response tasks without blocking. Use actual_provider
             # so telemetry (learning, self-eval, outcome tracking) reflects
@@ -1131,7 +1143,9 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             yield "data: " + json.dumps({"type": "error", "text": safe_error}) + "\n\n"
             log_request(provider=provider_key, message=request.message,
                         reply="", latency_ms=int((time.time() - start) * 1000),
-                        ok=False, error=safe_error)
+                        ok=False, error=safe_error,
+                        full_context=sp, task_type="chat_stream",
+                        history=request.history)
 
         if failures:
             yield "data: " + json.dumps({"type": "failures", "failures": failures}) + "\n\n"

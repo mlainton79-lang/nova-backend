@@ -241,7 +241,8 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
     injected, reason = check_injection(request.message)
     if injected:
         log_request(provider=request.provider, message=request.message,
-                    reply="", ok=False, error=reason)
+                    reply="", ok=False, error=reason,
+                    task_type="injection_blocked", history=request.history)
         return ChatResponse(
             ok=False, provider=request.provider,
             reply="I cannot process that message.", error=reason
@@ -334,7 +335,13 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
         latency_ms = int((time.time() - start) * 1000)
         log_request(
             provider=provider_key, message=request.message,
-            reply=reply[:500], latency_ms=latency_ms, ok=True
+            reply=reply, latency_ms=latency_ms, ok=True,
+            full_context=system_prompt, task_type="chat",
+            history=request.history,
+            metadata={
+                "image_present": bool(getattr(request, "image_base64", None)),
+                "document_present": bool(request.document_text or request.document_base64),
+            },
         )
 
         # Fire post-response tasks without blocking the response
@@ -372,7 +379,9 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
         safe_error = redact(str(e))
         log_request(
             provider=provider_key, message=request.message,
-            reply="", latency_ms=latency_ms, ok=False, error=safe_error
+            reply="", latency_ms=latency_ms, ok=False, error=safe_error,
+            full_context=system_prompt, task_type="chat",
+            history=request.history,
         )
         return ChatResponse(
             ok=False, provider=provider_key,

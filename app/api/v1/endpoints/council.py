@@ -227,7 +227,8 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         pending_response = await _check_pending_action(req.message)
         if pending_response:
             log_request(provider="pending_action", message=req.message,
-                        reply=pending_response[:500], ok=True)
+                        reply=pending_response, ok=True,
+                        task_type="pending_action", history=req.history)
             return CouncilResponse(
                 ok=True, provider="council", reply=pending_response,
                 latency_ms=int((time.time() - start) * 1000)
@@ -242,7 +243,8 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         if cmd:
             reply = await execute_command(cmd)
             if reply:
-                log_request(provider="council", message=req.message, reply=reply[:500], ok=True)
+                log_request(provider="council", message=req.message, reply=reply,
+                            ok=True, task_type="command", history=req.history)
                 return CouncilResponse(
                     ok=True, provider="council", reply=reply,
                     latency_ms=int((time.time() - start) * 1000)
@@ -268,7 +270,8 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
                     f"Give me a few minutes — I'll tell you when it's live. "
                     f"Carry on, ask me something else if you want."
                 )
-                log_request(provider="council", message=req.message, reply=reply[:500], ok=True)
+                log_request(provider="council", message=req.message, reply=reply,
+                            ok=True, task_type="gap_detector", history=req.history)
                 return CouncilResponse(
                     ok=True, provider="council", reply=reply,
                     latency_ms=int((time.time() - start) * 1000)
@@ -281,7 +284,8 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
                     "Self-build is locked off for now, so I won't spin the builder up. "
                     "Tell me the end result you want and I'll work around it with what I already have."
                 )
-                log_request(provider="council", message=req.message, reply=refusal[:500], ok=True)
+                log_request(provider="council", message=req.message, reply=refusal,
+                            ok=True, task_type="gap_detector", history=req.history)
                 return CouncilResponse(
                     ok=True, provider="council", reply=refusal,
                     latency_ms=int((time.time() - start) * 1000)
@@ -302,7 +306,9 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
 
     injected, reason = check_injection(req.message)
     if injected:
-        log_request(provider="council", message=req.message, reply="", ok=False, error=reason)
+        log_request(provider="council", message=req.message, reply="",
+                    ok=False, error=reason,
+                    task_type="injection_blocked", history=req.history)
         return CouncilResponse(
             ok=False, provider="council",
             reply="I cannot process that message.", error=reason
@@ -386,8 +392,10 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
         log_request(
             provider="retrieval_guard",
             message=req.message,
-            reply=deterministic[:500],
+            reply=deterministic,
             ok=True,
+            task_type="guard",
+            history=req.history,
         )
         return CouncilResponse(
             ok=True,
@@ -466,10 +474,18 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
     log_request(
         provider=result.get("provider", "council"),
         message=req.message,
-        reply=reply[:500],
+        reply=reply,
         latency_ms=latency,
         ok=result.get("ok", True),
-        deciding_brain=result.get("provider")
+        deciding_brain=result.get("provider"),
+        full_context=system_prompt,
+        task_type="council",
+        history=filtered_history,
+        metadata={
+            "image_present": bool(getattr(req, "image_base64", None)),
+            "deciding_brain": result.get("provider"),
+            "providers_failed": list((result.get("failures") or {}).keys()),
+        },
     )
 
     return result
