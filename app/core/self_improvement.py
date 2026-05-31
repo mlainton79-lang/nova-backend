@@ -198,6 +198,37 @@ def list_pending_proposals(limit: int = 10) -> List[Dict]:
         return []
 
 
+async def run_self_improvement() -> Dict:
+    """
+    Zero-arg entry point for think_worker.
+
+    Pulls the most recent eval runs (last 2 — typically chat + council from
+    the daily eval pass) and runs failure analysis on each. Returns a summary
+    dict. Never raises — worker treats exceptions as task failure.
+    """
+    runs_analysed = 0
+    total_proposals = 0
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM tony_eval_runs ORDER BY run_at DESC LIMIT 2")
+        run_ids = [r[0] for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+
+        for rid in run_ids:
+            proposals = await analyse_eval_failures(rid)
+            runs_analysed += 1
+            total_proposals += len(proposals)
+    except Exception as e:
+        print(f"[SELF_IMPROVEMENT] run_self_improvement failed: {e}")
+        return {"ok": False, "error": str(e), "runs_analysed": runs_analysed,
+                "proposals_created": total_proposals}
+
+    return {"ok": True, "runs_analysed": runs_analysed,
+            "proposals_created": total_proposals}
+
+
 def mark_proposal(proposal_id: int, status: str):
     """status: 'applied' or 'dismissed'"""
     try:
