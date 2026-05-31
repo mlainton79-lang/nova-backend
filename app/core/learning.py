@@ -189,7 +189,12 @@ Respond in JSON:
     "quality_trend": "improving/stable/declining"
 }}"""
 
-        synthesis = await gemini_json(prompt, task="reasoning", max_tokens=1024)
+        # max_tokens=2048: same Gemini 2.5 thinking-mode budget squeeze that
+        # silently broke meta_cognition. 1024 with a 4-field JSON (new_rules,
+        # rules_to_strengthen, biggest_opportunity, quality_trend) was at
+        # risk of MAX_TOKENS truncation; bumping to match meta_cognition for
+        # consistency. See model_router.gemini truncation hook for visibility.
+        synthesis = await gemini_json(prompt, task="reasoning", max_tokens=2048)
 
         if synthesis:
             # Write new rules to DB

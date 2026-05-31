@@ -101,7 +101,13 @@ Respond in JSON:
     "matthew_unmet_need": "something Matthew seems to need that I'm not providing"
 }}"""
 
-        return await gemini_json(prompt, task="reasoning", max_tokens=768) or {}
+        # max_tokens=2048: Gemini 2.5 thinking-mode consumes ~500-1000
+        # tokens reasoning *before* emitting output. 768 was leaving too
+        # few tokens for the 6-field JSON response and silently truncating
+        # at MAX_TOKENS, gemini_json then returned None, and the swallowing
+        # `or {}` made it look like an empty review. See model_router.gemini
+        # truncation hook for visibility.
+        return await gemini_json(prompt, task="reasoning", max_tokens=2048) or {}
 
     except Exception as e:
         print(f"[META_COGNITION] Review failed: {e}")
@@ -159,7 +165,11 @@ Respond in JSON:
     "recommendation": "what Tony should refocus on"
 }}"""
 
-        return await gemini_json(prompt, task="reasoning", max_tokens=512) or {}
+        # max_tokens=2048: see review_recent_conversations comment above.
+        # 512 was so small that thinking-mode ate 487 tokens, leaving 21
+        # for the actual JSON output — confirmed truncating mid-key at
+        # `"misaligned_goals":` in production-shape reproductions.
+        return await gemini_json(prompt, task="reasoning", max_tokens=2048) or {}
 
     except Exception as e:
         print(f"[META_COGNITION] Goal alignment check failed: {e}")

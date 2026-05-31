@@ -83,6 +83,51 @@ async def gemini(
             caller_context=f"model_router.{task}",
         )
         text = gemini_client.extract_text(response)
+
+        # MAX_TOKENS visibility hook. Silent truncation has been masking real
+        # bugs in tasks that expect full JSON responses (gemini_json then
+        # returns None, callers use `or {}`, and the empty result looks like
+        # an empty model opinion rather than a truncated one). Gemini 2.5
+        # thinking-mode reasons internally BEFORE emitting output, and that
+        # reasoning is billed against the same maxOutputTokens budget — so
+        # under-sized budgets get all reasoning, no output. Recording an
+        # event surfaces it for /debug/recent-events without instrumenting
+        # every individual caller. Best-effort: must never raise.
+        try:
+            candidates = response.get("candidates", []) if isinstance(response, dict) else []
+            finish_reason = candidates[0].get("finishReason") if candidates else None
+            if finish_reason == "MAX_TOKENS":
+                usage = response.get("usageMetadata", {}) if isinstance(response, dict) else {}
+                log.warning(
+                    "[MODEL_ROUTER] task=%s tier=%s truncated at MAX_TOKENS "
+                    "(budget=%d, thoughts=%s, output=%s, text_chars=%d)",
+                    task, tier, max_tokens,
+                    usage.get("thoughtsTokenCount"),
+                    usage.get("candidatesTokenCount"),
+                    len(text or ""),
+                )
+                try:
+                    from app.observability import record_run_event, EventSeverity
+                    record_run_event(
+                        event_type="gemini_max_tokens_truncation",
+                        severity=EventSeverity.WARNING,
+                        subsystem="model_router.truncation",
+                        message=f"Gemini response truncated at MAX_TOKENS for task={task}",
+                        metadata={
+                            "task": task,
+                            "tier": tier,
+                            "max_tokens_budget": max_tokens,
+                            "thoughts_tokens": usage.get("thoughtsTokenCount"),
+                            "output_tokens": usage.get("candidatesTokenCount"),
+                            "total_tokens": usage.get("totalTokenCount"),
+                            "output_text_chars": len(text or ""),
+                        },
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         return text or None
     except gemini_client.GeminiClientError as e:
         log.warning("[MODEL_ROUTER] %s tier exhausted for task=%s: %s", tier, task, e)
