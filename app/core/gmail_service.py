@@ -238,17 +238,35 @@ async def list_emails(email: str, query: str = "", max_results: int = 20, label:
             params["q"] = query
         resp = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers={"Authorization": f"Bearer {token}"}, params=params)
         resp.raise_for_status()
-        messages = resp.json().get("messages", [])
-        results = []
-        for msg in messages[:min(max_results, 10)]:
+        messages = resp.json().get("messages", [])[:min(max_results, 10)]
+        if not messages:
+            return []
+
+        # Parallel per-message detail fetch. Previously a serial loop that could
+        # take up to N × httpx-timeout seconds in the worst case (10 × 8s = 80s);
+        # `get_morning_summary` then ran this across 4 accounts inside an outer
+        # 15s wait_for cap, so a single slow account blew the budget and the
+        # entire Gmail context block came back empty. Parallel inner fan-out
+        # bounds per-account work by the slowest single GET (~8s), not the sum.
+        async def _fetch_detail(msg):
             try:
-                detail = await client.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}", headers={"Authorization": f"Bearer {token}"}, params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "To"]})
+                return await client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "To"]},
+                )
             except Exception:
+                return None
+
+        details = await asyncio.gather(*[_fetch_detail(m) for m in messages])
+
+        results = []
+        for msg, detail in zip(messages, details):
+            if detail is None or detail.status_code != 200:
                 continue
-            if detail.status_code == 200:
-                d = detail.json()
-                headers = {h["name"]: h["value"] for h in d.get("payload", {}).get("headers", [])}
-                results.append({"id": msg["id"], "account": email, "subject": headers.get("Subject", "(no subject)"), "from": headers.get("From", ""), "to": headers.get("To", ""), "date": headers.get("Date", ""), "snippet": d.get("snippet", ""), "labels": d.get("labelIds", [])})
+            d = detail.json()
+            headers = {h["name"]: h["value"] for h in d.get("payload", {}).get("headers", [])}
+            results.append({"id": msg["id"], "account": email, "subject": headers.get("Subject", "(no subject)"), "from": headers.get("From", ""), "to": headers.get("To", ""), "date": headers.get("Date", ""), "snippet": d.get("snippet", ""), "labels": d.get("labelIds", [])})
         return results
 
 async def get_email_body(email: str, message_id: str) -> dict:
@@ -527,11 +545,22 @@ async def get_morning_summary() -> str:
         return "No Gmail accounts connected."
 
     async def _fetch_one(account: str):
+        # Per-account 8s cap. Outer caller wraps the whole gather() in 15s
+        # wait_for; without this inner bound, one slow account (stalled OAuth
+        # refresh, slow Gmail API for that mailbox) would hold the gather past
+        # 15s and the [GMAIL] block would come back empty for every account.
+        # 8s lines up with list_emails's httpx client timeout — a healthy
+        # account completes well inside it.
         try:
-            emails = await list_emails(
-                account, query="is:unread newer_than:3d", max_results=20, label=""
+            emails = await asyncio.wait_for(
+                list_emails(account, query="is:unread newer_than:3d", max_results=20, label=""),
+                timeout=8.0,
             )
             return account, emails, None
+        except asyncio.TimeoutError:
+            err = "TimeoutError: per-account 8s cap exceeded"
+            print(f"[GMAIL] Morning summary failed for {account}: {err}")
+            return account, [], err
         except Exception as e:
             err = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
             print(f"[GMAIL] Morning summary failed for {account}: {err}")
