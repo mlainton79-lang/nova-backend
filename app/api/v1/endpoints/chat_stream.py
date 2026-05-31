@@ -922,6 +922,51 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
         sp += (f"\n\n[TONY'S REASONING — use to inform response, "
                f"don't repeat verbatim]\n{ctx['reasoning'][:800]}")
 
+    # Layer-2 fabrication guard — short-circuit retrieval-shaped queries
+    # whose context block came back empty. Stops fabricating providers
+    # (Mistral / OpenRouter) from inventing plausible fake data before
+    # they ever see the question. See app/core/retrieval_guard.py and
+    # project_council_fabrication.md for failure-mode history. Single
+    # source of truth shared with /council.
+    try:
+        from app.core.retrieval_guard import check_retrieval_guard
+        guard = check_retrieval_guard(request.message, ctx)
+    except Exception as e:
+        print(f"[CHAT_STREAM] Retrieval guard import/exec failed: {e}")
+        guard = None
+    if guard:
+        deterministic = guard["deterministic_reply"]
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="chat_stream_short_circuited_empty_context",
+                severity=EventSeverity.INFO,
+                subsystem="chat_stream.guard.fabrication",
+                message=(
+                    f"short-circuited intent={guard['intent_key']} "
+                    f"empty {guard['label']}"
+                ),
+                metadata={
+                    "intent_key": guard["intent_key"],
+                    "label": guard["label"],
+                    "message_len": len(request.message),
+                    "ctx_keys_present": guard["ctx_keys_present"],
+                    "endpoint": "chat_stream",
+                },
+            )
+        except Exception:
+            pass
+        log_request(
+            provider="retrieval_guard",
+            message=request.message,
+            reply=deterministic,
+            ok=True,
+        )
+        async def _guard_stream():
+            yield "data: " + json.dumps({"type": "chunk", "text": deterministic}) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        return StreamingResponse(_guard_stream(), media_type="text/event-stream")
+
     # Stream response
     # Budget for pre-first-chunk time across the entire fallback chain.
     # Per-provider httpx timeouts are long (300s) so a generation can run

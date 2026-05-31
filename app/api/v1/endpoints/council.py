@@ -350,6 +350,52 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
             f"{ctx['reasoning'][:800]}"
         )
 
+    # Layer-2 fabrication guard — short-circuit retrieval-shaped queries
+    # whose context block came back empty. Stops fabricating providers
+    # (Mistral / OpenRouter) from inventing plausible fake data before
+    # the chair ever sees the question. See app/core/retrieval_guard.py
+    # and project_council_fabrication.md for the failure-mode history.
+    try:
+        from app.core.retrieval_guard import check_retrieval_guard
+        guard = check_retrieval_guard(req.message, ctx)
+    except Exception as e:
+        print(f"[COUNCIL] Retrieval guard import/exec failed: {e}")
+        guard = None
+    if guard:
+        deterministic = guard["deterministic_reply"]
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="council_short_circuited_empty_context",
+                severity=EventSeverity.INFO,
+                subsystem="council.guard.fabrication",
+                message=(
+                    f"short-circuited intent={guard['intent_key']} "
+                    f"empty {guard['label']}"
+                ),
+                metadata={
+                    "intent_key": guard["intent_key"],
+                    "label": guard["label"],
+                    "message_len": len(req.message),
+                    "ctx_keys_present": guard["ctx_keys_present"],
+                    "endpoint": "council",
+                },
+            )
+        except Exception:
+            pass
+        log_request(
+            provider="retrieval_guard",
+            message=req.message,
+            reply=deterministic[:500],
+            ok=True,
+        )
+        return CouncilResponse(
+            ok=True,
+            provider="council",
+            reply=deterministic,
+            latency_ms=int((time.time() - start) * 1000),
+        )
+
     # Vision preprocessing for Council — describe image then inject
     message_for_council = req.message
     if req.image_base64:
