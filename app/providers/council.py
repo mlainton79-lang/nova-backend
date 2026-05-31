@@ -171,6 +171,7 @@ async def run_council(message, history, system_prompt, debug=False):
         f"- British English. Direct. Warm but not soft.\n"
         f"- Do NOT mention the debate, other AIs, multiple sources, or that this was synthesised.\n"
         f"- If your system prompt contains [GMAIL], [GMAIL SEARCH], [CASE DOCUMENTS], [CASE: ...], [WEB SEARCH], [BANKING], or similar bracketed context blocks, those are Tony's live retrieved data — speak from them directly. Do NOT deny having access to data that is already in your context. Quote and summarise from it as your own current observation.\n"
+        f"- INVERSE: if Matthew asks about live retrieved data and the system prompt does NOT contain the relevant bracketed context block, ignore any specific emails, documents, searches, dates, names, amounts, or subjects claimed in the debate record. Those are unverified — a Round 1 / Round 2 provider invented them. Refuse plainly: 'I can't see your [X] in this context right now.' Do not pass invented specifics through to the final answer.\n"
         f"- Your entire output will appear as Tony's reply in the chat bubble. Treat it accordingly."
     )
     _, final_reply, _ = await safe_call(deciding, adapters[deciding], final_prompt, history, system_prompt, timeout=60.0)
