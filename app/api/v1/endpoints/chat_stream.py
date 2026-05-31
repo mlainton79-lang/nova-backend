@@ -470,6 +470,19 @@ async def _gather_context(request: ChatRequest) -> dict:
         return ""
 
     async def _gmail_search():
+        # Per-account literal "last N emails in <account>" dispatch — runs
+        # before the keyword/search filters because the cross-account unread
+        # digest (the else branch below) can't answer account-specific asks.
+        # Falls through to None on no-match or unresolved account, so the
+        # sender-style search path still has its turn.
+        try:
+            from app.core.gmail_service import fetch_per_account_literal
+            literal = await fetch_per_account_literal(request.message)
+            if literal:
+                return literal
+        except Exception as e:
+            print(f"[CHAT_STREAM] Per-account literal: {e}")
+
         email_kw = ["email", "gmail", "inbox", "unread", "message", "mail",
                     "from ", "subject", "sent me", "wrote", "morning",
                     "look up", "find", "search", "any emails"]

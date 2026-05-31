@@ -60,6 +60,18 @@ async def _gather_council_context(req: ChatRequest) -> dict:
         return ""
 
     async def _gmail():
+        # Per-account literal "last N emails in <account>" dispatch — runs
+        # before the keyword/search filters because the cross-account unread
+        # digest (the else branch below) can't answer account-specific asks.
+        # Falls through to None on no-match or unresolved account.
+        try:
+            from app.core.gmail_service import fetch_per_account_literal
+            literal = await fetch_per_account_literal(req.message)
+            if literal:
+                return literal
+        except Exception as e:
+            print(f"[COUNCIL] Per-account literal: {e}")
+
         email_kw = ["email", "gmail", "inbox", "unread", "from ", "subject",
                     "sent me", "wrote", "look up", "find", "any emails"]
         if not any(k in msg_lower for k in email_kw):

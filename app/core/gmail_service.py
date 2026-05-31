@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import base64
 import httpx
@@ -436,6 +437,78 @@ async def delete_email(email: str, message_id: str) -> bool:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.delete(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}", headers={"Authorization": f"Bearer {token}"})
         return resp.status_code == 204
+
+_PER_ACCOUNT_LITERAL_RE = re.compile(
+    r"(?:last|recent|latest)\s+(\d+)\s+emails?\s+(?:in|from)\s+([\w.+\-]+(?:@[\w.\-]+)?)",
+    re.IGNORECASE,
+)
+
+
+async def fetch_per_account_literal(message: str) -> Optional[str]:
+    """Dispatch literal per-account inbox queries that the cross-account
+    unread digest can't answer.
+
+    Triggers on `"(last|recent|latest) N emails (in|from) <name>"`. The
+    <name> may be a bare local-part (`mlainton79`) or a full address
+    (`mlainton79@gmail.com`); it must resolve to exactly one connected
+    `gmail_accounts` row to fire — ambiguous or unknown names fall through
+    so the caller's sender-style search path still runs.
+
+    Returns a `[GMAIL: <account> — last N]` context block on success, or
+    None on no-match / unresolved-account / fetch-error. Never raises.
+
+    Privacy note: the resolution only matches against accounts the user
+    has explicitly connected via OAuth, and ambiguous bare local-parts
+    refuse rather than guess — so the helper cannot route inbox data to
+    the wrong account in the LLM context.
+    """
+    if not message:
+        return None
+    m = _PER_ACCOUNT_LITERAL_RE.search(message.lower())
+    if not m:
+        return None
+    requested = int(m.group(1))
+    name = m.group(2).lower()
+
+    try:
+        accounts = get_all_accounts()
+    except Exception:
+        return None
+    if not accounts:
+        return None
+
+    if "@" in name:
+        match = next((a for a in accounts if a.lower() == name), None)
+    else:
+        candidates = [a for a in accounts if a.split("@")[0].lower() == name]
+        # Refuse on ambiguity so we never send the wrong inbox into context.
+        match = candidates[0] if len(candidates) == 1 else None
+    if not match:
+        return None
+
+    try:
+        results = await asyncio.wait_for(
+            list_emails(match, query="", max_results=min(requested, 10), label="INBOX"),
+            timeout=10.0,
+        )
+    except Exception as e:
+        print(f"[GMAIL] Per-account literal fetch failed for {match}: {type(e).__name__}: {e}")
+        return None
+
+    if not results:
+        return f"[GMAIL: {match}]\nInbox is empty (or no messages match)."
+
+    lines = [f"[GMAIL: {match} — last {len(results)}]"]
+    for e in results:
+        sender = (e.get("from", "") or "").split("<")[0].strip() or "(unknown)"
+        subject = e.get("subject", "(no subject)")
+        date = (e.get("date", "") or "")[:16]
+        lines.append(f"• {sender} — {subject} ({date})")
+        snippet = e.get("snippet")
+        if snippet:
+            lines.append(f"  {snippet[:100]}")
+    return "\n".join(lines)
+
 
 async def build_smart_query(raw_query: str) -> str:
     """Convert natural language to Gmail search operators where possible."""
