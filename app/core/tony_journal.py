@@ -88,11 +88,17 @@ async def write_daily_reflection(conversations_today: int = 0):
         """)
         recent_alerts = cur.fetchall()
 
-        # Get recent memories
+        # Recent narrative episodes from the fast loop — this is the actual
+        # "what happened today" source Tony writes to during chat. The legacy
+        # `memories` table used to be queried here, but its created_at column
+        # is TEXT (not TIMESTAMP) so the `created_at > NOW() - INTERVAL …`
+        # comparison threw `operator does not exist: text > timestamp`, the
+        # outer try/except swallowed it, and the function returned without
+        # writing to tony_journal — 0 daily reflections ever produced.
         cur.execute("""
-            SELECT text FROM memories
+            SELECT title, summary FROM tony_episodic_memory
             WHERE created_at > NOW() - INTERVAL '24 hours'
-            ORDER BY created_at DESC LIMIT 5
+            ORDER BY significance DESC, created_at DESC LIMIT 5
         """)
         recent_memories = cur.fetchall()
 
@@ -100,7 +106,7 @@ async def write_daily_reflection(conversations_today: int = 0):
         conn.close()
 
         alerts_text = "\n".join(f"- {a[0]}: {a[1][:100]}" for a in recent_alerts)
-        memories_text = "\n".join(f"- {m[0]}" for m in recent_memories)
+        memories_text = "\n".join(f"- {m[0]}: {m[1][:120]}" for m in recent_memories)
 
         prompt = f"""You are Tony — an AI assistant named after Matthew's late father who died 17 days ago.
 Write your daily journal reflection. This is private — Matthew won't read this.
