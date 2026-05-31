@@ -52,6 +52,7 @@ async def gemini(
     max_tokens: int = 2048,
     temperature: float = 0.2,
     system: str = None,
+    disable_thinking: bool = False,
 ) -> Optional[str]:
     """
     Unified Gemini call with automatic tier selection.
@@ -61,13 +62,32 @@ async def gemini(
     preserving the None-on-failure contract that ~34 downstream files
     depend on. Actual fallback logic (pro-primary → pro-stable) lives
     in gemini_client.generate_content.
+
+    disable_thinking=True is for trivially-shaped responses (one number,
+    one phrase, a yes/no, an enum) where Gemini 2.5's thinking-mode
+    overhead (250-500 tokens of internal reasoning, billed against
+    maxOutputTokens) is pure waste. Forces tier='flash' because pro
+    rejects `thinkingBudget: 0` with HTTP 400 "This model only works in
+    thinking mode." — flash-tier is the only one that accepts the
+    no-think contract. Callers asking for non-trivial reasoning should
+    leave this False even on cheap tasks.
     """
-    tier = choose_model(task)  # "pro" or "flash"
+    if disable_thinking:
+        tier = "flash"
+    else:
+        tier = choose_model(task)  # "pro" or "flash"
 
     # Pro-tier reasoning calls get Google Search grounding. Flash-tier
     # tasks (emotional classification, dedup, quick lookups) don't
     # benefit from fresh external facts and skip grounding.
     tools = [{"google_search": {}}] if tier == "pro" else None
+
+    generation_config: dict = {
+        "maxOutputTokens": max_tokens,
+        "temperature": temperature,
+    }
+    if disable_thinking:
+        generation_config["thinkingConfig"] = {"thinkingBudget": 0}
 
     try:
         response = await gemini_client.generate_content(
@@ -75,10 +95,7 @@ async def gemini(
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
             system_instruction=system,
             tools=tools,
-            generation_config={
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-            },
+            generation_config=generation_config,
             timeout=30.0,
             caller_context=f"model_router.{task}",
         )

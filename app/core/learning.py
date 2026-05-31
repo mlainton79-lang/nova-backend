@@ -79,14 +79,12 @@ Scoring criteria:
 
 Return ONLY a decimal number between 1.0 and 10.0. Nothing else."""
 
-    # max_tokens=256: 10 was a holdover from pre-thinking-mode Gemini.
-    # Gemini 2.5 spends ~7 thoughts tokens before emitting anything, so
-    # 10 leaves 3 tokens for output — empty string returned, float()
-    # raises, None scored, and tony_learning_log.score has been None for
-    # every chat turn ever (verified via model_router.truncation events
-    # firing 1-per-call with output=0 chars=0). 256 is generous overhead
-    # for a one-decimal answer but accommodates thinking-mode reasoning.
-    result = await gemini(prompt, task="analysis", max_tokens=256, temperature=0.1)
+    # disable_thinking=True routes to flash with thinkingBudget=0. Scoring
+    # one decimal does not need 250+ tokens of reasoning; the previous
+    # 'analysis' tier (pro + grounding + mandatory thinking) consumed the
+    # entire budget on internal thoughts and emitted zero output regardless
+    # of max_tokens. max_tokens=50 is plenty when thinking is off.
+    result = await gemini(prompt, task="analysis", max_tokens=50, temperature=0.1, disable_thinking=True)
     try:
         return min(10.0, max(1.0, float(result.strip())))
     except Exception:
@@ -107,11 +105,11 @@ What ONE specific thing should Tony do differently next time?
 Be concrete. Not "be more helpful" — say exactly what should change.
 10 words or less."""
 
-    # max_tokens=512: 50 was below Gemini 2.5's thinking-mode floor —
-    # all 50 tokens spent reasoning, zero tokens of lesson emitted.
-    # 512 covers thoughts (~300-450) + a 10-word lesson with comfortable
-    # margin. See model_router.truncation hook for visibility.
-    return await gemini(prompt, task="analysis", max_tokens=512, temperature=0.2)
+    # disable_thinking=True: a 10-word lesson does not benefit from
+    # internal reasoning. Routes to flash with thinkingBudget=0; 200
+    # tokens is comfortable for a one-sentence lesson without thinking
+    # overhead. See model_router.truncation hook for visibility.
+    return await gemini(prompt, task="analysis", max_tokens=200, temperature=0.2, disable_thinking=True)
 
 
 async def log_conversation(message: str, reply: str, provider: str = "gemini"):
