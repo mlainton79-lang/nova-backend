@@ -72,7 +72,14 @@ Respond in JSON:
     "best_opportunity": "the single best opportunity right now"
 }}"""
     
-    result = await gemini_json(prompt, task="analysis", max_tokens=800)
+    # max_tokens=2048: 800 is in the established truncation danger zone
+    # (pattern_analysis's 5x forensic at 1024 showed 3/5 truncations on
+    # similar-shape JSON; 800 is smaller still). 9th instance of the
+    # systemic Gemini 2.5 thinking-mode budget squeeze. Indirect-evidence
+    # diagnosis: 0 tony_alerts with source='marketplace_monitor' ever,
+    # 9-10s nightly runtimes prove the Gemini call IS happening, result
+    # captured as {arbitrage_opportunities: []}. Same shape as income_engine.
+    result = await gemini_json(prompt, task="analysis", max_tokens=2048)
     if result:
         opportunities = result.get("opportunities", [])
         if result.get("best_opportunity"):
