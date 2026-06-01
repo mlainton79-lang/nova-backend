@@ -103,6 +103,131 @@ async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
                 "method": "gemini_general",
             }
 
+    if capability_key == "gmail_send":
+        # Sends email. Three layers of safety:
+        #   1. Governor (R2.1b) default-denies external_effect+approval_required
+        #      — only an approval_token from the caller unlocks reaching this
+        #      branch (registry row corrected R2.4+ via seed_capabilities_v1).
+        #   2. LLM parameter extraction: gemini_json against the step
+        #      description, expected fields {account, to, subject, body}.
+        #   3. Strict validation before send: account must be in the
+        #      connected Gmail accounts list; `to` must look like a real
+        #      email address; all four fields must be non-empty strings.
+        #      Any failure → refuse cleanly with the reason. No fallback
+        #      "best guess" send.
+        try:
+            from app.core.gmail_service import get_all_accounts, send_email
+            from app.core.model_router import gemini_json
+            import re as _re
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no Gmail accounts connected — cannot send",
+                    "verified": False,
+                    "method": "gmail_send",
+                }
+
+            accounts_list = ", ".join(accounts)
+            extract_prompt = (
+                f"Extract structured email-send parameters from this step "
+                f"description.\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts to send FROM (pick exactly one): "
+                f"{accounts_list}\n\n"
+                f"Rules:\n"
+                f"- `account` must be one of the available accounts above, "
+                f"verbatim.\n"
+                f"- `to` must be a complete valid email address. If the "
+                f"description names a person without an email address, "
+                f"return null for `to` — do NOT guess an address.\n"
+                f"- `subject` and `body` must both be non-empty strings.\n"
+                f"- If ANY field cannot be determined safely, return null "
+                f"for that field rather than guessing.\n\n"
+                f"Respond in JSON:\n"
+                f'{{"account": "<from_account>", "to": "<recipient_email>", '
+                f'"subject": "<subject>", "body": "<body>"}}'
+            )
+            params = await gemini_json(extract_prompt, task="general", max_tokens=1024)
+
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "gmail_send",
+                }
+
+            account = (params.get("account") or "").strip()
+            to_addr = (params.get("to") or "").strip()
+            subject = (params.get("subject") or "").strip()
+            body = (params.get("body") or "").strip()
+
+            # Strict validation — refuse rather than send wrong-shaped mail.
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"extracted account '{account}' is not in connected "
+                        f"accounts list — refusing to send. Available: {accounts_list}"
+                    ),
+                    "verified": False,
+                    "method": "gmail_send",
+                    "extracted": {"account": account, "to": to_addr,
+                                  "subject_chars": len(subject), "body_chars": len(body)},
+                }
+            email_re = _re.compile(r"^[\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$")
+            if not to_addr or not email_re.match(to_addr):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"extracted `to` is not a valid email address "
+                        f"(got {to_addr!r}) — refusing to send. The "
+                        f"description must contain an explicit recipient "
+                        f"email; v0 dispatcher does not guess from name."
+                    ),
+                    "verified": False,
+                    "method": "gmail_send",
+                    "extracted": {"account": account, "to": to_addr,
+                                  "subject_chars": len(subject), "body_chars": len(body)},
+                }
+            if not subject:
+                return {
+                    "ok": False,
+                    "error": "extracted subject is empty — refusing to send",
+                    "verified": False,
+                    "method": "gmail_send",
+                }
+            if not body:
+                return {
+                    "ok": False,
+                    "error": "extracted body is empty — refusing to send",
+                    "verified": False,
+                    "method": "gmail_send",
+                }
+
+            success = await send_email(account, to_addr, subject, body)
+            return {
+                "ok": bool(success),
+                "result": {
+                    "from": account,
+                    "to": to_addr,
+                    "subject": subject,
+                    "body_chars": len(body),
+                    "sent": bool(success),
+                },
+                "verified": bool(success),
+                "method": "gmail_send",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"gmail_send failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gmail_send",
+            }
+
     if capability_key == "gmail_read":
         # Reads across all connected Gmail accounts via search_all_accounts,
         # which internally calls build_smart_query to translate NL→Gmail

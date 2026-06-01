@@ -100,6 +100,28 @@ CAPABILITIES_V1 = [
         "notes": "Shipped. Returns unread count and per-account breakdown.",
     },
     {
+        # R2.4+ gmail_send: corrected metadata. The legacy capabilities row
+        # backfilled into tony_capabilities defaulted to external_effect=
+        # False / approval_required=False, which is unsafe — sending email
+        # IS external_effect by definition. This upsert via the canonical
+        # facade pushes external_effect=True, approval_required=True, and
+        # risk_level=medium so the governor (R2.1b) correctly classifies
+        # gmail_send as external_effect and default-denies without an
+        # approval_token. The plan_executor dispatcher only fires after
+        # the governor allows; it then runs LLM-based parameter extraction
+        # with strict validation before calling gmail_service.send_email.
+        "name": "gmail_send",
+        "description": "Send emails from any connected Gmail account. Requires governor approval per call — external_effect.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "medium",
+        "approval_required": True,
+        "external_effect": True,
+        "cost_type": "free",
+        "endpoint": "/api/v1/gmail/send",
+        "notes": "Metadata corrected R2.4+ (2026-06-01). Plan executor dispatcher requires approval_token; extracts {account,to,subject,body} via gemini_json, validates account is connected + to is a valid email + all fields non-empty before calling send_email.",
+    },
+    {
         "name": "calendar_read_write",
         "description": "Read schedule and create calendar events.",
         "status": "active",
