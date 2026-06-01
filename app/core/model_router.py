@@ -161,10 +161,23 @@ async def gemini_json(
     prompt: str,
     task: str = "general",
     max_tokens: int = 2048,
-    temperature: float = 0.1
+    temperature: float = 0.1,
+    disable_thinking: bool = False,
 ) -> Optional[dict]:
-    """Gemini call expecting JSON response. Parses and returns dict."""
-    result = await gemini(prompt, task=task, max_tokens=max_tokens, temperature=temperature)
+    """Gemini call expecting JSON response. Parses and returns dict.
+
+    disable_thinking=True is passed through to gemini() — use for
+    trivially-shaped JSON outputs (one decimal, one short dict, an
+    enum) where thinking-mode overhead is pure waste. Defaults to
+    False to preserve existing caller behaviour.
+    """
+    result = await gemini(
+        prompt,
+        task=task,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        disable_thinking=disable_thinking,
+    )
     if not result:
         return None
     try:

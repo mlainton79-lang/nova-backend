@@ -149,7 +149,14 @@ async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
                 f'{{"account": "<from_account>", "to": "<recipient_email>", '
                 f'"subject": "<subject>", "body": "<body>"}}'
             )
-            params = await gemini_json(extract_prompt, task="general", max_tokens=1024)
+            # disable_thinking: structured-extraction is trivial-shape (one
+            # small dict). Without this, gemini-2.5-flash's thinking-mode
+            # consumes the budget on internal reasoning, returns null, and
+            # the dispatcher then can't validate. Forces flash + thinkingBudget=0.
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=1024,
+                disable_thinking=True,
+            )
 
             if not isinstance(params, dict):
                 return {
