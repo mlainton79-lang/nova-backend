@@ -116,7 +116,13 @@ Respond in JSON:
 
 Or: null"""
 
-    result = await gemini_json(prompt, task="analysis", max_tokens=200, temperature=0.1)
+    # max_tokens=2048: 200 was 100% MAX_TOKENS-truncated at the prod config
+    # (thoughts=197, output=0 on every clean attempt). 7th instance of the
+    # same Gemini 2.5 thinking-mode budget squeeze. Per-email loop runs up
+    # to 20 times per cron so the budget bump matters here — once
+    # extraction works, tony_financial_events accumulates rows for
+    # build_financial_picture to actually have data to summarise.
+    result = await gemini_json(prompt, task="analysis", max_tokens=2048, temperature=0.1)
     
     if result and result.get("amount"):
         result["email_subject"] = subject[:100]
@@ -235,7 +241,11 @@ JSON response:
     "trend": "improving/stable/concerning"
 }}"""
 
-        assessment = await gemini_json(prompt, task="reasoning", max_tokens=512)
+        # max_tokens=2048: defensive bump from 512 to match the systemic
+        # pattern. Currently dormant because tony_financial_events is empty
+        # (extract was truncating upstream) — once events populate, this
+        # downstream call would have hit the same MAX_TOKENS wall at 512.
+        assessment = await gemini_json(prompt, task="reasoning", max_tokens=2048)
         
         if assessment:
             # Update summary
