@@ -1,13 +1,13 @@
 """
 Register capabilities built this session into the registry.
-Run once at startup to make sure Tony knows what he can actually do.
+
+R2.1 (2026-06-01): rewritten to go through the canonical upsert_capability
+facade in app.core.capabilities, which writes to tony_capabilities. The
+prior version of this module wrote raw SQL into the unprefixed legacy
+`capabilities` table — that path is now dead. Same NEW_CAPABILITIES
+catalog as before; only the write target changed.
 """
-import os
-import psycopg2
-
-
-def get_conn():
-    return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+from app.core.capabilities import upsert_capability
 
 
 NEW_CAPABILITIES = [
@@ -26,33 +26,19 @@ NEW_CAPABILITIES = [
 
 
 def register_all():
+    """Upsert every capability in NEW_CAPABILITIES through the canonical
+    facade. Idempotent — re-runs update the description/status/endpoint
+    rather than creating duplicates (UNIQUE on capability_key).
+    """
     try:
-        conn = get_conn()
-        conn.autocommit = True
-        cur = conn.cursor()
-        # Make sure the capabilities table has ON CONFLICT support
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS capabilities (
-                id SERIAL PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL,
-                description TEXT,
-                status TEXT DEFAULT 'active',
-                endpoint TEXT,
-                added_at TIMESTAMP DEFAULT NOW(),
-                notes TEXT
-            )
-        """)
         for name, desc, status, endpoint in NEW_CAPABILITIES:
-            cur.execute("""
-                INSERT INTO capabilities (name, description, status, endpoint)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (name) DO UPDATE SET
-                    description = EXCLUDED.description,
-                    status = EXCLUDED.status,
-                    endpoint = EXCLUDED.endpoint
-            """, (name, desc, status, endpoint))
-        cur.close()
-        conn.close()
+            upsert_capability(
+                name=name,
+                description=desc,
+                status=status,
+                endpoint=endpoint,
+                source="register_new_capabilities.register_all",
+            )
         print(f"[CAPABILITIES] Registered {len(NEW_CAPABILITIES)} new capabilities")
     except Exception as e:
         print(f"[CAPABILITIES] Register failed: {e}")
