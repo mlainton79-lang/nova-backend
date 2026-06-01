@@ -60,11 +60,18 @@ async def check_system_health() -> Dict:
         except Exception:
             health["checks"]["semantic_memory"] = {"status": "table_missing"}
 
-        # Check recent eval failures
+        # Check recent eval failures. The `tony_eval_log` table exists but
+        # uses `verified` (TRUE = action's claimed result was verified) — the
+        # old `success` column never existed in the live schema, so the prior
+        # query raised UndefinedColumn and got mis-labelled "table_missing"
+        # every night. `verified = FALSE` is the semantically-closest signal:
+        # an unverified action is the closest thing this schema has to a
+        # failure. Doesn't change repair behaviour — just makes the health
+        # report honest.
         try:
             cur.execute("""
                 SELECT COUNT(*) FROM tony_eval_log
-                WHERE success = FALSE
+                WHERE verified = FALSE
                 AND created_at > NOW() - INTERVAL '1 hour'
             """)
             recent_failures = cur.fetchone()[0]
@@ -75,19 +82,31 @@ async def check_system_health() -> Dict:
         except Exception:
             health["checks"]["eval_failures"] = {"status": "table_missing"}
 
-        # Check autonomous loop last run
+        # Check the 6h autonomous loop's recent activity. The original query
+        # filtered for `source = 'autonomous_loop'` in tony_alerts — but the
+        # loop at app/main.py:238 never emits alerts under that source name
+        # (its sub-tasks emit under varied sources: think_worker,
+        # scheduled_briefing, learning, goal_executor, anticipation, etc.).
+        # So that filter returned 0 rows EVER and the check stayed "unknown".
+        # Using ANY recent alert as the heartbeat proxy: the loop calls
+        # 9 sub-tasks every 6h, several of which emit alerts under their own
+        # source. 8h = 6h cadence + 2h grace. If nothing has alerted in 8h,
+        # something's off (either loop is dead OR everything's so quiet
+        # there's genuinely nothing to surface — either way worth flagging).
         try:
             cur.execute("""
                 SELECT MAX(created_at) FROM tony_alerts
-                WHERE source = 'autonomous_loop'
+                WHERE created_at > NOW() - INTERVAL '24 hours'
             """)
-            last_run = cur.fetchone()[0]
-            if last_run:
-                hours_ago = (datetime.utcnow() - last_run).total_seconds() / 3600
+            last_alert = cur.fetchone()[0]
+            if last_alert:
+                hours_ago = (datetime.utcnow() - last_alert.replace(tzinfo=None)).total_seconds() / 3600
                 health["checks"]["autonomous_loop"] = {
                     "status": "ok" if hours_ago < 8 else "overdue",
-                    "last_run_hours_ago": round(hours_ago, 1)
+                    "last_alert_hours_ago": round(hours_ago, 1)
                 }
+            else:
+                health["checks"]["autonomous_loop"] = {"status": "overdue"}
         except Exception:
             health["checks"]["autonomous_loop"] = {"status": "unknown"}
 
