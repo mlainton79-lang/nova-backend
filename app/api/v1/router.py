@@ -110,6 +110,8 @@ from app.api.v1.endpoints import drafts_selling
 router.include_router(drafts_selling.router, tags=["drafts_selling"])
 from app.api.v1.endpoints import debug_events
 router.include_router(debug_events.router, tags=["debug"])
+from app.api.v1.endpoints import planner
+router.include_router(planner.router, tags=["planner"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
