@@ -103,6 +103,43 @@ async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
                 "method": "gemini_general",
             }
 
+    if capability_key == "gmail_read":
+        # Reads across all connected Gmail accounts via search_all_accounts,
+        # which internally calls build_smart_query to translate NL→Gmail
+        # operators (e.g. "emails from Christine" → from:Christine). The
+        # step description is treated as the search intent verbatim;
+        # planner-produced descriptions like "Read recent unread emails"
+        # pass through to Gmail's search. Empty results are an honest
+        # outcome (verified=False, ok=True — the read ran, found nothing).
+        try:
+            from app.core.gmail_service import search_all_accounts
+            emails = await search_all_accounts(description, max_per_account=5)
+            # Compact summary — full email bodies would bloat the trace.
+            # Keep enough to confirm the read worked and feed downstream steps.
+            summary = [
+                {
+                    "account": e.get("account"),
+                    "from": (e.get("from") or "").split("<")[0].strip(),
+                    "subject": (e.get("subject") or "")[:80],
+                    "date": (e.get("date") or "")[:16],
+                    "snippet": (e.get("snippet") or "")[:200],
+                }
+                for e in (emails or [])[:10]
+            ]
+            return {
+                "ok": True,
+                "result": {"emails": summary, "count": len(emails or [])},
+                "verified": len(summary) > 0,
+                "method": "gmail_search_all_accounts",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"gmail_read failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gmail_search_all_accounts",
+            }
+
     # Unknown — refuse cleanly rather than guess.
     return {
         "ok": False,
