@@ -235,7 +235,18 @@ Respond in JSON:
     "things_tony_should_proactively_watch": ["specific things to monitor"]
 }}"""
 
-        result = await gemini_json(prompt, task="analysis", max_tokens=1024)
+        # max_tokens=2048: defensive bump to match the meta_cognition /
+        # strategic_advisor shape. At 1024, thinking-mode consumed the entire
+        # budget on 3 of 5 reproduction attempts (thoughts=1021, output=0).
+        # NOTE: this does NOT make the task suddenly produce patterns — the
+        # dominant cause of silence is input sparsity (chat-side
+        # analyse_message_for_patterns records ~2 observations/week via narrow
+        # keyword matching, and the model honestly refuses prose-shaped JSON
+        # from such sparse input). Bumping just stops the truncation-hook
+        # noise so the hook's output focuses on real bugs. See
+        # project_overnight_substance_audit.md for the input-broadening
+        # follow-up if pattern recognition is ever wanted as a live feature.
+        result = await gemini_json(prompt, task="analysis", max_tokens=2048)
         if result:
             # Store key patterns
             for pattern in result.get("key_patterns", []):
