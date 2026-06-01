@@ -85,7 +85,13 @@ Respond in JSON:
     "summary": "Tony's one-paragraph briefing for Matthew"
 }}"""
 
-    result = await gemini_json(prompt, task="analysis", max_tokens=1024)
+    # max_tokens=2048: 1024 is at the edge of Gemini 2.5 thinking-mode
+    # viability (pattern_analysis's earlier forensic showed 3/5 truncation
+    # at this budget). Combined with 0 tony_alerts ever from source=
+    # 'income_engine' despite 22-52s nightly Gemini calls, the diagnosis
+    # is the systemic MAX_TOKENS shape. 8th instance — see
+    # reference_gemini_truncation_hook.md.
+    result = await gemini_json(prompt, task="analysis", max_tokens=2048)
     if result:
         opportunities = result.get("opportunities", [])
 
@@ -147,7 +153,11 @@ Respond in JSON:
     "realistic_value": "what this could realistically be worth"
 }}"""
 
-    return await gemini_json(prompt, task="reasoning", max_tokens=1024) or {}
+    # max_tokens=2048: this is the smoking-gun static-prompt sibling — no
+    # input dependency, no DB query, just prompt → Gemini. Returning {}
+    # on every run can ONLY be MAX_TOKENS truncation at the 1024 budget
+    # against a 6-field JSON response. Same systemic pattern.
+    return await gemini_json(prompt, task="reasoning", max_tokens=2048) or {}
 
 
 async def run_income_intelligence() -> Dict:
