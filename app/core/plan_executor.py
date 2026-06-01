@@ -610,19 +610,40 @@ async def _execute_step(step: Dict[str, Any],
         # outcome (verified=False, ok=True — the read ran, found nothing).
         try:
             from app.core.gmail_service import search_all_accounts
+            import re as _re
             emails = await search_all_accounts(description, max_per_account=5)
+
+            # Parse "Name <email@domain.com>" RFC-822 from-lines so chain-
+            # aware consumers (gmail_send reply-resolution especially) can
+            # find the actual email address. Display name and parsed
+            # address both kept; raw is preserved too.
+            _addr_re = _re.compile(r"<([\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,})>")
+            _bare_re = _re.compile(r"^[\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$")
+            def _parse_from(raw: str) -> tuple:
+                raw = (raw or "").strip()
+                m = _addr_re.search(raw)
+                if m:
+                    addr = m.group(1)
+                    name = raw[: m.start()].strip(" \"\t<>")
+                    return name or addr, addr, raw
+                if _bare_re.match(raw):
+                    return raw, raw, raw
+                return raw, "", raw
+
             # Compact summary — full email bodies would bloat the trace.
             # Keep enough to confirm the read worked and feed downstream steps.
-            summary = [
-                {
+            summary = []
+            for e in (emails or [])[:10]:
+                name, addr, raw = _parse_from(e.get("from") or "")
+                summary.append({
                     "account": e.get("account"),
-                    "from": (e.get("from") or "").split("<")[0].strip(),
+                    "from_name": name,
+                    "from_address": addr,  # parsed email (empty if not present)
+                    "from": raw,           # raw RFC-822 from-line, preserved
                     "subject": (e.get("subject") or "")[:80],
                     "date": (e.get("date") or "")[:16],
                     "snippet": (e.get("snippet") or "")[:200],
-                }
-                for e in (emails or [])[:10]
-            ]
+                })
             return {
                 "ok": True,
                 "result": {"emails": summary, "count": len(emails or [])},
