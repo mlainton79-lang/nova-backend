@@ -33,11 +33,42 @@ paused on governor-required approval, and resumed by passing an
 approval_token. The executor never bypasses the governor — every
 needs_approval step is re-evaluated with the token before execution.
 """
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+
+def _format_prior_results(prior_results: Optional[List[Dict[str, Any]]]) -> str:
+    """Compact preamble describing earlier-step outputs. Used by dispatchers
+    that opt in to chain-aware execution (today: chat). Empty list / None
+    returns "" so callers can do `prefix = _format_prior_results(...); if
+    prefix: prompt = prefix + prompt`.
+
+    Each line carries: step number, capability_key, verified flag, and a
+    result summary capped to keep prompts compact.
+    """
+    if not prior_results:
+        return ""
+    lines = ["Earlier steps in this plan produced these results:"]
+    for r in prior_results:
+        cap_key = r.get("capability_key", "?")
+        sn = r.get("step_number", "?")
+        verified = r.get("verified", False)
+        result = r.get("result")
+        if isinstance(result, dict):
+            # Summarise dict results compactly so the prompt stays small.
+            keys_preview = ", ".join(f"{k}={str(v)[:60]}" for k, v in list(result.items())[:5])
+            summary = f"{{{keys_preview}}}"
+        elif isinstance(result, str):
+            summary = result[:800]
+        else:
+            summary = str(result)[:400]
+        lines.append(f"- Step {sn} ({cap_key}, verified={verified}): {summary}")
+    lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 async def _execute_step(step: Dict[str, Any],
-                         payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                         payload: Optional[Dict[str, Any]] = None,
+                         prior_results: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Execute one step's underlying capability.
 
     Returns:
@@ -50,17 +81,25 @@ async def _execute_step(step: Dict[str, Any],
         CSV files, audio). Capabilities that need such inputs read from
         this dict by a documented key (e.g. vinted_draft_create reads
         payload["images"]).
+      prior_results: optional list of {step_number, capability_key,
+        description, result, verified} dicts from steps that already
+        executed in this plan run. Opt-in per dispatcher — capabilities
+        that benefit from chain-aware context (chat especially) inject
+        them into their prompts via _format_prior_results. Capabilities
+        that don't need it ignore the param.
 
     Dispatcher branches are one elif each. Adding a new capability is:
     pick a stable capability_key, write a branch returning the
     {ok, result, verified, method} contract, optionally read inputs from
-    `payload`. Unknown capabilities return ok=False with a clear error.
+    `payload` and/or `prior_results`. Unknown capabilities return ok=False
+    with a clear error.
     """
     cap = step.get("registry_match") or {}
     capability_key = (cap.get("capability_key") or cap.get("name") or "").strip()
     capability_type = cap.get("capability_type", "")
     description = (step.get("description") or "").strip()
     payload = payload or {}
+    prior_results = prior_results or []
 
     if not capability_key:
         return {
@@ -93,14 +132,19 @@ async def _execute_step(step: Dict[str, Any],
     if capability_key == "chat":
         try:
             from app.core.model_router import gemini
-            # The step description is the prompt. v0 keeps this simple —
-            # later versions may inject upstream-step results as context.
-            text = await gemini(description, task="general", max_tokens=1024)
+            # Chain-aware: prepend prior step results so chat steps that
+            # follow a search/read/vision step can actually reason about
+            # what those steps found. _format_prior_results returns ""
+            # when there are none, so step 1 chat behaviour is unchanged.
+            prior_block = _format_prior_results(prior_results)
+            full_prompt = prior_block + description if prior_block else description
+            text = await gemini(full_prompt, task="general", max_tokens=1024)
             return {
                 "ok": bool(text),
                 "result": (text or "")[:1500],
                 "verified": bool(text and text.strip()),
                 "method": "gemini_general",
+                "used_prior_results": bool(prior_block),
             }
         except Exception as e:
             return {
@@ -619,6 +663,7 @@ async def execute_plan(
       }
     """
     executed_steps = []
+    prior_results: List[Dict[str, Any]] = []
     paused_step: Optional[Dict[str, Any]] = None
     steps = plan.get("steps", []) or []
 
@@ -690,12 +735,24 @@ async def execute_plan(
             break
 
         # --- Execute -------------------------------------------------------
-        outcome = await _execute_step(step, payload=payload)
+        outcome = await _execute_step(step, payload=payload, prior_results=prior_results)
         executed_steps.append({
             **step,
             "execution": outcome,
             "final_status": "done" if outcome.get("ok") else "failed",
         })
+        # Build the chain-aware-execution accumulator from successful steps
+        # only. Failures don't propagate forward — downstream steps
+        # shouldn't reason about garbage outputs.
+        if outcome.get("ok"):
+            cap_inner = step.get("registry_match") or {}
+            prior_results.append({
+                "step_number": step_number,
+                "capability_key": (cap_inner.get("capability_key") or cap_inner.get("name") or "?"),
+                "description": step.get("description"),
+                "result": outcome.get("result"),
+                "verified": bool(outcome.get("verified")),
+            })
         if not outcome.get("ok"):
             paused_step = {
                 "step_number": step_number,
