@@ -99,7 +99,28 @@ Respond in JSON:
     "priority": "high/medium/low"
 }}"""
 
-    return await gemini_json(prompt, task="reasoning", max_tokens=512) or {}
+    # max_tokens=2048: 512 hits the same Gemini 2.5 thinking-mode budget
+    # squeeze as the other silent-overnight fixes. Bumping so the analysis
+    # actually completes — but the downstream auto-rewrite (improve_function)
+    # is now gated behind the CODE_INTELLIGENCE_AUTO_REWRITE_ENABLED env var
+    # (default off) so a successful analysis no longer triggers autonomous
+    # production-code edits. See reference_gemini_truncation_hook.md.
+    return await gemini_json(prompt, task="reasoning", max_tokens=2048) or {}
+
+
+def _auto_rewrite_enabled() -> bool:
+    """Kill-switch for the autonomous code-rewrite path.
+
+    Default OFF — matches the gap_detector / self-builder safety posture
+    ("Self-build is locked off for now"). When this returns False,
+    improve_function emits an observability event flagging the proposal
+    and returns without touching GitHub. Set
+    CODE_INTELLIGENCE_AUTO_REWRITE_ENABLED to true/1/yes/on to enable
+    autonomous rewrite (do not enable without a review/rollback plan —
+    this path pushes commits to production main).
+    """
+    v = os.environ.get("CODE_INTELLIGENCE_AUTO_REWRITE_ENABLED", "false").strip().lower()
+    return v in ("true", "1", "yes", "on")
 
 
 async def improve_function(
@@ -110,7 +131,32 @@ async def improve_function(
     """
     Tony rewrites a specific function to be better.
     Reads the file, finds the function, rewrites it, validates, pushes.
+
+    Gated by CODE_INTELLIGENCE_AUTO_REWRITE_ENABLED (default off). When
+    disabled, logs the proposal via record_run_event and returns False
+    — no GitHub read, no Gemini call, no commit.
     """
+    if not _auto_rewrite_enabled():
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="code_intelligence_rewrite_skipped",
+                severity=EventSeverity.INFO,
+                subsystem="code_intelligence.rewrite_gate",
+                message=(
+                    "Autonomous rewrite proposal not executed — "
+                    "CODE_INTELLIGENCE_AUTO_REWRITE_ENABLED is off"
+                ),
+                metadata={
+                    "filepath": filepath,
+                    "func_name": func_name,
+                    "improvement_description": improvement_description[:300],
+                },
+            )
+        except Exception:
+            pass
+        return False
+
     content, sha = await read_file_from_github(filepath)
     if not content or not sha:
         return False
