@@ -112,6 +112,8 @@ from app.api.v1.endpoints import debug_events
 router.include_router(debug_events.router, tags=["debug"])
 from app.api.v1.endpoints import planner
 router.include_router(planner.router, tags=["planner"])
+from app.api.v1.endpoints import agent_runner
+router.include_router(agent_runner.router, tags=["agent_runner"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:

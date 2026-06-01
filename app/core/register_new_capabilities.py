@@ -23,6 +23,7 @@ NEW_CAPABILITIES = [
     ("health_dashboard",   "Single-endpoint system health snapshot",                                               "active", "/api/v1/health/dashboard"),
     ("smart_briefing",     "LLM-synthesised intelligent morning brief (one paragraph)",                            "active", "/api/v1/proactive/briefing/smart"),
     ("goal_planner",       "R2.2 — Decompose a stated goal into ordered steps with registry + governor checks. Produces plans; does not execute.", "active", "/api/v1/planner/plan"),
+    ("agent_runner",       "R2.4 — End-to-end engine: plan a goal, execute ready steps, halt on first needs_approval/gap/failure. v0 executor dispatches brave_search + chat; more capabilities added incrementally.", "active", "/api/v1/agent/run-goal"),
 ]
 
 
