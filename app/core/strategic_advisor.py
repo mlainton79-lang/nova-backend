@@ -113,7 +113,15 @@ Respond in JSON:
     "tony_commitment": "what Tony commits to doing autonomously this week"
 }}"""
 
-        assessment = await gemini_json(prompt, task="reasoning", max_tokens=1500)
+        # max_tokens=2048: 1500 was right at the edge of Gemini 2.5's
+        # thinking-mode budget — sometimes thoughts=250/output=1250 and the
+        # full 8-field JSON fits, sometimes thoughts=1000/output=500 and
+        # the response truncates mid-string, gemini_json returns None,
+        # and the function silently returns {}. Variance verified live via
+        # the /debug/run-strategic-advisor endpoint: ~50% failure rate at
+        # 1500. 2048 gives the same margin as the meta_cognition fix.
+        # See reference_gemini_truncation_hook.md and project_overnight_substance_audit.md.
+        assessment = await gemini_json(prompt, task="reasoning", max_tokens=2048)
 
         if assessment:
             # Store in living memory
