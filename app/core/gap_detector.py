@@ -132,6 +132,14 @@ async def detect_capability_gap(user_message: str) -> Optional[Dict]:
     """
     Decide: is this a request for a new capability Tony doesn't have?
 
+    R2.3 (2026-06-01): now DETECT-AND-RECORD. When a gap is identified,
+    it is persisted into `capability_gaps` via
+    `app.core.capabilities.log_capability_gap()` before being returned.
+    This decouples detection from acquisition: every gap is captured
+    for later review even if the governor / safe-mode flag refuses to
+    enter the build pipeline. Acquisition (start_autonomous_build) is
+    a separate, governed call.
+
     Returns:
       None if no gap — Tony can handle it with existing tools
       Dict with capability_name, description, rationale if a gap exists
@@ -232,11 +240,25 @@ Respond ONLY with valid JSON:
             print(f"[GAP_DETECTOR] Gap detected but name/description missing — skipping")
             return None
 
-        return {
+        gap = {
             "capability_name": data.get("capability_name"),
             "description": data.get("description"),
             "rationale": data.get("rationale", "")
         }
+
+        # R2.3: detect-and-record. Persist the gap into capability_gaps
+        # so it's visible whether or not the downstream acquisition fires.
+        # Best-effort — failure to record must not interrupt the chat.
+        try:
+            from app.core.capabilities import log_capability_gap
+            log_capability_gap(
+                user_message,
+                proposed_solution=f"{gap['capability_name']}: {gap['description']}",
+            )
+        except Exception as log_err:
+            print(f"[GAP_DETECTOR] log_capability_gap failed: {log_err}")
+
+        return gap
     except Exception as e:
         print(f"[GAP_DETECTOR] Detection failed: {type(e).__name__}: {e}")
         import traceback
@@ -244,20 +266,103 @@ Respond ONLY with valid JSON:
         return None
 
 
-async def start_autonomous_build(capability_name: str, description: str, user_message: str) -> int:
+async def start_autonomous_build(capability_name: str, description: str,
+                                  user_message: str,
+                                  approval_token: Optional[str] = None) -> int:
     """
     Kick off a capability build in the background. Returns a request_id.
     Tony will work on this between conversations.
 
+    R2.3 (2026-06-01): now GOVERNED. Autonomous capability building is
+    a self-modifying action — it writes new code into Nova. Two gates
+    are consulted before Layer 4 staging is entered:
+      1. The R2.1b governor (default-denies self_modify unless an
+         approval_token is supplied OR the synthetic capability spec
+         has approval_required=False).
+      2. The legacy CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED env
+         flag (kept as a belt-and-braces secondary gate).
+
+    Both denials collapse to return -2 so existing callers
+    (chat_stream.py / council.py) don't need to change. The
+    `tony_capability_requests.status` column carries the precise reason
+    (`refused_governor` vs `refused_safe_mode`).
+
     Returns:
        >0  request_id of the staged build
        -1  insert/scheduling failed (see logs)
-       -2  refused: autonomous staging disabled by safe-mode flag
-            (CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED=false). An audit
-            row with status='refused_safe_mode' is still inserted when
-            possible so the refusal is visible in the requests table.
+       -2  refused — either governor denied (no approval_token) or
+            CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED is false. An
+            audit row is still inserted with status='refused_governor'
+            or 'refused_safe_mode' so the refusal is visible in the
+            requests table.
     """
-    # N1.5-A safe-mode gate: refuse before any LLM/Brave cost is incurred.
+    # R2.3 Gate 1: governor consultation. Synthetic capability spec for
+    # the build action — capability_key carries the 'capability_builder'
+    # marker that governor.classify_capability uses to tag self_modify,
+    # so the action class is always self_modify regardless of what the
+    # target capability does. approval_required defaults true; only an
+    # approval_token unlocks the build.
+    try:
+        from app.core.governor import evaluate_action
+        synthetic = {
+            "capability_key": f"capability_builder_run:{capability_name}",
+            "external_effect": False,
+            "risk_level": "critical",
+            "cost_type": "metered",
+            "approval_required": True,
+        }
+        decision = evaluate_action(synthetic, approval_token=approval_token)
+    except Exception as e:
+        # Governor unavailable — fail closed (deny) so we don't silently
+        # bypass the gate when the policy layer itself is broken.
+        print(f"[GAP_DETECTOR] Governor unavailable — denying: {type(e).__name__}: {e}")
+        decision = {"allowed": False, "reason": "governor_unavailable",
+                    "action_class": "self_modify", "requires_approval": True,
+                    "approval_satisfied": False}
+
+    if not decision.get("allowed"):
+        print(f"[GAP_DETECTOR] Governor denied build for '{capability_name}': "
+              f"{decision.get('reason')}")
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO tony_capability_requests
+                    (user_message, capability_name, capability_description,
+                     status, last_error)
+                VALUES (%s, %s, %s, 'refused_governor', %s)
+                RETURNING id
+            """, (user_message, capability_name, description,
+                  f"governor: {decision.get('reason', 'denied')}"))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[GAP_DETECTOR] Failed to log governor refusal: {e}")
+        try:
+            from app.observability import record_run_event, EventSeverity
+            record_run_event(
+                event_type="governor_denied_capability_acquisition",
+                severity=EventSeverity.WARNING,
+                subsystem="governor.acquisition",
+                message=(
+                    f"governor refused capability acquisition for "
+                    f"'{capability_name}': {decision.get('reason')}"
+                ),
+                metadata={
+                    "capability_name": capability_name,
+                    "action_class": decision.get("action_class"),
+                    "reason": decision.get("reason"),
+                    "user_message_chars": len(user_message or ""),
+                },
+            )
+        except Exception:
+            pass
+        return -2
+
+    # R2.3 Gate 2 (legacy belt-and-braces): the safe-mode env flag stays
+    # as a second layer below the governor. If GOVERNOR_ENABLED=false
+    # opens the first gate, this second gate still protects production.
     from app.core.config import CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED
     if not CAPABILITY_BUILDER_AUTONOMOUS_STAGING_ENABLED:
         print(f"[CAPABILITY_BUILDER] Autonomous staging disabled — request for '{capability_name}' refused (safe mode)")
