@@ -80,7 +80,13 @@ Respond in JSON:
 
 If nothing to do: {{"contradictions": [], "to_merge": [], "to_archive": [], "canonical": null}}"""
 
-            result = await gemini_json(consolidation_prompt, task="analysis", max_tokens=512)
+            # max_tokens=2048: 512 was 100% MAX_TOKENS-truncated in production
+            # (thoughts=509, output=0 across every reproduction at the prod
+            # config). Same Gemini 2.5 thinking-mode budget squeeze as the
+            # other silent overnight tasks. See reference_gemini_truncation_hook.md.
+            # build_composite_memories below is intentionally not bumped — it
+            # makes no Gemini call; its empty output is gate-on-input correctness.
+            result = await gemini_json(consolidation_prompt, task="analysis", max_tokens=2048)
 
             if result:
                 # Handle merges
