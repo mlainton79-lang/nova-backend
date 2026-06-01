@@ -181,8 +181,16 @@ async def _execute_step(step: Dict[str, Any],
                 }
 
             accounts_list = ", ".join(accounts)
+            # Chain-aware: if prior steps produced gmail_read results,
+            # inject them as context so the extractor can resolve
+            # "reply to John" → look up John's address rather than
+            # refusing/guessing. The safety rule shifts from "don't
+            # guess" to "look in prior results first, return null only
+            # if not found there."
+            prior_block = _format_prior_results(prior_results)
             extract_prompt = (
-                f"Extract structured email-send parameters from this step "
+                (prior_block if prior_block else "")
+                + f"Extract structured email-send parameters from this step "
                 f"description.\n\n"
                 f"Description: {description}\n\n"
                 f"Available accounts to send FROM (pick exactly one): "
@@ -191,8 +199,11 @@ async def _execute_step(step: Dict[str, Any],
                 f"- `account` must be one of the available accounts above, "
                 f"verbatim.\n"
                 f"- `to` must be a complete valid email address. If the "
-                f"description names a person without an email address, "
-                f"return null for `to` — do NOT guess an address.\n"
+                f"description names a person without an explicit email "
+                f"address, FIRST check the prior step results above for "
+                f"that person's address (e.g. the `from` field of a prior "
+                f"gmail_read result). If found there, use it. If NOT "
+                f"found, return null for `to` — do NOT guess or invent.\n"
                 f"- `subject` and `body` must both be non-empty strings.\n"
                 f"- If ANY field cannot be determined safely, return null "
                 f"for that field rather than guessing.\n\n"
@@ -277,6 +288,7 @@ async def _execute_step(step: Dict[str, Any],
                 },
                 "verified": bool(success),
                 "method": "gmail_send",
+                "used_prior_results": bool(prior_block),
             }
         except Exception as e:
             return {
