@@ -197,10 +197,24 @@ Respond ONLY with valid JSON:
             return None
 
         from app.core import gemini_client
+        # disable thinking-mode: classification is a trivial-shape
+        # decision (is_gap yes/no + a short JSON), not a reasoning task.
+        # Without this, gemini-2.5-flash's thinking-mode consumed the
+        # 512-token budget and emitted just `\`\`\`json` before cutoff,
+        # the parser fell through to "No JSON object found", and gap
+        # detection returned None on every call — silently breaking
+        # the chain into R2.3's detect-and-record + governed acquisition.
+        # Same pattern documented in
+        # reference_gemini_truncation_hook.md (the trivial-shape lesson
+        # from score_conversation / extract_lesson).
         resp = await gemini_client.generate_content(
             tier="flash",
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            generation_config={"maxOutputTokens": 512, "temperature": 0.1},
+            generation_config={
+                "maxOutputTokens": 512,
+                "temperature": 0.1,
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
             timeout=10.0,
             caller_context="gap_detector",
         )
