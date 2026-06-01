@@ -36,24 +36,31 @@ needs_approval step is re-evaluated with the token before execution.
 from typing import Any, Dict, Optional
 
 
-async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
+async def _execute_step(step: Dict[str, Any],
+                         payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Execute one step's underlying capability.
 
     Returns:
       {ok: bool, result: any, verified: bool, method: str, [error: str]}
 
-    For v0 the dispatcher handles two capability_keys:
-      - brave_search: calls app.core.brave_search.brave_search(query)
-      - chat:         calls app.core.model_router.gemini(prompt)
+    Args:
+      step: the planner-produced step dict (description + registry_match)
+      payload: optional caller-supplied dict for structured/binary inputs
+        that can't be extracted from a description (e.g. uploaded photos,
+        CSV files, audio). Capabilities that need such inputs read from
+        this dict by a documented key (e.g. vinted_draft_create reads
+        payload["images"]).
 
-    Unknown capabilities return ok=False with a clear error. Extending
-    the dispatcher is one elif each as more capabilities prove
-    themselves through the engine.
+    Dispatcher branches are one elif each. Adding a new capability is:
+    pick a stable capability_key, write a branch returning the
+    {ok, result, verified, method} contract, optionally read inputs from
+    `payload`. Unknown capabilities return ok=False with a clear error.
     """
     cap = step.get("registry_match") or {}
     capability_key = (cap.get("capability_key") or cap.get("name") or "").strip()
     capability_type = cap.get("capability_type", "")
     description = (step.get("description") or "").strip()
+    payload = payload or {}
 
     if not capability_key:
         return {
@@ -233,6 +240,81 @@ async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
                 "error": f"gmail_send failed: {type(e).__name__}: {e}",
                 "verified": False,
                 "method": "gmail_send",
+            }
+
+    if capability_key == "vinted_draft_create":
+        # Generates a Vinted listing draft from photo(s). This is the first
+        # capability that needs binary input not extractable from a step
+        # description — payload threading was added to execute_plan for this
+        # class of capability.
+        #
+        # Caller passes payload={"images": [{"base64": "...", "mime": "image/jpeg"}, ...]}
+        # OR payload={"image_base64": "...", "image_mime": "image/jpeg"} (single).
+        # Without images the dispatcher refuses cleanly — full_listing_pipeline
+        # would otherwise fall back to "Unknown item" and produce a useless
+        # draft.
+        #
+        # Read-only by registry classification (low risk, no approval needed)
+        # — drafts are local artefacts; nothing is posted externally. The
+        # downstream "actually post to Vinted" capability is the separate
+        # vinted_playwright_operator (status=not_built, approval_required=True).
+        try:
+            images = payload.get("images") or []
+            image_base64 = payload.get("image_base64") or ""
+            image_mime = payload.get("image_mime") or "image/jpeg"
+            user_notes = payload.get("user_notes") or description  # description doubles as notes
+            condition = payload.get("condition") or "good"
+
+            if not images and not image_base64:
+                return {
+                    "ok": False,
+                    "error": (
+                        "vinted_draft_create requires images in the payload "
+                        "(payload.images=[{base64, mime}] or payload.image_base64). "
+                        "Step descriptions cannot carry binary data — caller "
+                        "must supply photos via the run-goal payload field."
+                    ),
+                    "verified": False,
+                    "method": "vinted_draft_create",
+                }
+
+            from app.core.vinted import full_listing_pipeline
+            result = await full_listing_pipeline(
+                image_base64=image_base64,
+                image_mime=image_mime,
+                platform="vinted",
+                condition=condition,
+                user_notes=user_notes,
+                images=images,
+            )
+            listing = (result or {}).get("listing") or {}
+            warnings = (result or {}).get("warnings") or []
+            # Verified = pipeline didn't fall back AND produced a non-Unknown title
+            verified = (
+                "vision_identification" not in warnings
+                and bool(listing.get("title"))
+                and listing.get("title", "").lower() != "unknown item"
+            )
+            return {
+                "ok": bool(listing),
+                "result": {
+                    "title": (listing.get("title") or "")[:120],
+                    "description_chars": len(listing.get("description") or ""),
+                    "price": listing.get("price"),
+                    "category": listing.get("category"),
+                    "condition": listing.get("condition"),
+                    "warnings": warnings,
+                    "fallbacks_used": warnings,
+                },
+                "verified": verified,
+                "method": "vinted_draft_create",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"vinted_draft_create failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "vinted_draft_create",
             }
 
     if capability_key == "calendar_read":
@@ -470,6 +552,7 @@ async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
 async def execute_plan(
     plan: Dict[str, Any],
     approval_token: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute a plan produced by app.core.goal_planner.plan_goal.
 
@@ -562,7 +645,7 @@ async def execute_plan(
             break
 
         # --- Execute -------------------------------------------------------
-        outcome = await _execute_step(step)
+        outcome = await _execute_step(step, payload=payload)
         executed_steps.append({
             **step,
             "execution": outcome,
@@ -615,16 +698,22 @@ def _emit_execution_event(trace: Dict[str, Any]) -> None:
         pass
 
 
-async def run_goal(goal_text: str, approval_token: Optional[str] = None) -> Dict[str, Any]:
+async def run_goal(
+    goal_text: str,
+    approval_token: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Compose: plan_goal → execute_plan. The full end-to-end loop.
 
+    Args:
+      goal_text: natural-language goal
+      approval_token: optional non-empty string greenlighting external-effect
+        and self-modify class steps (see app/core/governor.py)
+      payload: optional dict for structured/binary step inputs (see
+        _execute_step). Threads through to each step's dispatcher.
+
     Returns:
-      {
-        ok: bool,
-        plan: <the plan dict from goal_planner.plan_goal>,
-        execution: <the trace from execute_plan>,
-        error: str | None,
-      }
+      {ok, plan, execution, error}
     """
     try:
         from app.core.goal_planner import plan_goal
@@ -645,7 +734,7 @@ async def run_goal(goal_text: str, approval_token: Optional[str] = None) -> Dict
             "error": plan.get("error") or "plan produced no steps",
         }
 
-    execution = await execute_plan(plan, approval_token=approval_token)
+    execution = await execute_plan(plan, approval_token=approval_token, payload=payload)
     return {
         "ok": execution.get("ok", False),
         "plan": plan,

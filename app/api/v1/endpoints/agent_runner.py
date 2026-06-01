@@ -35,6 +35,13 @@ router = APIRouter()
 class RunGoalRequest(BaseModel):
     goal: str
     approval_token: Optional[str] = None
+    # Optional structured/binary inputs that step dispatchers can read by
+    # documented keys. Examples: {"images": [{"base64": ..., "mime": ...}]}
+    # for vinted_draft_create; {"csv_base64": "..."} for a future CSV
+    # capability. Plan-step descriptions can't carry binary data, so
+    # payload threads them through the executor to the dispatchers that
+    # need them.
+    payload: Optional[dict] = None
 
 
 @router.post("/agent/run-goal")
@@ -42,4 +49,8 @@ async def agent_run_goal(body: RunGoalRequest, _=Depends(verify_token)):
     """End-to-end: plan → execute → return trace (or paused state)."""
     if not body.goal or not body.goal.strip():
         raise HTTPException(status_code=400, detail="goal is required and must be non-empty")
-    return await run_goal(body.goal, approval_token=body.approval_token)
+    return await run_goal(
+        body.goal,
+        approval_token=body.approval_token,
+        payload=body.payload,
+    )
