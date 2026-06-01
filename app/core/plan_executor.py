@@ -242,6 +242,51 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "gmail_send",
             }
 
+    if capability_key == "vision_image":
+        # Analyse an image with Gemini Vision. Read-only — vision analysis
+        # doesn't mutate anything external. Reads image from payload the
+        # same way vinted_draft_create does (images[0] OR image_base64).
+        # The step description doubles as the vision prompt — what should
+        # Tony look for / report on. Returns the analysis text.
+        try:
+            from app.core.vision import tony_see
+            images = payload.get("images") or []
+            if images:
+                first = images[0] if isinstance(images[0], dict) else {}
+                image_base64 = first.get("base64") or ""
+                image_mime = first.get("mime") or "image/jpeg"
+            else:
+                image_base64 = payload.get("image_base64") or ""
+                image_mime = payload.get("image_mime") or "image/jpeg"
+
+            if not image_base64:
+                return {
+                    "ok": False,
+                    "error": (
+                        "vision_image requires an image in the payload "
+                        "(payload.images=[{base64, mime}] or payload.image_base64). "
+                        "Step descriptions cannot carry binary data."
+                    ),
+                    "verified": False,
+                    "method": "vision_image",
+                }
+
+            prompt = description or "Describe what's in this image. Be specific about objects, text, colours, and condition."
+            text = await tony_see(image_base64, prompt, image_mime)
+            return {
+                "ok": bool(text),
+                "result": (text or "")[:2000],
+                "verified": bool(text and text.strip() and "error" not in (text or "").lower()[:80]),
+                "method": "vision_image",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"vision_image failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "vision_image",
+            }
+
     if capability_key == "vinted_draft_create":
         # Generates a Vinted listing draft from photo(s). This is the first
         # capability that needs binary input not extractable from a step
