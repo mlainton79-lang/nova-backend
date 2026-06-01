@@ -235,6 +235,188 @@ async def _execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
                 "method": "gmail_send",
             }
 
+    if capability_key == "calendar_read":
+        # Read-only: upcoming events from the first connected Gmail account
+        # (calendar uses the same OAuth tokens with calendar scope). Returns
+        # compact event summary suitable for downstream chat/summarise steps.
+        try:
+            from app.core.gmail_service import get_all_accounts
+            from app.core.calendar_service import get_upcoming_events
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no connected accounts — calendar uses Gmail OAuth tokens",
+                    "verified": False,
+                    "method": "calendar_read",
+                }
+            account = accounts[0]
+            events = await get_upcoming_events(account, days=7)
+            summary = [
+                {
+                    "title": e.get("title") or e.get("summary") or "(no title)",
+                    "start": (e.get("start") or "")[:19],
+                    "end": (e.get("end") or "")[:19],
+                    "location": (e.get("location") or "")[:80],
+                }
+                for e in (events or [])[:10]
+            ]
+            return {
+                "ok": True,
+                "result": {"account": account, "events": summary, "count": len(events or [])},
+                "verified": len(summary) > 0,
+                "method": "calendar_read",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"calendar_read failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "calendar_read",
+            }
+
+    if capability_key == "calendar_write":
+        # Three-layer safety, same pattern as gmail_send:
+        #   1. Registry: external_effect=True, approval_required=True
+        #      (set by seed_capabilities_v1) → governor default-denies
+        #      without approval_token.
+        #   2. LLM extraction of {account, title, start_iso, end_iso,
+        #      description?, location?} with disable_thinking=True
+        #      (trivial-shape JSON, no reasoning needed).
+        #   3. Strict validation before create_event: account in connected
+        #      accounts; start_iso and end_iso parse as datetimes; end >
+        #      start; title non-empty. Any failure → clean refusal with
+        #      the named failing field. No fabricated event creation.
+        try:
+            from app.core.gmail_service import get_all_accounts
+            from app.core.calendar_service import create_event
+            from app.core.model_router import gemini_json
+            from datetime import datetime
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no connected accounts — calendar uses Gmail OAuth tokens",
+                    "verified": False,
+                    "method": "calendar_write",
+                }
+            accounts_list = ", ".join(accounts)
+
+            extract_prompt = (
+                f"Extract structured calendar-event-creation parameters from "
+                f"this step description.\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts (calendar uses Gmail OAuth — pick one): "
+                f"{accounts_list}\n\n"
+                f"Today's date: {datetime.utcnow().strftime('%Y-%m-%d')} (UTC)\n\n"
+                f"Rules:\n"
+                f"- `account` must be one of the available accounts, verbatim.\n"
+                f"- `start_iso` and `end_iso` MUST be full ISO 8601 datetimes "
+                f"like '2026-06-02T15:00:00'. If the description gives "
+                f"relative times (e.g. 'tomorrow 3pm'), resolve them against "
+                f"today's date above. End must be after start.\n"
+                f"- `title` must be a non-empty string.\n"
+                f"- `description` and `location` are optional — return empty "
+                f"strings if not mentioned.\n"
+                f"- If ANY required field cannot be determined safely, "
+                f"return null for that field rather than guessing.\n\n"
+                f"Respond in JSON:\n"
+                f'{{"account": "<account>", "title": "<title>", '
+                f'"start_iso": "<YYYY-MM-DDTHH:MM:SS>", '
+                f'"end_iso": "<YYYY-MM-DDTHH:MM:SS>", '
+                f'"description": "<optional desc>", '
+                f'"location": "<optional location>"}}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=1024,
+                disable_thinking=True,
+            )
+
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "calendar_write",
+                }
+
+            account = (params.get("account") or "").strip()
+            title = (params.get("title") or "").strip()
+            start_iso = (params.get("start_iso") or "").strip()
+            end_iso = (params.get("end_iso") or "").strip()
+            desc = (params.get("description") or "").strip()
+            location = (params.get("location") or "").strip()
+
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"extracted account '{account}' is not in connected "
+                        f"accounts — refusing. Available: {accounts_list}"
+                    ),
+                    "verified": False,
+                    "method": "calendar_write",
+                    "extracted": {"account": account, "title": title,
+                                  "start_iso": start_iso, "end_iso": end_iso},
+                }
+            if not title:
+                return {
+                    "ok": False,
+                    "error": "extracted title is empty — refusing to create event",
+                    "verified": False,
+                    "method": "calendar_write",
+                }
+            try:
+                start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"start_iso/end_iso did not parse as ISO datetimes "
+                        f"(got start={start_iso!r}, end={end_iso!r}) — "
+                        f"refusing to create event"
+                    ),
+                    "verified": False,
+                    "method": "calendar_write",
+                }
+            if end_dt <= start_dt:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"end ({end_iso}) is not after start ({start_iso}) "
+                        f"— refusing to create event"
+                    ),
+                    "verified": False,
+                    "method": "calendar_write",
+                }
+
+            result = await create_event(account, title, start_iso, end_iso,
+                                        description=desc, location=location)
+            success = bool(result.get("ok"))
+            return {
+                "ok": success,
+                "result": {
+                    "account": account,
+                    "title": title,
+                    "start": start_iso,
+                    "end": end_iso,
+                    "created": success,
+                    "calendar_api_response": (result.get("event") or {}).get("id")
+                                              or result.get("error", "")[:200],
+                },
+                "verified": success,
+                "method": "calendar_write",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"calendar_write failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "calendar_write",
+            }
+
     if capability_key == "gmail_read":
         # Reads across all connected Gmail accounts via search_all_accounts,
         # which internally calls build_smart_query to translate NL→Gmail

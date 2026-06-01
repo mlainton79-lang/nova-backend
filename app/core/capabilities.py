@@ -418,7 +418,10 @@ def deprecate_capability(capability_key: str, reason: Optional[str] = None) -> b
     """Mark a capability deprecated without deleting history.
 
     Sets deprecated_at = NOW() and appends `reason` to notes if provided.
-    Returns True if a row was updated.
+    Idempotent: the WHERE clause only matches rows that aren't already
+    deprecated, so calling this from a boot-time seed won't keep
+    refreshing the deprecated_at timestamp on every restart. Returns
+    True only if a row was actually flipped (False = no-op or no row).
     """
     conn = get_conn()
     try:
@@ -431,12 +434,14 @@ def deprecate_capability(capability_key: str, reason: Optional[str] = None) -> b
                             notes = COALESCE(notes, '') || %s,
                             updated_at = NOW()
                         WHERE capability_key = %s
+                          AND deprecated_at IS NULL
                     """, (f"\n[deprecated {reason}]", capability_key))
                 else:
                     cur.execute("""
                         UPDATE tony_capabilities
                         SET deprecated_at = NOW(), updated_at = NOW()
                         WHERE capability_key = %s
+                          AND deprecated_at IS NULL
                     """, (capability_key,))
                 return cur.rowcount > 0
     finally:

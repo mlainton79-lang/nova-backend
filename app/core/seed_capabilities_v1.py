@@ -121,16 +121,35 @@ CAPABILITIES_V1 = [
         "endpoint": "/api/v1/gmail/send",
         "notes": "Metadata corrected R2.4+ (2026-06-01). Plan executor dispatcher requires approval_token; extracts {account,to,subject,body} via gemini_json, validates account is connected + to is a valid email + all fields non-empty before calling send_email.",
     },
+    # R2.4+ calendar split: the legacy calendar_read_write lumped read AND
+    # write under one capability_key with approval_required=False — which
+    # meant the governor would let create_event fire without approval.
+    # Split below into calendar_read (truly read-only) and calendar_write
+    # (external_effect, gated). The lumped row is deprecated at the bottom
+    # of run_once so the planner no longer sees it.
     {
-        "name": "calendar_read_write",
-        "description": "Read schedule and create calendar events.",
+        "name": "calendar_read",
+        "description": "Read upcoming events / today's schedule from a connected Google Calendar (uses Gmail OAuth with calendar scope).",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "endpoint": "/api/v1/calendar/today",
+        "notes": "R2.4+ — read-only half of the former calendar_read_write. Calls calendar_service.get_upcoming_events / get_todays_schedule.",
+    },
+    {
+        "name": "calendar_write",
+        "description": "Create a calendar event in a connected Google Calendar. Requires governor approval per call — external_effect.",
         "status": "active",
         "runner": "backend_python",
         "risk_level": "medium",
-        "approval_required": False,
+        "approval_required": True,
+        "external_effect": True,
         "cost_type": "free",
         "endpoint": "/api/v1/calendar/today",
-        "notes": "Shipped. Reuses Gmail OAuth tokens with calendar scope. Tony reads schedule, creates events.",
+        "notes": "R2.4+ — write half of the former calendar_read_write. Governor default-denies without approval_token. Plan executor dispatcher extracts {account, title, start_iso, end_iso} via gemini_json, validates, then calls calendar_service.create_event.",
     },
     {
         "name": "proactive_alerts",
@@ -258,3 +277,17 @@ def run_once():
         print(f"[CAPABILITIES_V1] Seeded {len(CAPABILITIES_V1)} capabilities")
     except Exception as e:
         print(f"[CAPABILITIES_V1] Seed failed: {e}")
+
+    # R2.4+ idempotent retirements: capabilities that have been split or
+    # replaced by more precise registry entries. deprecate_capability's
+    # WHERE clause skips already-deprecated rows so this is a no-op on
+    # subsequent boots.
+    try:
+        from app.core.capabilities import deprecate_capability
+        for retired, reason in [
+            ("calendar_read_write", "split into calendar_read + calendar_write (R2.4+)"),
+        ]:
+            if deprecate_capability(retired, reason=reason):
+                print(f"[CAPABILITIES_V1] Retired '{retired}' — {reason}")
+    except Exception as e:
+        print(f"[CAPABILITIES_V1] Retirement step failed: {e}")
