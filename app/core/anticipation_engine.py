@@ -105,7 +105,12 @@ Respond in JSON:
 
 If nothing urgent: {{"urgent_unresolved": []}}"""
 
-                result = await gemini_json(prompt, task="reasoning", max_tokens=400)
+                # max_tokens=2048: 400 was 100% MAX_TOKENS-truncated in
+                # production (thoughts=397, output=0 across every reproduction
+                # at the prod config). Same Gemini 2.5 thinking-mode budget
+                # squeeze as meta_cognition / strategic_advisor / pattern_analysis.
+                # See reference_gemini_truncation_hook.md.
+                result = await gemini_json(prompt, task="reasoning", max_tokens=2048)
                 if result:
                     for item in result.get("urgent_unresolved", [])[:2]:
                         insights.append({
@@ -126,7 +131,16 @@ async def anticipate_from_email_patterns() -> List[Dict]:
 
 
 async def run_anticipation_engine() -> List[Dict]:
-    """Full anticipation run. Returns insights that need surfacing."""
+    """Full anticipation run. Returns insights that need surfacing.
+
+    Sub-function status at the 01:00 UTC nightly cron:
+    - anticipate_shift_needs: time-gated to 17-19 UTC, never fires from this
+      cron. Live only when the 6h web autonomous loop happens to run inside
+      that window. Not refactored — that's design scope.
+    - check_unresolved_threads: the active path; max_tokens fixed 2026-06-01.
+    - anticipate_from_email_patterns: always returns []. Intentional dead
+      code per its docstring; left in place for the function shape.
+    """
     all_insights = []
     
     try:
