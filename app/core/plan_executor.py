@@ -567,6 +567,34 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "memory_save",
             }
 
+    if capability_key == "diary_read":
+        # Pure read of Tony's auto-written diary for the last 7 days.
+        # The diary entries are written by the think_worker cron each
+        # night based on the day's conversations (see tony_diary.
+        # write_todays_entry). Each row has observations, concerns,
+        # followups, and a mood read — downstream chat/reason steps
+        # can pattern-match across days.
+        try:
+            from app.core.tony_diary import get_recent_diary
+            entries = get_recent_diary(days=7) or []
+            return {
+                "ok": True,
+                "result": {
+                    "entries": entries,
+                    "count": len(entries),
+                    "days_covered": 7,
+                },
+                "verified": len(entries) > 0,
+                "method": "diary_read",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"diary_read failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "diary_read",
+            }
+
     if capability_key == "goal_list":
         # Pure read of Matthew's active goals from tony_goals. The
         # ordering inside get_active_goals (urgent → high → normal →
