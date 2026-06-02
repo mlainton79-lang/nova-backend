@@ -312,6 +312,93 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "gemini_reason",
             }
 
+    if capability_key == "memory_save":
+        # Persist a new memory. LLM extracts {text, category} from the
+        # step description so the saved row is the FACT itself, not the
+        # planner's preamble ("Save to memory that X" → text="X"). The
+        # underlying add_semantic_memory dedupes by exact text match
+        # AND embeds for downstream cosine search.
+        try:
+            from app.core.semantic_memory import add_semantic_memory
+            from app.core.model_router import gemini_json
+
+            allowed_cats = ("family", "preferences", "work", "health", "personal", "fact", "auto")
+            extract_prompt = (
+                _format_prior_results(prior_results)
+                + "Extract the FACT to remember from this step description.\n\n"
+                f"Description: {description}\n\n"
+                "Rules:\n"
+                "- `text` is the factual content TO REMEMBER, NOT the "
+                "planner's instruction. Strip preamble like 'remember "
+                "that', 'save to memory', 'note that', etc. Save the "
+                "underlying fact as a self-contained statement.\n"
+                f"- `category` is one of: {', '.join(allowed_cats)}. "
+                "Pick the best fit; default to 'auto' if uncertain.\n"
+                "- If the description has no extractable fact (e.g. it's "
+                "a meta-instruction with no content), return text=null.\n\n"
+                "Respond in JSON:\n"
+                '{"text": "<fact_or_null>", "category": "<one_of_allowed>"}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=512,
+                disable_thinking=True,
+            )
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "memory_save",
+                }
+            text = (params.get("text") or "").strip()
+            category = (params.get("category") or "auto").strip().lower()
+            if category not in allowed_cats:
+                category = "auto"
+            if not text:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extractor returned no fact text — refusing to "
+                        "save. Either the description has no concrete "
+                        "fact or the extractor couldn't isolate one."
+                    ),
+                    "verified": False,
+                    "method": "memory_save",
+                    "extracted": {"text": params.get("text"), "category": category},
+                }
+
+            saved = await add_semantic_memory(category=category, text=text, importance=1.0)
+            if not saved:
+                return {
+                    "ok": False,
+                    "error": (
+                        "add_semantic_memory returned False — either a "
+                        "near-duplicate already exists (semantically "
+                        "still satisfied) or the write failed. Check "
+                        "observability events under memory.semantic_memories."
+                    ),
+                    "verified": False,
+                    "method": "memory_save",
+                    "attempted": {"text": text[:200], "category": category},
+                }
+            return {
+                "ok": True,
+                "result": {
+                    "saved_text": text[:300],
+                    "category": category,
+                    "importance": 1.0,
+                },
+                "verified": True,
+                "method": "memory_save",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"memory_save failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "memory_save",
+            }
+
     if capability_key == "memory_recall":
         # Semantic search over Tony's persistent memory. The step
         # description IS the query — pgvector cosine similarity

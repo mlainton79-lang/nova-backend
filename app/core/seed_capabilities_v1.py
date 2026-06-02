@@ -48,6 +48,17 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ (2026-06-02): added backend dispatcher branch in plan_executor. Calls selling.drafts.get_draft(draft_id) and returns compact summary {title, description_chars, price, condition, image_count, status, warnings} for downstream chat/reason. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results. Android UI piece unchanged (Stage 2d, commit b88614c).",
     },
     {
+        "name": "memory_save",
+        "description": "Persist a new memory to Tony's semantic_memories table. Symmetric write pair to memory_recall — enables goal-driven autonomous learning loops where Tony's plans can decide to remember new facts surfaced during execution. LLM extracts {text, category} from the step description; add_semantic_memory deduplicates by exact-text match and embeds for downstream cosine search.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.semantic_memory.add_semantic_memory(category, text, importance=1.0). Internal write — governor classifies as internal_write (not in APPROVAL_REQUIRED_CLASSES), allowed without approval. One wrong memory has minimal blast radius: recall surfaces top-10 by similarity, so a polluted single row is downweighted naturally.",
+    },
+    {
         "name": "memory_recall",
         "description": "Semantic search over Tony's persistent memory (semantic_memories table, pgvector cosine similarity). Returns the top-k most relevant memories for a given query — useful for personalisation context ('what do I prefer for X?'), history lookups ('when did I last mention Y?'), and recall-then-reason chains.",
         "status": "active",
