@@ -366,8 +366,19 @@ async def _execute_step(step: Dict[str, Any],
                         parts.append(t)
                 text_source = "\n\n".join(parts)[:6000]
 
+            # Fallbacks for when there are no prior_results to draw
+            # from: try description, then goal_text. The planner often
+            # paraphrases concrete content out of step descriptions
+            # (same failure mode that bit vinted_draft_review's id
+            # extraction), so the original goal is the more reliable
+            # haystack when the user put the fact-source text directly
+            # in their goal.
             if not text_source.strip():
                 text_source = (description or "").strip()
+            if not text_source or len(text_source) < 80:
+                gt = (goal_text or "").strip()
+                if gt and len(gt) > len(text_source):
+                    text_source = gt
 
             if not text_source:
                 return {
