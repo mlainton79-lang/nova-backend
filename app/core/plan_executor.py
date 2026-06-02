@@ -569,20 +569,61 @@ async def _execute_step(step: Dict[str, Any],
 
     if capability_key == "diary_read":
         # Pure read of Tony's auto-written diary for the last 7 days.
-        # The diary entries are written by the think_worker cron each
-        # night based on the day's conversations (see tony_diary.
-        # write_todays_entry). Each row has observations, concerns,
-        # followups, and a mood read — downstream chat/reason steps
-        # can pattern-match across days.
+        #
+        # Source: the `tony_journal` table, populated nightly by the
+        # think_worker cron's `daily_reflection` task (calls
+        # tony_journal.write_daily_reflection). Each row has title +
+        # free-form content + entry_type + created_at.
+        #
+        # Two-tables history (2026-06-02 investigation): a sibling
+        # `tony_diary_entries` table exists from a planned
+        # successor system with structured observations/concerns/
+        # followups/mood_read columns, but its write path (tony_diary.
+        # write_todays_entry) is never invoked by the cron — table is
+        # empty. The dispatcher's first ship pointed at the empty
+        # table; corrected here to point at the populated one. The
+        # tech debt of two parallel systems is captured for follow-up;
+        # for the engine's purposes, `tony_journal` is the source of
+        # truth today.
         try:
-            from app.core.tony_diary import get_recent_diary
-            entries = get_recent_diary(days=7) or []
+            import psycopg2
+            import os as _os
+            conn = psycopg2.connect(_os.environ["DATABASE_URL"], sslmode="require")
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    SELECT id, entry_type, title, content, created_at
+                    FROM tony_journal
+                    WHERE created_at > NOW() - INTERVAL '7 days'
+                    ORDER BY created_at DESC
+                    LIMIT 10
+                    """
+                )
+                rows = cur.fetchall()
+                entries = [
+                    {
+                        "id": r[0],
+                        "entry_type": r[1],
+                        "title": r[2],
+                        "content": (r[3] or "")[:2000],
+                        "created_at": str(r[4]),
+                    }
+                    for r in rows
+                ]
+            finally:
+                try:
+                    cur.close()
+                    conn.close()
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "result": {
                     "entries": entries,
                     "count": len(entries),
                     "days_covered": 7,
+                    "source_table": "tony_journal",
                 },
                 "verified": len(entries) > 0,
                 "method": "diary_read",

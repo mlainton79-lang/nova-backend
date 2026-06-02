@@ -16,14 +16,14 @@ from app.core.capabilities import upsert_capability
 CAPABILITIES_V1 = [
     {
         "name": "diary_read",
-        "description": "Read Tony's auto-written diary entries (observations, concerns, followups, mood reads) for the last 7 days. The diary is written nightly by the think_worker cron (`write_todays_entry`) based on the day's conversations. Use for goals like 'what did I do this week', 'any patterns in my mood', 'what was I worried about', 'remind me what we talked about'. Read-only — does NOT write or modify entries.",
+        "description": "Read Tony's auto-written daily reflections for the last 7 days. Each entry has a date, title, and free-form content written by the think_worker cron's daily_reflection task. Use for goals like 'what did I do this week', 'what was I reflecting on', 'remind me what we talked about', 'any patterns in my recent thinking'. Read-only — does NOT write or modify entries.",
         "status": "active",
         "runner": "backend_python",
         "risk_level": "low",
         "approval_required": False,
         "external_effect": False,
         "cost_type": "free",
-        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.tony_diary.get_recent_diary(days=7). Returns the structured list so downstream chat/reason steps can pattern-match across days. Future enhancement: LLM-extracted `days` parameter (yesterday/last week/last month). Sibling write capability (write_diary_entry) is the cron's job and is deliberately NOT exposed to the planner.",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Reads from `tony_journal` (the table the daily_reflection cron actually writes to). A sibling `tony_diary_entries` table exists with a planned successor schema (structured observations/concerns/followups/mood_read columns) but its write path is never invoked by the cron — empty as of 2026-06-02 investigation. Dispatcher's first ship pointed at the empty table; corrected to the populated one. Two-parallel-systems tech debt captured for follow-up.",
     },
     {
         "name": "goal_list",
