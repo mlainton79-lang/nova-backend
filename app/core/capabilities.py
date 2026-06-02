@@ -36,6 +36,135 @@ def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 
+# ── Destructive-name registry assertion ─────────────────────────────────
+# Codex review follow-up (2026-06-02): any capability whose key contains
+# a destructive-verb token MUST declare either external_effect=True or
+# approval_required=True so the governor gates it. Enforced at write
+# time (register_capability) so future additions cannot silently land
+# ungated. Code-review convention alone was deemed too easy to miss.
+#
+# Review: nova-docs/ops/reviews/2026-06-02/codex-review-governor-
+# destructive-gate-final.md
+
+_DESTRUCTIVE_VERB_TOKENS = frozenset(
+    {"delete", "archive", "trash", "purge", "remove", "drop"}
+)
+
+# Legacy-data escape hatch — capability_keys that match the destructive
+# pattern but are genuinely non-destructive (e.g. a verb in the noun
+# position). Empty today: a 2026-06-02 audit of the live registry found
+# all four matching keys (gmail_delete, gmail_delete_permanent,
+# calendar_delete, vinted_draft_archive) already correctly gated.
+# Populate with care and a comment explaining each entry.
+_DESTRUCTIVE_GATING_ALLOWLIST: frozenset = frozenset()
+
+
+def is_destructive_key(capability_key: Optional[str]) -> bool:
+    """True if any token in capability_key matches a destructive verb.
+
+    Token-based check so 'dropdown_select' / 'decoration_apply' don't
+    false-positive on substring matches of 'drop' / 'delete'. Splits
+    the key on underscores (the canonical separator) and looks for
+    exact-token hits.
+    """
+    if not capability_key:
+        return False
+    tokens = capability_key.lower().split("_")
+    return any(t in _DESTRUCTIVE_VERB_TOKENS for t in tokens)
+
+
+def _assert_destructive_gated(
+    capability_key: str,
+    external_effect: bool,
+    approval_required: bool,
+) -> None:
+    """Raises ValueError if capability_key looks destructive but is
+    neither external_effect=True nor approval_required=True.
+
+    This is the structural guard against future destructive capabilities
+    silently landing ungated — the exact failure mode that produced the
+    2026-06-02 vinted_draft_archive incident. The convention: any
+    capability whose key contains delete / archive / trash / purge /
+    remove / drop must opt into one or both of the gating flags.
+
+    If a capability legitimately matches the pattern but is non-
+    destructive in practice, add its capability_key to
+    _DESTRUCTIVE_GATING_ALLOWLIST with a comment explaining why.
+    """
+    if not is_destructive_key(capability_key):
+        return
+    if capability_key in _DESTRUCTIVE_GATING_ALLOWLIST:
+        return
+    if external_effect or approval_required:
+        return
+    raise ValueError(
+        f"capability_key {capability_key!r} matches the destructive-name "
+        f"pattern (tokens include one of: "
+        f"{sorted(_DESTRUCTIVE_VERB_TOKENS)}) but declares neither "
+        f"external_effect=True nor approval_required=True. The governor "
+        f"would auto-allow this capability without an approval token. "
+        f"Set external_effect=True (if it touches an external system) "
+        f"or approval_required=True (for internal destructive actions — "
+        f"opts into the governor's registry_opt_in path), OR add the "
+        f"capability_key to _DESTRUCTIVE_GATING_ALLOWLIST in "
+        f"capabilities.py if it's genuinely non-destructive despite the "
+        f"name. See the 2026-06-02 governor destructive-gate review for "
+        f"context."
+    )
+
+
+def audit_destructive_gating() -> List[Dict[str, Any]]:
+    """Scan the live `tony_capabilities` table for rows whose key
+    matches the destructive-name pattern but which are NOT currently
+    gated (i.e. would pass register_capability today only because the
+    assertion is new). Returns a list of violations; empty list means
+    the live registry is consistent with the convention.
+
+    Used as a one-shot operator sweep — does NOT mutate state. Run
+    after deploying the assertion to confirm no legacy data needs
+    a migration or an allowlist entry.
+    """
+    violations: List[Dict[str, Any]] = []
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT capability_key, risk_level, external_effect,
+                           approval_required, status
+                    FROM tony_capabilities
+                    WHERE status = 'active'
+                    """
+                )
+                for row in cur.fetchall():
+                    key, risk, ext, appr, status = row
+                    if not is_destructive_key(key):
+                        continue
+                    if key in _DESTRUCTIVE_GATING_ALLOWLIST:
+                        continue
+                    if bool(ext) or bool(appr):
+                        continue
+                    violations.append({
+                        "capability_key": key,
+                        "risk_level": risk,
+                        "external_effect": bool(ext),
+                        "approval_required": bool(appr),
+                        "status": status,
+                    })
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        # Best-effort sweep — DB unreachable is an operational concern,
+        # not a violation. Surface it so the caller can distinguish
+        # "nothing to fix" from "couldn't check".
+        return [{"error": f"{type(e).__name__}: {e}"}]
+    return violations
+
+
 # ── Canonical column list (returned with both old and new keys) ───────────
 _CANONICAL_COLUMNS = (
     "capability_key, display_name, description, status, capability_type, "
@@ -275,7 +404,20 @@ def register_capability(
     Use this for all canonical writes. Existing facade functions
     (create_capability / upsert_capability) translate the legacy kwarg
     shape onto this signature.
+
+    Enforces the destructive-name convention: if `capability_key`
+    contains a destructive-verb token (delete/archive/trash/purge/
+    remove/drop) and is neither external_effect nor approval_required,
+    raises ValueError with guidance. The governor would auto-allow
+    such a capability and that's exactly the 2026-06-02 incident we
+    don't want to repeat. Explicit exceptions go in
+    _DESTRUCTIVE_GATING_ALLOWLIST.
     """
+    _assert_destructive_gated(
+        capability_key=capability_key,
+        external_effect=external_effect,
+        approval_required=approval_required,
+    )
     conn = get_conn()
     try:
         with conn:
@@ -565,6 +707,13 @@ def upsert_capability(name: str, description: str, status: str = "active", **kw)
 def update_capability(name: str, **fields) -> bool:
     """Legacy facade — update by capability_key. Whitelisted columns only.
     Returns True if a row was updated, False if name not found.
+
+    If the update sets external_effect or approval_required, the
+    destructive-name assertion is re-checked against the post-update
+    values to prevent flipping a destructive-keyed row from gated to
+    ungated. Fields not touched by the update default to True (safe
+    side — assume the existing row is gated) so the assertion only
+    fails when the update itself would un-gate a destructive row.
     """
     canonical = _map_legacy_kwargs(fields)
     # description is updatable here but not in _map_legacy_kwargs's allowlist
@@ -572,6 +721,20 @@ def update_capability(name: str, **fields) -> bool:
         canonical["description"] = fields["description"]
     if not canonical:
         return False
+
+    # Re-check destructive-name gating when either gate field is being
+    # set. Read what's NOT in the update from the existing row so we
+    # evaluate the post-update state, not just the partial diff.
+    if "external_effect" in canonical or "approval_required" in canonical:
+        if is_destructive_key(name) and name not in _DESTRUCTIVE_GATING_ALLOWLIST:
+            existing = get_capability(name) or {}
+            new_external = canonical.get("external_effect", existing.get("external_effect", False))
+            new_approval = canonical.get("approval_required", existing.get("approval_required", False))
+            _assert_destructive_gated(
+                capability_key=name,
+                external_effect=bool(new_external),
+                approval_required=bool(new_approval),
+            )
 
     set_parts: List[str] = []
     values: List[Any] = []
