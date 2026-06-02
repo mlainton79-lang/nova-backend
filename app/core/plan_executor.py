@@ -329,21 +329,42 @@ async def _execute_step(step: Dict[str, Any],
             from app.core.fact_extractor import extract_facts_from_text
             import json as _json
 
+            # Source extraction: prefer raw-text fields over JSON
+            # wrappers. web_fetch returns {url, content_chars, content}
+            # — passing the whole dict JSON-wrapped to the LLM hides the
+            # actual page text in escaped JSON noise. Look for common
+            # content-keyed string fields first (content, text, body,
+            # snippet); fall back to JSON-dump only when there's no
+            # natural text field.
+            _TEXT_KEYS = ("content", "text", "body", "snippet", "message")
+
+            def _extract_text(result: Any) -> str:
+                if isinstance(result, str):
+                    return result
+                if isinstance(result, dict):
+                    for k in _TEXT_KEYS:
+                        v = result.get(k)
+                        if isinstance(v, str) and v.strip():
+                            return v
+                    try:
+                        return _json.dumps(result, default=str)
+                    except Exception:
+                        return str(result)
+                if isinstance(result, list):
+                    pieces = [_extract_text(item) for item in result]
+                    return "\n".join(p for p in pieces if p)
+                if result is not None:
+                    return str(result)
+                return ""
+
             text_source = ""
             if prior_results:
                 parts = []
                 for r in prior_results:
-                    result = r.get("result")
-                    if isinstance(result, str):
-                        parts.append(result)
-                    elif isinstance(result, (dict, list)):
-                        try:
-                            parts.append(_json.dumps(result, default=str))
-                        except Exception:
-                            parts.append(str(result))
-                    elif result is not None:
-                        parts.append(str(result))
-                text_source = "\n\n".join(p for p in parts if p)[:6000]
+                    t = _extract_text(r.get("result"))
+                    if t:
+                        parts.append(t)
+                text_source = "\n\n".join(parts)[:6000]
 
             if not text_source.strip():
                 text_source = (description or "").strip()
