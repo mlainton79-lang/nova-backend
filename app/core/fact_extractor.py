@@ -137,11 +137,14 @@ async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
     callers (memory_save dispatcher, save_facts) can consume either
     interchangeably.
 
-    Unlike `extract_facts`, this version doesn't bias toward Matthew-
-    related facts — the input may be about any topic.
+    Routed through `model_router.gemini_json` with `disable_thinking=True`
+    — the JSON-array shape is trivial enough that flash's thinking-mode
+    just burns output budget and returns empty (proven by 2026-06-02
+    litmus where the direct gemini_client path returned [] even on a
+    six-fact description). disable_thinking is the same pattern as
+    gmail_send / calendar_write / vinted_draft_review use.
     """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key or not text or not text.strip():
+    if not text or not text.strip():
         return []
 
     prompt = (
@@ -151,7 +154,7 @@ async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
         "- Explicitly stated in the text (not inferred, not assumed)\n"
         "- Concrete and self-contained (would still make sense out of context)\n"
         "- NOT trivial (don't extract things like 'the page has a title')\n\n"
-        "Return STRICT JSON: an array of "
+        "Return STRICT JSON: an object with a `facts` array of "
         '{"subject", "predicate", "object", "confidence"}. '
         f"At most {max_facts} facts.\n\n"
         "Subject is the entity the fact is about (a person, place, thing, concept).\n"
@@ -160,33 +163,21 @@ async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
         "Confidence: 0.5 (weak/possibly inferred), 0.7 (clear), 0.9 (certain).\n\n"
         "Text:\n"
         f'"""\n{text[:6000]}\n"""\n\n'
-        "If no fact-worthy content, return: []\n\n"
-        "Respond with JSON array only, no prose:"
+        "If no fact-worthy content, return facts=[].\n\n"
+        'Respond in JSON: {"facts": [...]}'
     )
 
     try:
-        from app.core import gemini_client
-        resp = await gemini_client.generate_content(
-            tier="flash",
-            contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            generation_config={"maxOutputTokens": 1200, "temperature": 0.1},
-            timeout=15.0,
-            caller_context="fact_extractor.from_text",
+        from app.core.model_router import gemini_json
+        parsed = await gemini_json(
+            prompt, task="general", max_tokens=1500,
+            disable_thinking=True,
         )
-        response = gemini_client.extract_text(resp)
-
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            cleaned = "\n".join(lines).strip()
-
-        first = cleaned.find("[")
-        last = cleaned.rfind("]")
-        if first < 0 or last < 0:
+        if not isinstance(parsed, dict):
             return []
-
-        facts = json.loads(cleaned[first:last+1])
+        facts = parsed.get("facts") or []
+        if not isinstance(facts, list):
+            return []
         valid = []
         for f in facts:
             if not isinstance(f, dict):
