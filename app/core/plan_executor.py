@@ -994,44 +994,67 @@ async def _execute_step(step: Dict[str, Any],
             from app.core.model_router import gemini_json
             import re as _re_local
 
+            # Deterministic fast path: pull an explicit integer id from
+            # common phrasings before invoking the LLM. The 2026-06-02
+            # litmus showed gemini-flash-lite being overly conservative
+            # on goals like "Review Vinted draft with id 1" — returning
+            # null despite the explicit integer. Regex first, LLM only
+            # when no explicit id is present (chain-aware resolution).
+            draft_id: Optional[int] = None
+            raw: Any = None
+            desc_lower = (description or "").lower()
+            m = _re_local.search(
+                r"\b(?:draft\s*(?:id|#|number|no\.?)?\s*|id\s+|#)(\d+)\b",
+                desc_lower,
+            )
+            if m:
+                try:
+                    draft_id = int(m.group(1))
+                    raw = draft_id
+                except (TypeError, ValueError):
+                    draft_id = None
+
             prior_block = _format_prior_results(prior_results)
-            extract_prompt = (
-                (prior_block if prior_block else "")
-                + f"Extract the Vinted draft_id to review from this step "
-                f"description.\n\n"
-                f"Description: {description}\n\n"
-                f"Rules:\n"
-                f"- `draft_id` is a positive integer (the tony_drafts row id).\n"
-                f"- If the description contains an explicit integer id, "
-                f"use it.\n"
-                f"- If prior step results above include a vinted_drafts_list "
-                f"(or any list with draft entries containing an id field), "
-                f"match the description's cues ('latest', 'the Schott "
-                f"jacket one', 'draft 7') against those entries and pick "
-                f"the matching draft's `id` field.\n"
-                f"- If no draft_id can be confidently identified, return "
-                f"null.\n\n"
-                f"Respond in JSON:\n"
-                f'{{"draft_id": <integer_or_null>}}'
-            )
-            params = await gemini_json(
-                extract_prompt, task="general", max_tokens=256,
-                disable_thinking=True,
-            )
+            used_llm = False
+            if draft_id is None or draft_id <= 0:
+                used_llm = True
+                extract_prompt = (
+                    (prior_block if prior_block else "")
+                    + f"Extract the Vinted draft_id to review from this step "
+                    f"description.\n\n"
+                    f"Description: {description}\n\n"
+                    f"Rules:\n"
+                    f"- `draft_id` is a positive integer (the tony_drafts row id).\n"
+                    f"- If the description contains an explicit integer id, "
+                    f"use it (e.g. 'draft id 1' → 1, 'draft #7' → 7).\n"
+                    f"- If prior step results above include a vinted_drafts_list "
+                    f"(or any list with draft entries containing an id field), "
+                    f"match the description's cues ('latest', 'the Schott "
+                    f"jacket one', 'draft 7') against those entries and pick "
+                    f"the matching draft's `id` field.\n"
+                    f"- If no draft_id can be confidently identified, return "
+                    f"null.\n\n"
+                    f"Respond in JSON:\n"
+                    f'{{"draft_id": <integer_or_null>}}'
+                )
+                params = await gemini_json(
+                    extract_prompt, task="general", max_tokens=256,
+                    disable_thinking=True,
+                )
 
-            if not isinstance(params, dict):
-                return {
-                    "ok": False,
-                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
-                    "verified": False,
-                    "method": "vinted_draft_review",
-                }
+                if not isinstance(params, dict):
+                    return {
+                        "ok": False,
+                        "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                        "verified": False,
+                        "method": "vinted_draft_review",
+                    }
 
-            raw = params.get("draft_id")
-            try:
-                draft_id = int(raw) if raw is not None else None
-            except (TypeError, ValueError):
-                draft_id = None
+                raw = params.get("draft_id")
+                try:
+                    draft_id = int(raw) if raw is not None else None
+                except (TypeError, ValueError):
+                    draft_id = None
             if draft_id is None or draft_id <= 0:
                 return {
                     "ok": False,
@@ -1080,7 +1103,8 @@ async def _execute_step(step: Dict[str, Any],
                 },
                 "verified": True,
                 "method": "vinted_draft_review",
-                "used_prior_results": bool(prior_block),
+                "used_prior_results": bool(prior_block) and used_llm,
+                "extracted_via": "llm" if used_llm else "regex",
             }
         except Exception as e:
             return {
