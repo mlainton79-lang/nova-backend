@@ -567,6 +567,38 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "memory_save",
             }
 
+    if capability_key == "goal_list":
+        # Pure read of Matthew's active goals from tony_goals. The
+        # ordering inside get_active_goals (urgent → high → normal →
+        # other, then updated_at DESC) gives downstream chat/reason
+        # steps a sensible default — they can re-rank if a goal
+        # description explicitly asks for a different lens.
+        try:
+            from app.core.goals import get_active_goals
+            goals = get_active_goals() or []
+            urgent = sum(1 for g in goals if (g.get("priority") or "").lower() == "urgent")
+            high = sum(1 for g in goals if (g.get("priority") or "").lower() == "high")
+            normal = sum(1 for g in goals if (g.get("priority") or "").lower() == "normal")
+            return {
+                "ok": True,
+                "result": {
+                    "goals": goals,
+                    "count": len(goals),
+                    "urgent_count": urgent,
+                    "high_count": high,
+                    "normal_count": normal,
+                },
+                "verified": len(goals) > 0,
+                "method": "goal_list",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"goal_list failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "goal_list",
+            }
+
     if capability_key == "memory_recall":
         # Semantic search over Tony's persistent memory. The step
         # description IS the query — pgvector cosine similarity

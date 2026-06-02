@@ -15,6 +15,17 @@ from app.core.capabilities import upsert_capability
 
 CAPABILITIES_V1 = [
     {
+        "name": "goal_list",
+        "description": "List Matthew's active goals from Tony's persistent goal-tracking table (tony_goals). Returns each goal's title, description, category, priority, status, progress notes, next-action, blockers, target date. Use for goals like 'what am I working on', 'what are my active goals', 'what should I focus on this week'. Read-only — does NOT modify the goal list. Sibling write capability (goal_add / goal_update) is not yet built and would be MANDATORY-Codex per the persistence rule.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.goals.get_active_goals() which selects rows WHERE status IN ('active', 'pending') ordered by priority then updated_at. Returns the compact list + counts (urgent/high/normal) so downstream chat/reason steps can filter and reason about the user's portfolio without re-querying.",
+    },
+    {
         "name": "news_check",
         "description": "Search the latest news (past week) for a given topic via Brave's news API. Returns titles, URLs, descriptions, age, and source for the top results. Use for goals like 'what's the news about X', 'any developments on Y', or 'check latest headlines on Z'. Distinct from brave_search (general web): this hits the news endpoint specifically and biases to fresh items.",
         "status": "active",
