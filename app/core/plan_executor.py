@@ -978,6 +978,118 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "calendar_delete",
             }
 
+    if capability_key == "vinted_draft_review":
+        # Pure read of a single Vinted draft by id. Returns a compact
+        # summary suitable for downstream chat/reason steps to inspect.
+        # No external_effect (drafts are local artefacts in tony_drafts).
+        # No approval needed.
+        #
+        # Chain-aware: when prior steps include a vinted_drafts_list,
+        # the draft_id can be resolved by description (e.g. "review my
+        # latest draft" → pick the most recent from prior_results).
+        # When no prior list exists, the description must contain an
+        # explicit integer id.
+        try:
+            from app.selling.drafts import get_draft
+            from app.core.model_router import gemini_json
+            import re as _re_local
+
+            prior_block = _format_prior_results(prior_results)
+            extract_prompt = (
+                (prior_block if prior_block else "")
+                + f"Extract the Vinted draft_id to review from this step "
+                f"description.\n\n"
+                f"Description: {description}\n\n"
+                f"Rules:\n"
+                f"- `draft_id` is a positive integer (the tony_drafts row id).\n"
+                f"- If the description contains an explicit integer id, "
+                f"use it.\n"
+                f"- If prior step results above include a vinted_drafts_list "
+                f"(or any list with draft entries containing an id field), "
+                f"match the description's cues ('latest', 'the Schott "
+                f"jacket one', 'draft 7') against those entries and pick "
+                f"the matching draft's `id` field.\n"
+                f"- If no draft_id can be confidently identified, return "
+                f"null.\n\n"
+                f"Respond in JSON:\n"
+                f'{{"draft_id": <integer_or_null>}}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=256,
+                disable_thinking=True,
+            )
+
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "vinted_draft_review",
+                }
+
+            raw = params.get("draft_id")
+            try:
+                draft_id = int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                draft_id = None
+            if draft_id is None or draft_id <= 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extracted draft_id is empty or non-positive — "
+                        "refusing to review. Either no prior "
+                        "vinted_drafts_list provided context, or the "
+                        "description didn't name an integer id."
+                    ),
+                    "verified": False,
+                    "method": "vinted_draft_review",
+                    "extracted": {"draft_id": raw},
+                }
+
+            draft = get_draft(draft_id)
+            if not draft:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"no draft found with id {draft_id} — refusing. "
+                        f"Either the id is wrong or the draft was archived."
+                    ),
+                    "verified": False,
+                    "method": "vinted_draft_review",
+                    "extracted": {"draft_id": draft_id},
+                }
+
+            images = draft.get("images_json") or []
+            warnings = draft.get("warnings_json") or []
+            pricing = draft.get("pricing_json") or {}
+            item_facts = draft.get("item_facts_json") or {}
+
+            return {
+                "ok": True,
+                "result": {
+                    "draft_id": draft_id,
+                    "status": draft.get("status"),
+                    "approval_state": draft.get("approval_state"),
+                    "title": (draft.get("canonical_title") or "")[:120],
+                    "description_chars": len(draft.get("canonical_description") or ""),
+                    "price": pricing.get("price") if isinstance(pricing, dict) else None,
+                    "condition": item_facts.get("condition_visible") if isinstance(item_facts, dict) else None,
+                    "image_count": len(images) if isinstance(images, list) else 0,
+                    "warnings": warnings if isinstance(warnings, list) else [],
+                    "created_at": str(draft.get("created_at") or ""),
+                },
+                "verified": True,
+                "method": "vinted_draft_review",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"vinted_draft_review failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "vinted_draft_review",
+            }
+
     if capability_key == "vinted_draft_create":
         # Generates a Vinted listing draft from photo(s). This is the first
         # capability that needs binary input not extractable from a step

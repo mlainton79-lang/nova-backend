@@ -38,13 +38,14 @@ CAPABILITIES_V1 = [
     },
     {
         "name": "vinted_draft_review",
-        "description": "Review and edit Vinted draft before action.",
+        "description": "Review a Vinted draft by id. Two surfaces: Android UI (editable review screen with copy/retry/discard) and backend (chain-aware programmatic read for planner steps that need to inspect a draft).",
         "status": "active",
-        "runner": "android_kotlin",
+        "runner": "android_kotlin+backend_python",
         "risk_level": "low",
         "approval_required": False,
+        "external_effect": False,
         "cost_type": "free",
-        "notes": "Shipped in Stage 2d (Android commit b88614c). Review screen with editable fields, copy buttons, retry/discard/mark-posted actions.",
+        "notes": "R2.4+ (2026-06-02): added backend dispatcher branch in plan_executor. Calls selling.drafts.get_draft(draft_id) and returns compact summary {title, description_chars, price, condition, image_count, status, warnings} for downstream chat/reason. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results. Android UI piece unchanged (Stage 2d, commit b88614c).",
     },
     {
         "name": "vinted_drafts_list",
