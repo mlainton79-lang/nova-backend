@@ -49,13 +49,14 @@ CAPABILITIES_V1 = [
     },
     {
         "name": "vinted_drafts_list",
-        "description": "List recent Vinted drafts persisted across sessions.",
+        "description": "List recent Vinted drafts. Two surfaces: Android UI (drawer/chat command over filesDir persistence) and backend (chain-aware programmatic read over tony_drafts table for planner steps that need to enumerate then resolve a specific draft by description).",
         "status": "active",
-        "runner": "android_kotlin",
+        "runner": "android_kotlin+backend_python",
         "risk_level": "low",
         "approval_required": False,
+        "external_effect": False,
         "cost_type": "free",
-        "notes": "Shipped in Stage 2e-A (Android commits 0c4b773, 39d5c35). Drafts persist to filesDir/vinted_drafts/, accessible via drawer button or chat command.",
+        "notes": "Original Stage 2e-A Android piece unchanged (commits 0c4b773, 39d5c35). R2.4+ (2026-06-02): added backend dispatcher branch in plan_executor. Calls selling.drafts.list_drafts(limit=20) and returns compact array of {id, title, status, approval_state, image_count, price, created_at} suitable for downstream vinted_draft_review chain-aware draft_id resolution.",
     },
     {
         "name": "vinted_open_helper",

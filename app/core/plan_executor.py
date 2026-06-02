@@ -979,6 +979,47 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "calendar_delete",
             }
 
+    if capability_key == "vinted_drafts_list":
+        # Pure read of the recent tony_drafts rows. Returns a compact
+        # array shaped for downstream chain-aware draft_id resolution
+        # (vinted_draft_review's extractor scans for entries with an
+        # `id` field plus discriminating fields like title and
+        # created_at). No params extracted from the description for v0
+        # — always returns the 20 most recent active drafts. If goal-
+        # shaped filtering proves needed later (e.g. "list drafts
+        # waiting for review"), add an LLM extractor + status filter
+        # the same shape as vinted_draft_review's id extractor.
+        try:
+            from app.selling.drafts import list_drafts
+            drafts = list_drafts(limit=20)
+            compact = []
+            for d in drafts:
+                pricing = d.get("pricing_json") or {}
+                images = d.get("images_json") or []
+                compact.append({
+                    "id": d.get("id"),
+                    "title": (d.get("canonical_title") or "")[:120],
+                    "status": d.get("status"),
+                    "approval_state": d.get("approval_state"),
+                    "image_count": len(images) if isinstance(images, list) else 0,
+                    "price": pricing.get("price") if isinstance(pricing, dict) else None,
+                    "created_at": str(d.get("created_at") or ""),
+                })
+            return {
+                "ok": True,
+                "result": compact,
+                "verified": True,
+                "method": "vinted_drafts_list",
+                "count": len(compact),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"vinted_drafts_list failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "vinted_drafts_list",
+            }
+
     if capability_key == "vinted_draft_review":
         # Pure read of a single Vinted draft by id. Returns a compact
         # summary suitable for downstream chat/reason steps to inspect.

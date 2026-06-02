@@ -244,6 +244,51 @@ def get_draft(draft_id: int) -> Optional[Dict[str, Any]]:
         return None
 
 
+def list_drafts(limit: int = 20) -> List[Dict[str, Any]]:
+    """Most-recent tony_drafts rows, newest first. Returns [] on failure.
+
+    Cap on limit is 50 — the planner dispatcher uses this for chain-aware
+    "review my latest draft" style goals, which only need enough rows to
+    discriminate by description, not the full table.
+    """
+    try:
+        capped = max(1, min(int(limit) if limit else 20, 50))
+    except (TypeError, ValueError):
+        capped = 20
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {', '.join(_DRAFT_COLUMNS)}
+                    FROM tony_drafts
+                    WHERE archived_at IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (capped,),
+                )
+                rows = cur.fetchall()
+                return [_row_to_dict(r) for r in rows]
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_READ_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="selling.drafts",
+            message="list_drafts failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+            metadata={"limit": limit},
+        )
+        return []
+
+
 def update_images_json(draft_id: int, images: List[Dict]) -> bool:
     """Replace images_json on an existing draft row + bump updated_at.
 
