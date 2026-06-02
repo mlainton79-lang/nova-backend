@@ -14,6 +14,17 @@ from app.core.capabilities import upsert_capability
 
 
 CAPABILITIES_V1 = [
+    {
+        "name": "weather",
+        "description": "Current weather + 3-day forecast for Matthew's location (Rotherham). Includes condition, temperature, wind, precipitation, today's range, and rule-based practical advice (coat / wrap up / wet-roads warning). Free Open-Meteo API, no key. Use for goals like 'what's the weather' or 'will it rain today'.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.weather.get_weather() (no args; location hardcoded to Rotherham in weather.py). Read-only HTTP fetch — classified read_only by the governor. Future enhancement: location override would need geocode resolution (not yet built).",
+    },
     # Vinted parent (legacy row, refreshed)
     {
         "name": "vinted",

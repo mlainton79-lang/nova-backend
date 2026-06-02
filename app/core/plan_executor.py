@@ -135,6 +135,38 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "brave_search",
             }
 
+    if capability_key == "weather":
+        # Current weather + 3-day forecast for Matthew's location
+        # (Rotherham, hardcoded in weather.py). Pure read via the
+        # free Open-Meteo API — no API key, no auth, no persistence.
+        # Returns the structured dict from get_weather() so downstream
+        # chat/reason steps see all fields (current_temp, condition,
+        # wind, precipitation, today_max/min, advice). The `summary`
+        # field is a one-line text version suitable for chat output.
+        try:
+            from app.core.weather import get_weather
+            w = await get_weather()
+            if not isinstance(w, dict) or w.get("error"):
+                return {
+                    "ok": False,
+                    "error": (w.get("error") if isinstance(w, dict) else "weather call returned non-dict"),
+                    "verified": False,
+                    "method": "weather",
+                }
+            return {
+                "ok": True,
+                "result": w,
+                "verified": True,
+                "method": "weather",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"weather failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "weather",
+            }
+
     if capability_key == "web_fetch":
         # Single-URL fetch returning readable text body. Complements
         # brave_search (snippets) by giving downstream reason/chat
