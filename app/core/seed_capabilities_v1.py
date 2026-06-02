@@ -190,6 +190,29 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ (2026-06-02). Governor default-denies. Dispatcher extracts {account, message_id} via gemini_json (disable_thinking=True), validates account is connected + message_id non-empty, fetches the message via get_email_body to confirm it exists, then calls trash_email (REVERSIBLE — moves to Trash, kept 30 days before permanent purge). Trace captures the message's from/subject/date so audits can see what was trashed.",
     },
     {
+        # R2.4+ gmail_delete_permanent: PERMANENT, UNRECOVERABLE delete via
+        # gmail_service.delete_email (DELETE /messages/{id} — no Trash
+        # fallback, no 30-day grace period). One notch above gmail_delete:
+        #   - risk_level=critical (vs gmail_delete's high)
+        #   - additional kill-switch env var GMAIL_PERMANENT_DELETE_ENABLED
+        #     (default false) — even with an approval_token, the dispatcher
+        #     refuses unless that env var is explicitly on. Two-layer
+        #     gating on this capability: token AND env var.
+        # All the other safety beats from gmail_delete still apply:
+        # match_evidence cross-check, verify-by-GET capturing the
+        # destroyed message's metadata in the trace.
+        "name": "gmail_delete_permanent",
+        "description": "Permanently delete a Gmail message by message_id (IRREVERSIBLE — no Trash, no recovery). Requires governor approval per call AND GMAIL_PERMANENT_DELETE_ENABLED env var on. Prefer gmail_delete (reversible trash) unless permanent purge is genuinely required.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "critical",
+        "approval_required": True,
+        "external_effect": True,
+        "cost_type": "free",
+        "endpoint": "/api/v1/gmail/delete",
+        "notes": "R2.4+ (2026-06-02). Two-layer safety: governor (approval_token) AND GMAIL_PERMANENT_DELETE_ENABLED env var (default false). Then standard match-evidence cross-check + verify-by-GET. Calls gmail_service.delete_email (HTTP DELETE — no recovery). Trace captures the message's from/subject/date and marks permanent=True so audits can distinguish from gmail_delete's reversible trash.",
+    },
+    {
         # R2.4+ calendar_delete: destructive, external_effect, governor
         # default-denies. Same three-layer safety as calendar_write PLUS an
         # extra verify-by-GET-before-DELETE beat in the dispatcher: the

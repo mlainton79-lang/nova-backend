@@ -405,6 +405,196 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "vision_image",
             }
 
+    if capability_key == "gmail_delete_permanent":
+        # IRREVERSIBLE permanent delete. Two-layer kill-switch on top of
+        # all the standard destructive-dispatcher safety:
+        #   1. Governor (R2.1b) default-denies absent approval_token.
+        #   2. GMAIL_PERMANENT_DELETE_ENABLED env var must be true. Even
+        #      with a valid approval_token the dispatcher refuses if the
+        #      env var is off — defense in depth so a leaked or
+        #      misapplied token can't trigger an irreversible purge.
+        # Then the standard gmail_delete safety stack: extractor with
+        # match_evidence, strict validation, verify-by-GET, evidence
+        # cross-check, then permanent delete via gmail_service.delete_email.
+        # Prefer gmail_delete (reversible trash) for any case where Trash
+        # would be acceptable — this capability exists only for genuine
+        # permanent-purge requirements.
+        import os as _os
+        if _os.environ.get("GMAIL_PERMANENT_DELETE_ENABLED", "false").strip().lower() not in ("true", "1", "yes", "on"):
+            return {
+                "ok": False,
+                "error": (
+                    "GMAIL_PERMANENT_DELETE_ENABLED is off — refusing. "
+                    "Permanent gmail delete is double-gated: governor "
+                    "approval AND this env var. Use gmail_delete "
+                    "(reversible trash) instead, or set "
+                    "GMAIL_PERMANENT_DELETE_ENABLED=true on the web "
+                    "service if a permanent purge is genuinely needed."
+                ),
+                "verified": False,
+                "method": "gmail_delete_permanent",
+            }
+
+        try:
+            from app.core.gmail_service import (
+                get_all_accounts, delete_email, get_email_body
+            )
+            from app.core.model_router import gemini_json
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no Gmail accounts connected",
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                }
+            accounts_list = ", ".join(accounts)
+
+            prior_block = _format_prior_results(prior_results)
+            extract_prompt = (
+                (prior_block if prior_block else "")
+                + f"Extract structured Gmail-message-PERMANENT-DELETE "
+                f"parameters from this step description.\n\n"
+                f"⚠ WARNING: this is PERMANENT, IRREVERSIBLE deletion. "
+                f"There is no Trash. No 30-day grace. If you pick the "
+                f"wrong message it is gone forever. Be conservative.\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts (pick the one that owns the message): "
+                f"{accounts_list}\n\n"
+                f"Rules:\n"
+                f"- `account` must be one of the available accounts, verbatim.\n"
+                f"- `message_id` is the Gmail message id. Typically hex-"
+                f"alphanumeric 16-20 chars.\n"
+                f"- If prior step results above include a gmail_read with "
+                f"emails, match the description's explicit cues against "
+                f"those emails (subject, sender, date). If multiple match, "
+                f"OR no email's fields match the cues, OR the description "
+                f"is ambiguous, return null for message_id. Do NOT guess.\n"
+                f"- `match_evidence` is your stated reason for picking "
+                f"this id: a substring of subject/from/date that justifies "
+                f"the match. VERIFIED against the actual message before "
+                f"the delete proceeds. If you cannot articulate it, "
+                f"return null for both message_id and match_evidence.\n\n"
+                f"Respond in JSON:\n"
+                f'{{"account": "<account>", '
+                f'"message_id": "<gmail_message_id_or_null>", '
+                f'"match_evidence": "<substring_from_subject_or_from_or_date>"}}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=512,
+                disable_thinking=True,
+            )
+
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                }
+
+            account = (params.get("account") or "").strip()
+            message_id = (params.get("message_id") or "").strip()
+            match_evidence = (params.get("match_evidence") or "").strip()
+
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"extracted account '{account}' is not in connected "
+                        f"accounts — refusing. Available: {accounts_list}"
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
+                }
+            if not message_id:
+                return {
+                    "ok": False,
+                    "error": "extracted message_id is empty — refusing permanent delete.",
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
+                }
+            if not match_evidence:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extractor did not provide match_evidence — refusing "
+                        "permanent delete. Even more important here than for "
+                        "trash since this is irreversible."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
+                }
+
+            existing = await get_email_body(account, message_id)
+            if not existing or not existing.get("id"):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"could not fetch message {message_id} before "
+                        f"permanent delete — refusing."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
+                }
+            deleted_from = (existing.get("from") or "")[:120]
+            deleted_subject = (existing.get("subject") or "")[:120]
+            deleted_date = (existing.get("date") or "")[:32]
+
+            # Match-evidence cross-check.
+            ev_lower = match_evidence.lower()
+            haystack = (deleted_subject + " " + deleted_from + " " + deleted_date).lower()
+            if ev_lower not in haystack:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"match_evidence '{match_evidence}' does NOT appear "
+                        f"in the fetched message's subject/from/date — "
+                        f"refusing PERMANENT delete. LLM extractor picked "
+                        f"an id that doesn't match its own stated evidence."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete_permanent",
+                    "extracted": {
+                        "account": account,
+                        "message_id": message_id,
+                        "match_evidence": match_evidence,
+                        "fetched_subject": deleted_subject,
+                        "fetched_from": deleted_from,
+                        "fetched_date": deleted_date,
+                    },
+                }
+
+            success = await delete_email(account, message_id)
+            return {
+                "ok": bool(success),
+                "result": {
+                    "account": account,
+                    "message_id": message_id,
+                    "deleted_from": deleted_from,
+                    "deleted_subject": deleted_subject,
+                    "deleted_date": deleted_date,
+                    "deleted": bool(success),
+                    "permanent": True,
+                    "reversible": False,
+                },
+                "verified": bool(success),
+                "method": "gmail_delete_permanent",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"gmail_delete_permanent failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gmail_delete_permanent",
+            }
+
     if capability_key == "gmail_delete":
         # Destructive sibling of gmail_send. Uses trash_email — REVERSIBLE
         # 30-day-retention destructive, not permanent. Same three-layer
