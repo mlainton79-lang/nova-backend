@@ -44,13 +44,19 @@ order rationale).
 from typing import Any, Dict, List, Optional
 
 
-def _get_active_capabilities_for_prompt(max_chars: int = 4000) -> str:
+def _get_active_capabilities_for_prompt(max_chars: int = 16000) -> str:
     """Format the active registry as a compact list for the planner prompt.
 
     Includes capability_key + description only — enough for the LLM to
     pick a candidate, without bloating the prompt. Excludes deprecated
     and not_built_placeholder rows (planner shouldn't propose using
     something that isn't built).
+
+    max_chars bumped from 4000 to 16000 on 2026-06-02 — with 60+ active
+    capabilities alphabetically sorted, vinted_* and vision_* rows were
+    being truncated out of the prompt, so the planner couldn't see them
+    and routed those steps to `gap`. Pro tier comfortably handles a
+    16000-char preamble.
     """
     try:
         from app.core.capabilities import list_capabilities
