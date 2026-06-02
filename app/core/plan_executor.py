@@ -73,7 +73,8 @@ def _format_prior_results(prior_results: Optional[List[Dict[str, Any]]]) -> str:
 
 async def _execute_step(step: Dict[str, Any],
                          payload: Optional[Dict[str, Any]] = None,
-                         prior_results: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                         prior_results: Optional[List[Dict[str, Any]]] = None,
+                         goal_text: Optional[str] = None) -> Dict[str, Any]:
     """Execute one step's underlying capability.
 
     Returns:
@@ -1000,19 +1001,24 @@ async def _execute_step(step: Dict[str, Any],
             # on goals like "Review Vinted draft with id 1" — returning
             # null despite the explicit integer. Regex first, LLM only
             # when no explicit id is present (chain-aware resolution).
+            #
+            # Scan both the step description AND the original goal_text —
+            # the planner's decomposer sometimes paraphrases concrete
+            # values out of step descriptions (e.g. "id 1" → "the
+            # specified ID"), so the goal is the more reliable haystack
+            # for explicit-id phrasings.
             draft_id: Optional[int] = None
             raw: Any = None
-            desc_lower = (description or "").lower()
-            m = _re_local.search(
-                r"\b(?:draft\s*(?:id|#|number|no\.?)?\s*|id\s+|#)(\d+)\b",
-                desc_lower,
-            )
-            if m:
-                try:
-                    draft_id = int(m.group(1))
-                    raw = draft_id
-                except (TypeError, ValueError):
-                    draft_id = None
+            id_regex = r"\b(?:draft\s*(?:id|#|number|no\.?)?\s*|id\s+|#)(\d+)\b"
+            for haystack in ((description or ""), (goal_text or "")):
+                m = _re_local.search(id_regex, haystack.lower())
+                if m:
+                    try:
+                        draft_id = int(m.group(1))
+                        raw = draft_id
+                        break
+                    except (TypeError, ValueError):
+                        draft_id = None
 
             prior_block = _format_prior_results(prior_results)
             used_llm = False
@@ -1564,7 +1570,12 @@ async def execute_plan(
             break
 
         # --- Execute -------------------------------------------------------
-        outcome = await _execute_step(step, payload=payload, prior_results=prior_results)
+        outcome = await _execute_step(
+            step,
+            payload=payload,
+            prior_results=prior_results,
+            goal_text=plan.get("goal"),
+        )
         executed_steps.append({
             **step,
             "execution": outcome,
