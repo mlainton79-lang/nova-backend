@@ -76,6 +76,11 @@ async def create_capability_endpoint(body: CreateCapabilityRequest, _=Depends(ve
             notes=body.notes,
         )
         return {"ok": True, "id": new_id}
+    except ValueError as e:
+        # Destructive-name registry assertion fired (or any other
+        # ValueError raised pre-DB). Surface the guidance text so the
+        # caller learns what to fix instead of seeing an opaque 500.
+        raise HTTPException(status_code=400, detail=str(e))
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=409, detail=f"Capability '{body.name}' already exists. Use PATCH to update.")
     except psycopg2.IntegrityError:
@@ -88,7 +93,12 @@ async def update_capability_endpoint(name: str, body: UpdateCapabilityRequest, _
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    updated = update_capability(name=name, **fields)
+    try:
+        updated = update_capability(name=name, **fields)
+    except ValueError as e:
+        # Destructive-name re-check refused (un-gating a destructive
+        # row). Surface the guidance as a 400, not a 500.
+        raise HTTPException(status_code=400, detail=str(e))
     if not updated:
         raise HTTPException(status_code=404, detail=f"Capability '{name}' not found")
 
