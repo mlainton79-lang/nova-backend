@@ -174,6 +174,17 @@ CAPABILITIES_V1 = [
         "endpoint": "/api/v1/gmail/send",
         "notes": "Metadata corrected R2.4+ (2026-06-01). Plan executor dispatcher requires approval_token; extracts {account,to,subject,body} via gemini_json, validates account is connected + to is a valid email + all fields non-empty before calling send_email.",
     },
+    {
+        "name": "gmail_reply",
+        "description": "Reply to a specific email with proper RFC-2822 threading (In-Reply-To + References + threadId). Use this for goals like 'reply to John's last email saying X' — strictly better than gmail_send for replies because: (1) auto-derives recipient from the original's From header, (2) auto-derives subject with 'Re:' prefix, (3) sets threading headers so the reply lands inside the original thread in the recipient's client. Chain-aware: resolves message_id from a prior gmail_read step's results.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "medium",
+        "approval_required": True,
+        "external_effect": True,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02). Same three-layer safety as gmail_send + verify-by-GET via get_email_body + match-evidence cross-check on subject/from. Dispatcher extracts {account, message_id, match_evidence, body} via gemini_json (disable_thinking=True). Recipient and subject are derived from the fetched original — the LLM doesn't pick them, eliminating the wrong-recipient/wrong-subject failure mode. send_email's existing reply_to_id parameter handles the In-Reply-To/References/threadId derivation.",
+    },
     # R2.4+ calendar split: the legacy calendar_read_write lumped read AND
     # write under one capability_key with approval_required=False — which
     # meant the governor would let create_event fire without approval.

@@ -923,6 +923,210 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "gmail_delete_permanent",
             }
 
+    if capability_key == "gmail_reply":
+        # Threaded reply to an existing email. Strictly safer than
+        # gmail_send for replies because the recipient and subject come
+        # from the FETCHED original message — not from the LLM. The
+        # LLM only picks the message_id (with match_evidence verified)
+        # and writes the body.
+        #
+        # Three-layer safety (same as gmail_send/delete) plus
+        # verify-by-GET + match-evidence cross-check.
+        try:
+            from app.core.gmail_service import get_all_accounts, get_email_body, send_email
+            from app.core.model_router import gemini_json
+            import re as _re
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no Gmail accounts connected — cannot reply",
+                    "verified": False,
+                    "method": "gmail_reply",
+                }
+            accounts_list = ", ".join(accounts)
+
+            prior_block = _format_prior_results(prior_results)
+            extract_prompt = (
+                (prior_block if prior_block else "")
+                + "Extract structured gmail-REPLY parameters from this step "
+                "description.\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts: {accounts_list}\n\n"
+                "Rules:\n"
+                "- `account` must be one of the available accounts, verbatim. "
+                "Pick the account where the original email LIVES (prior "
+                "gmail_read results will indicate this via each email's "
+                "`account` field).\n"
+                "- `message_id` is the Gmail message id of the email being "
+                "replied TO. If prior gmail_read results are above, match "
+                "the description against them by subject/from/date and pick "
+                "the matching `id`. Do NOT guess.\n"
+                "- `match_evidence` is a substring of the matching email's "
+                "subject, from, or date that justified the id. VERIFIED "
+                "against the fetched original before send — if your stated "
+                "evidence doesn't appear in the actual email, the reply is "
+                "REFUSED.\n"
+                "- `body` is the reply text. Write it directly — the To, "
+                "From, Subject (with Re: prefix), and threading headers are "
+                "derived automatically from the fetched original. Do NOT "
+                "include 'On <date> X wrote:' quote blocks unless the "
+                "description explicitly says to quote.\n"
+                "- If you can't articulate a specific match_evidence, "
+                "return null for message_id AND match_evidence.\n\n"
+                "Respond in JSON:\n"
+                '{"account": "<account>", '
+                '"message_id": "<gmail_id_or_null>", '
+                '"match_evidence": "<substring>", '
+                '"body": "<reply_body>"}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=1024,
+                disable_thinking=True,
+            )
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "gmail_reply",
+                }
+
+            account = (params.get("account") or "").strip()
+            message_id = (params.get("message_id") or "").strip()
+            match_evidence = (params.get("match_evidence") or "").strip()
+            body = (params.get("body") or "").strip()
+
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": f"extracted account '{account}' is not in connected accounts — refusing. Available: {accounts_list}",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
+                }
+            if not message_id:
+                return {
+                    "ok": False,
+                    "error": "extracted message_id is empty — refusing. Either no prior gmail_read provided context, or the description didn't match any prior email.",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                }
+            if not match_evidence:
+                return {
+                    "ok": False,
+                    "error": "extractor did not provide match_evidence — refusing. Reply to wrong recipient is much worse than refusing a reply.",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                }
+            if not body:
+                return {
+                    "ok": False,
+                    "error": "extracted reply body is empty — refusing.",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                }
+
+            # Verify-by-GET: fetch the original to derive To/Subject AND
+            # verify match_evidence.
+            try:
+                original = await get_email_body(account, message_id)
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error": f"could not fetch original message {message_id} — refusing. {type(e).__name__}: {e}",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                }
+            if not original or not original.get("id"):
+                return {
+                    "ok": False,
+                    "error": f"original message {message_id} not found in account {account} — refusing.",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                }
+
+            orig_subject = (original.get("subject") or "").strip()
+            orig_from_raw = (original.get("from") or "").strip()
+            orig_date = (original.get("date") or "").strip()
+
+            # Match-evidence cross-check against fetched subject/from/date.
+            haystack = (orig_subject + " " + orig_from_raw + " " + orig_date).lower()
+            if match_evidence.lower() not in haystack:
+                return {
+                    "ok": False,
+                    "error": f"match_evidence '{match_evidence}' does NOT appear in the fetched original's subject/from/date — refusing.",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                    "fetched": {"subject": orig_subject, "from": orig_from_raw, "date": orig_date},
+                }
+
+            # Parse from-line into an email address (handles "Name <addr>"
+            # and bare addresses). Same pattern as gmail_read dispatcher.
+            addr_match = _re.search(r"<([\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,})>", orig_from_raw)
+            bare_match = _re.match(r"^[\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,}$", orig_from_raw)
+            if addr_match:
+                to_addr = addr_match.group(1)
+            elif bare_match:
+                to_addr = orig_from_raw
+            else:
+                return {
+                    "ok": False,
+                    "error": f"could not parse a valid email address from the original's From header '{orig_from_raw[:120]}' — refusing.",
+                    "verified": False,
+                    "method": "gmail_reply",
+                    "extracted": params,
+                    "fetched": {"from": orig_from_raw},
+                }
+
+            # Derive subject — prepend "Re: " unless already present.
+            subj_stripped = orig_subject.strip()
+            if subj_stripped.lower().startswith("re:"):
+                reply_subject = subj_stripped
+            elif subj_stripped:
+                reply_subject = f"Re: {subj_stripped}"
+            else:
+                reply_subject = "Re:"
+
+            sent = await send_email(
+                email=account,
+                to=to_addr,
+                subject=reply_subject,
+                body=body,
+                reply_to_id=message_id,
+            )
+            return {
+                "ok": bool(sent),
+                "result": {
+                    "account": account,
+                    "in_reply_to_message_id": message_id,
+                    "to": to_addr,
+                    "subject": reply_subject,
+                    "body_chars": len(body),
+                    "original_subject": orig_subject,
+                    "original_from": orig_from_raw,
+                    "sent": bool(sent),
+                    "threaded": True,
+                },
+                "verified": bool(sent),
+                "method": "gmail_reply",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"gmail_reply failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gmail_reply",
+            }
+
     if capability_key == "gmail_delete":
         # Destructive sibling of gmail_send. Uses trash_email — REVERSIBLE
         # 30-day-retention destructive, not permanent. Same three-layer
