@@ -369,6 +369,72 @@ def test_capability_builder_routes_through_canonical():
             print("  FAIL  builder catches assertion ValueError non-fatally :: re-raised")
 
 
+def test_audit_destructive_gating_dual_table():
+    """audit_destructive_gating() must scan BOTH tony_capabilities
+    (canonical) AND legacy `capabilities` so skipped legacy rows
+    surface to operators. Codex round-4 nit closure."""
+    print("\n# audit_destructive_gating — dual-table scan")
+
+    # Build a mock cursor that returns different rowsets per query.
+    # The audit issues three queries: (1) canonical scan, (2) legacy
+    # existence check, (3) legacy scan.
+    queries_seen = []
+
+    class MockCursor:
+        def __init__(self):
+            self.rowsets = [
+                # (1) canonical scan → one ungated destructive row
+                [("canonical_test_purge", "medium", False, False, "active")],
+                # (2) legacy-existence → True
+                [(True,)],
+                # (3) legacy scan → one ungated destructive row
+                [("legacy_test_remove", "low", False, "active")],
+            ]
+            self._call = 0
+
+        def execute(self, sql, params=None):
+            queries_seen.append(sql.strip()[:60])
+
+        def fetchall(self):
+            rs = self.rowsets[min(self._call, len(self.rowsets) - 1)]
+            self._call += 1
+            # Each "scan" call uses fetchall; the existence-check uses
+            # fetchone — let's increment after the canonical scan and
+            # the legacy scan.
+            return rs
+
+        def fetchone(self):
+            # existence check returns a tuple
+            rs = self.rowsets[min(self._call, len(self.rowsets) - 1)]
+            self._call += 1
+            return rs[0] if rs else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class MockConn:
+        def cursor(self):
+            return MockCursor()
+        def close(self):
+            pass
+
+    with unittest.mock.patch.object(capabilities, "get_conn", return_value=MockConn()):
+        violations = capabilities.audit_destructive_gating()
+
+    _check("audit returns 2 violations (one canonical, one legacy)", len(violations), 2)
+    sources = {v.get("source_table") for v in violations}
+    _check("audit includes tony_capabilities source", "tony_capabilities" in sources, True)
+    _check("audit includes legacy capabilities source", "capabilities" in sources, True)
+    # Verify legacy row has external_effect=False asserted (column
+    # doesn't exist; audit assumes False to match the backfill loop).
+    legacy_v = next((v for v in violations if v.get("source_table") == "capabilities"), None)
+    _check("legacy violation key", legacy_v and legacy_v.get("capability_key"), "legacy_test_remove")
+    _check("legacy violation external_effect assumed False", legacy_v and legacy_v.get("external_effect"), False)
+
+
 def test_update_capability_re_checks_when_flags_change():
     """update_capability must re-run the assertion when either gate
     flag is being modified. Setting external_effect=False on a
@@ -437,6 +503,7 @@ def main():
     test_register_capability_calls_assertion()
     test_backfill_loop_skips_ungated_destructive_legacy()
     test_capability_builder_routes_through_canonical()
+    test_audit_destructive_gating_dual_table()
     test_update_capability_re_checks_when_flags_change()
 
     total = len(results)

@@ -114,21 +114,32 @@ def _assert_destructive_gated(
 
 
 def audit_destructive_gating() -> List[Dict[str, Any]]:
-    """Scan the live `tony_capabilities` table for rows whose key
-    matches the destructive-name pattern but which are NOT currently
-    gated (i.e. would pass register_capability today only because the
-    assertion is new). Returns a list of violations; empty list means
-    the live registry is consistent with the convention.
+    """Scan BOTH the canonical `tony_capabilities` table AND the
+    legacy `capabilities` table for rows whose key matches the
+    destructive-name pattern but which are NOT currently gated.
+    Returns a list of violations; empty list means both tables are
+    consistent with the convention.
+
+    Each violation includes a `source_table` field so an operator can
+    tell whether the row is canonical (immediate runtime risk if a
+    dispatcher exposes it) or legacy-only (skipped by the backfill
+    loop on boot; persists in the historical table until manually
+    fixed). Legacy entries have no external_effect column, so the
+    audit treats them as external_effect=False — same assumption the
+    backfill loop makes.
 
     Used as a one-shot operator sweep — does NOT mutate state. Run
-    after deploying the assertion to confirm no legacy data needs
-    a migration or an allowlist entry.
+    after deploys to confirm no data needs a migration or an
+    allowlist entry. Codex round-4 review (2026-06-02) noted the
+    earlier tony_capabilities-only audit couldn't surface skipped
+    legacy rows; this dual-scan closes that gap.
     """
     violations: List[Dict[str, Any]] = []
     try:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
+                # Canonical sweep — same as before.
                 cur.execute(
                     """
                     SELECT capability_key, risk_level, external_effect,
@@ -146,12 +157,60 @@ def audit_destructive_gating() -> List[Dict[str, Any]]:
                     if bool(ext) or bool(appr):
                         continue
                     violations.append({
+                        "source_table": "tony_capabilities",
                         "capability_key": key,
                         "risk_level": risk,
                         "external_effect": bool(ext),
                         "approval_required": bool(appr),
                         "status": status,
                     })
+
+                # Legacy sweep — surface anything still living in the
+                # historical `capabilities` table that violates the
+                # convention. These rows do NOT make it into canonical
+                # via the backfill loop (it skips them) but they exist
+                # in the database and may be referenced by other
+                # legacy code paths. An operator should clean them up
+                # OR explicitly mark them deprecated.
+                try:
+                    cur.execute(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_name = 'capabilities'
+                        )
+                        """
+                    )
+                    legacy_exists = cur.fetchone()[0]
+                except Exception:
+                    legacy_exists = False
+                if legacy_exists:
+                    cur.execute(
+                        """
+                        SELECT name, risk_level, approval_required, status
+                        FROM capabilities
+                        WHERE status = 'active'
+                        """
+                    )
+                    for row in cur.fetchall():
+                        name, risk, appr, status = row
+                        if not is_destructive_key(name):
+                            continue
+                        if name in _DESTRUCTIVE_GATING_ALLOWLIST:
+                            continue
+                        # Legacy schema has no external_effect column
+                        # → treat as False (same assumption as the
+                        # backfill loop).
+                        if bool(appr):
+                            continue
+                        violations.append({
+                            "source_table": "capabilities",
+                            "capability_key": name,
+                            "risk_level": risk,
+                            "external_effect": False,  # column doesn't exist on legacy
+                            "approval_required": bool(appr),
+                            "status": status,
+                        })
         finally:
             try:
                 conn.close()
@@ -350,11 +409,13 @@ def init_capability_registry_tables() -> None:
                     # destructive row with approval_required=False will
                     # be SKIPPED, not auto-promoted into canonical.
                     # Skip + log rather than crash boot: the row stays
-                    # in the legacy table and an operator can run
-                    # audit_destructive_gating() to surface it (today
-                    # legacy data is read-only-historical per R2.1, so
-                    # this just means it doesn't get a second life in
-                    # canonical until the gating is fixed).
+                    # in the legacy `capabilities` table (read-only-
+                    # historical per R2.1) and is NOT promoted into
+                    # canonical until its gating is fixed. The skip
+                    # is also visible via boot logs ("backfilled N,
+                    # skipped M") and via audit_destructive_gating()
+                    # which scans BOTH tables and tags each violation
+                    # with `source_table`.
                     try:
                         _assert_destructive_gated(
                             capability_key=name,
