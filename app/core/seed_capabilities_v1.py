@@ -81,6 +81,17 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.research.fetch_page(url) which does httpx GET + HTML strip + 8000-char cap. URL extracted via regex from step description/goal_text first, then LLM extractor scans prior_results for URL when description references one (e.g. 'fetch the first result').",
     },
     {
+        "name": "vinted_draft_archive",
+        "description": "Soft-delete a Vinted draft by setting archived_at — removes it from active list/review flows but the row is preserved (reversible). Use this for goals like 'archive the bad drafts' or 'remove the duplicate Schott jacket draft'. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "medium",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls selling.drafts.archive_draft(draft_id) (idempotent — re-archiving returns already_archived=True). Internal write (governor classifies as internal_write, not in APPROVAL_REQUIRED_CLASSES — allowed without approval). Safety: regex fast-path for explicit draft_id, LLM fallback for chain-aware resolution from prior_results, REQUIRED match_evidence cross-check against the fetched draft's title/status — refuses if the LLM's claimed justification doesn't appear in the fetched row. Reversible (archived_at clear) so over-archiving has bounded blast radius.",
+    },
+    {
         "name": "vinted_drafts_list",
         "description": "List recent Vinted drafts. Two surfaces: Android UI (drawer/chat command over filesDir persistence) and backend (chain-aware programmatic read over tony_drafts table for planner steps that need to enumerate then resolve a specific draft by description).",
         "status": "active",

@@ -1811,6 +1811,172 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "vinted_drafts_list",
             }
 
+    if capability_key == "vinted_draft_archive":
+        # Soft-delete a Vinted draft. Internal write (no governor
+        # approval gate per registry) but destructive within Tony's
+        # local data — so the dispatcher enforces match_evidence
+        # cross-check + verify-by-GET to make sure the right draft is
+        # being archived. Reversible (un-archive is a single SQL
+        # update) so over-archiving has bounded blast radius.
+        #
+        # draft_id resolution priority (mirrors vinted_draft_review):
+        #   1. regex over description for explicit integer ids
+        #   2. regex over goal_text (catches planner paraphrases)
+        #   3. LLM extractor for chain-aware resolution from
+        #      prior_results (vinted_drafts_list especially)
+        try:
+            from app.selling.drafts import get_draft, archive_draft
+            from app.core.model_router import gemini_json
+            import re as _re_local
+
+            draft_id: Optional[int] = None
+            extracted_via = None
+            id_regex = r"\b(?:draft\s*(?:id|#|number|no\.?)?\s*|id\s+|#)(\d+)\b"
+            for haystack in ((description or ""), (goal_text or "")):
+                m = _re_local.search(id_regex, haystack.lower())
+                if m:
+                    try:
+                        draft_id = int(m.group(1))
+                        extracted_via = "regex"
+                        break
+                    except (TypeError, ValueError):
+                        draft_id = None
+
+            prior_block = _format_prior_results(prior_results)
+            match_evidence = ""
+            if draft_id is None or draft_id <= 0:
+                extract_prompt = (
+                    (prior_block if prior_block else "")
+                    + "Extract structured vinted-draft-ARCHIVE parameters from "
+                    "this step description.\n\n"
+                    f"Description: {description}\n\n"
+                    "Rules:\n"
+                    "- `draft_id` is a positive integer (the tony_drafts row id).\n"
+                    "- If the description contains an explicit integer id, "
+                    "use it.\n"
+                    "- If prior step results above include a vinted_drafts_list, "
+                    "match the description's cues ('the duplicate', 'the bad "
+                    "Schott jacket one', 'draft 7') against those entries and "
+                    "pick the matching `id`. Do NOT guess.\n"
+                    "- `match_evidence` is a substring of the matching draft's "
+                    "title OR status that justified picking this id. VERIFIED "
+                    "against the fetched draft before archive — refused if "
+                    "your stated evidence doesn't appear in the actual draft.\n"
+                    "- If you can't articulate a specific match_evidence, "
+                    "return null for both fields.\n\n"
+                    "Respond in JSON:\n"
+                    '{"draft_id": <integer_or_null>, '
+                    '"match_evidence": "<substring_from_title_or_status>"}'
+                )
+                params = await gemini_json(
+                    extract_prompt, task="general", max_tokens=512,
+                    disable_thinking=True,
+                )
+                if not isinstance(params, dict):
+                    return {
+                        "ok": False,
+                        "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                        "verified": False,
+                        "method": "vinted_draft_archive",
+                    }
+                raw = params.get("draft_id")
+                try:
+                    draft_id = int(raw) if raw is not None else None
+                    extracted_via = "llm"
+                except (TypeError, ValueError):
+                    draft_id = None
+                match_evidence = (params.get("match_evidence") or "").strip()
+
+            if draft_id is None or draft_id <= 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extracted draft_id is empty or non-positive — "
+                        "refusing to archive. Either no prior vinted_drafts_list "
+                        "provided context, or the description didn't match any "
+                        "draft."
+                    ),
+                    "verified": False,
+                    "method": "vinted_draft_archive",
+                    "extracted": {"draft_id": None, "match_evidence": match_evidence},
+                }
+
+            # Verify-by-GET: confirm the draft exists and capture metadata
+            # for the trace + match_evidence cross-check.
+            draft = get_draft(draft_id)
+            if not draft:
+                return {
+                    "ok": False,
+                    "error": f"no draft found with id {draft_id} — refusing to archive.",
+                    "verified": False,
+                    "method": "vinted_draft_archive",
+                    "extracted": {"draft_id": draft_id, "match_evidence": match_evidence},
+                }
+            draft_title = (draft.get("canonical_title") or "")[:120]
+            draft_status = draft.get("status") or ""
+            draft_approval_state = draft.get("approval_state") or ""
+
+            # Match-evidence cross-check: when the LLM picked the id from
+            # prior_results (extracted_via=llm), the evidence MUST appear
+            # in the fetched draft's title or status. For the regex
+            # fast-path (explicit numeric id in description/goal),
+            # match_evidence is optional — the user typed an explicit id
+            # so they took responsibility for the target.
+            if extracted_via == "llm":
+                if not match_evidence:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "extractor did not provide match_evidence — "
+                            "refusing. Destructive picks from prior_results "
+                            "must come with a verifiable justification."
+                        ),
+                        "verified": False,
+                        "method": "vinted_draft_archive",
+                        "extracted": {"draft_id": draft_id, "match_evidence": ""},
+                    }
+                ev_lower = match_evidence.lower()
+                haystack = (draft_title + " " + draft_status + " " + draft_approval_state).lower()
+                if ev_lower not in haystack:
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"match_evidence '{match_evidence}' does NOT "
+                            f"appear in the fetched draft's title/status — "
+                            f"refusing to archive."
+                        ),
+                        "verified": False,
+                        "method": "vinted_draft_archive",
+                        "extracted": {"draft_id": draft_id, "match_evidence": match_evidence},
+                        "fetched": {"title": draft_title, "status": draft_status},
+                    }
+
+            outcome = archive_draft(draft_id)
+            ok = bool(outcome.get("ok"))
+            return {
+                "ok": ok,
+                "result": {
+                    "draft_id": draft_id,
+                    "archived_title": draft_title,
+                    "archived_status_before": draft_status,
+                    "approval_state_before": draft_approval_state,
+                    "already_archived": bool(outcome.get("already_archived")),
+                    "archived": ok and not outcome.get("already_archived"),
+                    "reversible": True,
+                },
+                "verified": ok,
+                "method": "vinted_draft_archive",
+                "extracted_via": extracted_via,
+                "used_prior_results": extracted_via == "llm",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"vinted_draft_archive failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "vinted_draft_archive",
+            }
+
     if capability_key == "vinted_draft_review":
         # Pure read of a single Vinted draft by id. Returns a compact
         # summary suitable for downstream chat/reason steps to inspect.

@@ -622,6 +622,61 @@ def delete_staged_images(draft_id: int) -> int:
         return 0
 
 
+def archive_draft(draft_id: int) -> Dict[str, Any]:
+    """Mark a draft archived (soft delete) — sets archived_at = NOW() and
+    bumps updated_at. Idempotent: re-archiving an already-archived row
+    returns {ok=True, already_archived=True} without changing timestamps.
+
+    Reversible. To un-archive, set archived_at = NULL via a separate
+    update path (not yet exposed because no caller needs it). list_drafts
+    already filters `WHERE archived_at IS NULL`, so archived rows drop
+    out of active flows immediately.
+
+    Returns:
+      {ok: bool, already_archived: bool, [error: str]}
+    """
+    try:
+        conn = _get_conn()
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT archived_at FROM tony_drafts WHERE id = %s",
+                    (draft_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return {"ok": False, "error": f"no draft with id {draft_id}"}
+                if row[0] is not None:
+                    return {"ok": True, "already_archived": True}
+                cur.execute(
+                    """
+                    UPDATE tony_drafts
+                    SET archived_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s AND archived_at IS NULL
+                    """,
+                    (draft_id,),
+                )
+                return {"ok": cur.rowcount > 0, "already_archived": False}
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        record_run_event(
+            event_type=EVENT_TYPES["MEMORY_WRITE_FAILED"],
+            severity=EventSeverity.ERROR,
+            subsystem="selling.drafts",
+            message="archive_draft failed",
+            error_class=type(e).__name__,
+            error_message=str(e),
+            metadata={"draft_id": draft_id},
+        )
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def delete_draft(draft_id: int) -> bool:
     """DELETE the draft row. Used by the from-photos endpoint when image
     staging fails mid-batch to roll back the empty placeholder row.
