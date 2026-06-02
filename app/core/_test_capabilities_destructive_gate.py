@@ -28,9 +28,11 @@ import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# Stub heavy deps so we can import capabilities.py without a DB.
+# Stub heavy deps so we can import capabilities.py + capability_builder.py
+# without a DB or live httpx. Both modules use these at import time.
 sys.modules.setdefault("psycopg2", unittest.mock.MagicMock())
 sys.modules.setdefault("psycopg2.extras", unittest.mock.MagicMock())
+sys.modules.setdefault("httpx", unittest.mock.MagicMock())
 sys.modules.setdefault("app.observability", unittest.mock.MagicMock())
 
 from app.core import capabilities  # noqa: E402
@@ -287,6 +289,86 @@ def test_register_capability_calls_assertion():
             print(f"  FAIL  non-destructive registration proceeds :: {e}")
 
 
+def test_backfill_loop_skips_ungated_destructive_legacy():
+    """The init_capabilities_table backfill loop must NOT silently
+    copy a legacy *_delete / *_archive row into canonical if it
+    isn't gated. Codex round-3 review flagged this as a bypass:
+    capability_builder used to write to legacy directly, and a
+    builder-created destructive row would have ridden the backfill
+    into canonical without the assertion firing.
+
+    The loop now calls _assert_destructive_gated for every legacy
+    row and skips (logs) the ones that fail."""
+    print("\n# init backfill skips ungated destructive legacy rows")
+
+    # We can't easily integration-test init_capabilities_table without
+    # a DB, but we can exercise the per-row gate by simulating what
+    # the loop does. Build the same input as a legacy row and confirm
+    # the assertion-raising behaviour matches what the loop relies on.
+    _check_raises(
+        "legacy ungated destructive row fails the per-row check",
+        capabilities._assert_destructive_gated,
+        "legacy_fake_delete", False, False,
+        exc_type=ValueError, must_contain="destructive-name pattern",
+    )
+    _check_no_raise(
+        "legacy gated destructive row (approval_required=True) passes",
+        capabilities._assert_destructive_gated,
+        "legacy_fake_delete", False, True,
+    )
+    _check_no_raise(
+        "legacy non-destructive row passes regardless of flags",
+        capabilities._assert_destructive_gated,
+        "legacy_memory_recall", False, False,
+    )
+
+
+def test_capability_builder_routes_through_canonical():
+    """capability_builder.register_capability previously wrote
+    directly to the legacy `capabilities` table — bypassing the
+    assertion. It now routes through app.core.capabilities.upsert_
+    capability so the same gate fires.
+
+    Patch upsert_capability and confirm it gets called instead of
+    a raw SQL write to the legacy table."""
+    print("\n# capability_builder routes through canonical facade")
+    from app.core import capability_builder
+
+    with unittest.mock.patch("app.core.capabilities.upsert_capability") as mock_upsert:
+        mock_upsert.return_value = 12345
+        capability_builder.register_capability(
+            name="some_new_skill",
+            description="x",
+            endpoint="/api/v1/some_new_skill",
+        )
+        _check(
+            "upsert_capability called once",
+            mock_upsert.call_count,
+            1,
+        )
+        # Confirm the call shape — keyword args match what the facade
+        # expects, and status='active' is passed.
+        kwargs = mock_upsert.call_args.kwargs
+        _check("name argument", kwargs.get("name"), "some_new_skill")
+        _check("status defaulted to active", kwargs.get("status"), "active")
+
+    # Now confirm that an ungated destructive name routes through and
+    # the ValueError is caught (non-fatal — printed not raised).
+    with unittest.mock.patch("app.core.capabilities.upsert_capability") as mock_upsert:
+        mock_upsert.side_effect = ValueError("destructive-name pattern...")
+        # Should NOT raise — the builder catches ValueError and prints.
+        try:
+            capability_builder.register_capability(
+                name="some_data_delete",
+                description="hostile",
+                endpoint="/api/v1/some_data_delete",
+            )
+            _check("builder catches assertion ValueError non-fatally", True, True)
+        except ValueError:
+            results.append(("builder catches assertion ValueError non-fatally", False))
+            print("  FAIL  builder catches assertion ValueError non-fatally :: re-raised")
+
+
 def test_update_capability_re_checks_when_flags_change():
     """update_capability must re-run the assertion when either gate
     flag is being modified. Setting external_effect=False on a
@@ -353,6 +435,8 @@ def main():
     test_assert_fails_for_ungated_destructive()
     test_allowlist_bypasses_assertion()
     test_register_capability_calls_assertion()
+    test_backfill_loop_skips_ungated_destructive_legacy()
+    test_capability_builder_routes_through_canonical()
     test_update_capability_re_checks_when_flags_change()
 
     total = len(results)

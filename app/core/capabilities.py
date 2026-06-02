@@ -334,11 +334,40 @@ def init_capability_registry_tables() -> None:
                     FROM capabilities
                 """)
                 legacy_rows = cur.fetchall()
+                skipped_destructive = 0
                 for (name, description, status, endpoint, runner,
                      risk_level, approval_required, cost_type,
                      inputs, outputs, last_tested, last_result,
                      failure_notes, notes, added_at, updated_at) in legacy_rows:
                     capability_type = _infer_capability_type(endpoint, status)
+                    appr_bool = bool(approval_required) if approval_required is not None else False
+                    # Re-run the destructive-name assertion here so the
+                    # backfill loop can't become a bypass of the
+                    # safety check that register_capability enforces on
+                    # canonical writes. Legacy rows have no
+                    # external_effect column (it's new in canonical), so
+                    # we assume external_effect=False — a legacy
+                    # destructive row with approval_required=False will
+                    # be SKIPPED, not auto-promoted into canonical.
+                    # Skip + log rather than crash boot: the row stays
+                    # in the legacy table and an operator can run
+                    # audit_destructive_gating() to surface it (today
+                    # legacy data is read-only-historical per R2.1, so
+                    # this just means it doesn't get a second life in
+                    # canonical until the gating is fixed).
+                    try:
+                        _assert_destructive_gated(
+                            capability_key=name,
+                            external_effect=False,
+                            approval_required=appr_bool,
+                        )
+                    except ValueError as ve:
+                        skipped_destructive += 1
+                        print(
+                            f"[CAPABILITIES] backfill SKIPPED ungated destructive "
+                            f"legacy row {name!r}: {ve}"
+                        )
+                        continue
                     cur.execute("""
                         INSERT INTO tony_capabilities (
                             capability_key, description, status, capability_type,
@@ -356,7 +385,7 @@ def init_capability_registry_tables() -> None:
                         psycopg2.extras.Json(inputs) if inputs else None,
                         psycopg2.extras.Json(outputs) if outputs else None,
                         risk_level or "low",
-                        bool(approval_required) if approval_required is not None else False,
+                        appr_bool,
                         cost_type or "free",
                         last_tested, last_result, failure_notes,
                         "legacy_capabilities_backfill", notes,
@@ -364,7 +393,12 @@ def init_capability_registry_tables() -> None:
                     ))
                     if cur.rowcount > 0:
                         backfilled += 1
-            print(f"[CAPABILITIES] Registry initialised (backfilled {backfilled} legacy row(s))")
+            print(
+                f"[CAPABILITIES] Registry initialised "
+                f"(backfilled {backfilled} legacy row(s)"
+                + (f", skipped {skipped_destructive} ungated destructive" if skipped_destructive else "")
+                + ")"
+            )
     except Exception as e:
         print(f"[CAPABILITIES] Init failed: {e}")
     finally:

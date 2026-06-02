@@ -696,21 +696,39 @@ async def update_router_for_capability(capability_name: str, module_name: str) -
 
 
 def register_capability(name: str, description: str, endpoint: str):
-    """Add the new capability to the registry."""
+    """Add the new capability to the registry.
+
+    Routed through `app.core.capabilities.upsert_capability` (canonical)
+    so the 2026-06-02 destructive-name assertion fires on builder-
+    created capabilities too. Previously this wrote directly to the
+    legacy `capabilities` table, bypassing the safety check. Codex
+    review 2026-06-02 (round 3) flagged this as a bypass — a builder-
+    created `*_delete` row would have landed ungated and then been
+    copied into canonical via the backfill loop.
+
+    If the new capability_key matches the destructive-name pattern
+    AND it isn't declared with external_effect=True or
+    approval_required=True, the upsert raises ValueError. The builder
+    catches it here so the registry write fails LOUD (with a printed
+    diagnostic) rather than crashing the deploy flow — operator can
+    then resubmit with the correct gating.
+    """
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO capabilities (name, description, status, endpoint)
-            VALUES (%s, %s, 'active', %s)
-            ON CONFLICT (name) DO UPDATE SET
-                status = 'active',
-                description = EXCLUDED.description,
-                endpoint = EXCLUDED.endpoint
-        """, (name, description, endpoint))
-        conn.commit()
-        cur.close()
-        conn.close()
+        from app.core.capabilities import upsert_capability
+        upsert_capability(
+            name=name,
+            description=description,
+            status="active",
+            endpoint=endpoint,
+        )
+    except ValueError as ve:
+        # Destructive-name assertion (or any other pre-DB validation)
+        # refused the write. Print the guidance and return non-fatally;
+        # the caller (build_capability) already returned the artifact
+        # to the operator, so the builder's deploy is effectively
+        # complete except for the registry entry. Operator can re-run
+        # registration with corrected metadata.
+        print(f"[BUILDER] Registry write refused (assertion): {ve}")
     except Exception as e:
         print(f"[BUILDER] Registry update failed: {e}")
 
