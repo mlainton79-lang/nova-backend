@@ -405,6 +405,143 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "vision_image",
             }
 
+    if capability_key == "calendar_delete":
+        # Destructive sibling of calendar_write. Same three-layer safety:
+        #   1. Registry: external_effect=True, approval_required=True
+        #      (seed_capabilities_v1) → governor default-denies absent
+        #      approval_token.
+        #   2. LLM extraction of {account, event_id} with disable_thinking
+        #      and chain-aware context — typically resolves event_id by
+        #      matching the description against a prior calendar_read
+        #      result's `id` field.
+        #   3. Strict validation + EXTRA verify-by-GET BEFORE DELETE.
+        #      Fetch the event via get_event, surface its title/start in
+        #      the trace, then call delete_event. If the event doesn't
+        #      exist or the GET errors, refuse cleanly — destroying the
+        #      wrong event is much worse than refusing a delete.
+        try:
+            from app.core.gmail_service import get_all_accounts
+            from app.core.calendar_service import delete_event, get_event
+            from app.core.model_router import gemini_json
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no connected accounts — calendar uses Gmail OAuth tokens",
+                    "verified": False,
+                    "method": "calendar_delete",
+                }
+            accounts_list = ", ".join(accounts)
+
+            prior_block = _format_prior_results(prior_results)
+            extract_prompt = (
+                (prior_block if prior_block else "")
+                + f"Extract structured calendar-event-DELETE parameters from "
+                f"this step description.\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts (calendar uses Gmail OAuth — pick one): "
+                f"{accounts_list}\n\n"
+                f"Rules:\n"
+                f"- `account` must be one of the available accounts, verbatim.\n"
+                f"- `event_id` is the Google Calendar event id of the event "
+                f"to delete. It is typically a 20-30 character alphanumeric "
+                f"string (like 'e52nn5v552dltp6s7kc57m1228').\n"
+                f"- If prior step results above include a calendar_read with "
+                f"events, FIRST match the description against those events "
+                f"by title and/or start time, then pull the matching event's "
+                f"`id` field. Do NOT invent an event id.\n"
+                f"- If no event id can be confidently identified (no prior "
+                f"calendar_read, or no match), return null for event_id — "
+                f"do NOT guess.\n\n"
+                f"Respond in JSON:\n"
+                f'{{"account": "<account>", "event_id": "<google_event_id_or_null>"}}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=512,
+                disable_thinking=True,
+            )
+
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "calendar_delete",
+                }
+
+            account = (params.get("account") or "").strip()
+            event_id = (params.get("event_id") or "").strip()
+
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"extracted account '{account}' is not in connected "
+                        f"accounts — refusing. Available: {accounts_list}"
+                    ),
+                    "verified": False,
+                    "method": "calendar_delete",
+                    "extracted": {"account": account, "event_id": event_id},
+                }
+            if not event_id:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extracted event_id is empty — refusing to delete. "
+                        "Either no prior calendar_read provided context, or "
+                        "the description didn't match any prior event."
+                    ),
+                    "verified": False,
+                    "method": "calendar_delete",
+                    "extracted": {"account": account, "event_id": event_id},
+                }
+
+            # Extra safety: GET the event first, surface what's about to be
+            # destroyed in the trace, then DELETE. If the GET fails, refuse.
+            existing = await get_event(account, event_id)
+            if not existing.get("ok"):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"could not fetch event {event_id} before delete — "
+                        f"refusing. {existing.get('error', '')[:200]}"
+                    ),
+                    "verified": False,
+                    "method": "calendar_delete",
+                    "extracted": {"account": account, "event_id": event_id},
+                }
+            event_obj = existing.get("event", {}) or {}
+            event_title = event_obj.get("summary", "(no title)")
+            event_start = (event_obj.get("start") or {}).get("dateTime") \
+                          or (event_obj.get("start") or {}).get("date") or ""
+
+            result = await delete_event(account, event_id)
+            success = bool(result.get("ok"))
+            return {
+                "ok": success,
+                "result": {
+                    "account": account,
+                    "event_id": event_id,
+                    "deleted_title": event_title,
+                    "deleted_start": event_start,
+                    "deleted": success,
+                    "calendar_api_response": result.get("error", "")[:200]
+                                              if not success
+                                              else f"HTTP {result.get('status_code')}",
+                },
+                "verified": success,
+                "method": "calendar_delete",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"calendar_delete failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "calendar_delete",
+            }
+
     if capability_key == "vinted_draft_create":
         # Generates a Vinted listing draft from photo(s). This is the first
         # capability that needs binary input not extractable from a step
@@ -497,8 +634,13 @@ async def _execute_step(step: Dict[str, Any],
                 }
             account = accounts[0]
             events = await get_upcoming_events(account, days=7)
+            # Include the Google event `id` so chain-aware consumers
+            # (calendar_delete especially) can resolve "delete the test
+            # event tomorrow" → match by title/time, then use the id.
+            # Same pattern as gmail_read returning from_address.
             summary = [
                 {
+                    "id": e.get("id"),
                     "title": e.get("title") or e.get("summary") or "(no title)",
                     "start": (e.get("start") or "")[:19],
                     "end": (e.get("end") or "")[:19],

@@ -116,6 +116,57 @@ async def create_event(email: str, title: str, start: str, end: str,
         return {"ok": False, "error": str(e)}
 
 
+async def delete_event(email: str, event_id: str) -> Dict:
+    """Delete a calendar event by id. Returns {ok, status_code, [error]}.
+
+    Google's DELETE returns HTTP 204 on success (no body); 404/410 if the
+    event was already cancelled or never existed; 403 if API not enabled
+    or scope missing. The caller is responsible for verifying the event
+    exists and belongs to the right calendar BEFORE calling this — the
+    function itself just performs the DELETE.
+    """
+    token = await get_calendar_token(email)
+    if not token:
+        return {"ok": False, "error": "No calendar token"}
+    if not event_id:
+        return {"ok": False, "error": "event_id is required"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.delete(
+                f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if r.status_code in (200, 204):
+                return {"ok": True, "status_code": r.status_code}
+            return {"ok": False, "status_code": r.status_code, "error": r.text[:300]}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+async def get_event(email: str, event_id: str) -> Dict:
+    """Fetch a single calendar event by id. Used by the calendar_delete
+    dispatcher to verify the event exists and matches expectations BEFORE
+    issuing DELETE — same pattern as the manual one-shot deletion of the
+    R2.4+ test event.
+    """
+    token = await get_calendar_token(email)
+    if not token:
+        return {"ok": False, "error": "No calendar token"}
+    if not event_id:
+        return {"ok": False, "error": "event_id is required"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if r.status_code == 200:
+                return {"ok": True, "event": r.json()}
+            return {"ok": False, "status_code": r.status_code, "error": r.text[:300]}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 async def get_todays_schedule(email: str) -> str:
     """Get today's events as a readable summary."""
     events = await get_upcoming_events(email, days=1)

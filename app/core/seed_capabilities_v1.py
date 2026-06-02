@@ -170,6 +170,25 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ — write half of the former calendar_read_write. Governor default-denies without approval_token. Plan executor dispatcher extracts {account, title, start_iso, end_iso} via gemini_json, validates, then calls calendar_service.create_event.",
     },
     {
+        # R2.4+ calendar_delete: destructive, external_effect, governor
+        # default-denies. Same three-layer safety as calendar_write PLUS an
+        # extra verify-by-GET-before-DELETE beat in the dispatcher: the
+        # event is fetched first and its title/start surfaced in the
+        # extracted trace so the audit trail captures exactly what was
+        # destroyed. Chain-aware — resolves event_id from a prior
+        # calendar_read result's parsed id field.
+        "name": "calendar_delete",
+        "description": "Delete a calendar event by id from a connected Google Calendar. Destructive — requires governor approval per call. Chain-aware: resolves event_id from a prior calendar_read step's results.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "high",
+        "approval_required": True,
+        "external_effect": True,
+        "cost_type": "free",
+        "endpoint": "/api/v1/calendar/today",
+        "notes": "R2.4+ (2026-06-02). Governor default-denies. Dispatcher extracts {account, event_id} via gemini_json (disable_thinking=True), validates the account is connected + event_id is non-empty, fetches the event via get_event to confirm it exists, then calls delete_event. Trace captures the event's title/start so audits can see what was deleted.",
+    },
+    {
         "name": "proactive_alerts",
         "description": "Periodic scan for urgent items requiring attention.",
         "status": "active",
