@@ -38,25 +38,30 @@ from typing import Any, Dict, List, Optional
 
 def _format_prior_results(prior_results: Optional[List[Dict[str, Any]]]) -> str:
     """Compact preamble describing earlier-step outputs. Used by dispatchers
-    that opt in to chain-aware execution (today: chat). Empty list / None
-    returns "" so callers can do `prefix = _format_prior_results(...); if
-    prefix: prompt = prefix + prompt`.
+    that opt in to chain-aware execution (today: chat, gmail_send). Empty
+    list / None returns "" so callers can do `prefix =
+    _format_prior_results(...); if prefix: prompt = prefix + prompt`.
 
-    Each line carries: step number, capability_key, verified flag, and a
-    result summary capped to keep prompts compact.
+    Dict/list results are dumped as JSON (capped at 1500 chars each)
+    rather than stringified with per-key truncation — the old shape
+    hid inner fields like gmail_read's parsed from_address from
+    downstream LLMs even when those fields existed. String results
+    are truncated at 800 chars; other types stringified and capped.
     """
     if not prior_results:
         return ""
+    import json as _json
     lines = ["Earlier steps in this plan produced these results:"]
     for r in prior_results:
         cap_key = r.get("capability_key", "?")
         sn = r.get("step_number", "?")
         verified = r.get("verified", False)
         result = r.get("result")
-        if isinstance(result, dict):
-            # Summarise dict results compactly so the prompt stays small.
-            keys_preview = ", ".join(f"{k}={str(v)[:60]}" for k, v in list(result.items())[:5])
-            summary = f"{{{keys_preview}}}"
+        if isinstance(result, (dict, list)):
+            try:
+                summary = _json.dumps(result, default=str)[:1500]
+            except Exception:
+                summary = str(result)[:1500]
         elif isinstance(result, str):
             summary = result[:800]
         else:
