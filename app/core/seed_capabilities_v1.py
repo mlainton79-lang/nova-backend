@@ -170,6 +170,26 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ — write half of the former calendar_read_write. Governor default-denies without approval_token. Plan executor dispatcher extracts {account, title, start_iso, end_iso} via gemini_json, validates, then calls calendar_service.create_event.",
     },
     {
+        # R2.4+ gmail_delete: destructive sibling of gmail_send. Uses
+        # trash_email (move-to-Trash, 30-day Gmail retention) — REVERSIBLE
+        # destructive, not permanent. v0 deliberately does NOT expose
+        # delete_email (permanent). If permanent delete is ever needed it
+        # becomes a separate capability with even stricter safety.
+        # Governor default-denies absent approval_token; dispatcher does
+        # verify-by-GET before trashing so the audit trail captures
+        # exactly what was destroyed.
+        "name": "gmail_delete",
+        "description": "Move a Gmail message to Trash by message_id (REVERSIBLE — 30-day retention before permanent deletion). Destructive — requires governor approval per call. Chain-aware: resolves message_id from a prior gmail_read step's results.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "high",
+        "approval_required": True,
+        "external_effect": True,
+        "cost_type": "free",
+        "endpoint": "/api/v1/gmail/trash",
+        "notes": "R2.4+ (2026-06-02). Governor default-denies. Dispatcher extracts {account, message_id} via gemini_json (disable_thinking=True), validates account is connected + message_id non-empty, fetches the message via get_email_body to confirm it exists, then calls trash_email (REVERSIBLE — moves to Trash, kept 30 days before permanent purge). Trace captures the message's from/subject/date so audits can see what was trashed.",
+    },
+    {
         # R2.4+ calendar_delete: destructive, external_effect, governor
         # default-denies. Same three-layer safety as calendar_write PLUS an
         # extra verify-by-GET-before-DELETE beat in the dispatcher: the

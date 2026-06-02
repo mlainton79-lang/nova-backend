@@ -405,6 +405,143 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "vision_image",
             }
 
+    if capability_key == "gmail_delete":
+        # Destructive sibling of gmail_send. Uses trash_email — REVERSIBLE
+        # 30-day-retention destructive, not permanent. Same three-layer
+        # safety as calendar_delete:
+        #   1. Registry: external_effect=True, approval_required=True →
+        #      governor default-denies without approval_token.
+        #   2. LLM extraction of {account, message_id} with disable_thinking
+        #      and chain-aware prior_results — typically resolves the id
+        #      by matching the description against a prior gmail_read's
+        #      `id` field.
+        #   3. Strict validation + verify-by-GET BEFORE trash: fetch via
+        #      get_email_body, surface from/subject/date in the trace,
+        #      then trash. If GET fails → refuse cleanly.
+        try:
+            from app.core.gmail_service import (
+                get_all_accounts, trash_email, get_email_body
+            )
+            from app.core.model_router import gemini_json
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no Gmail accounts connected",
+                    "verified": False,
+                    "method": "gmail_delete",
+                }
+            accounts_list = ", ".join(accounts)
+
+            prior_block = _format_prior_results(prior_results)
+            extract_prompt = (
+                (prior_block if prior_block else "")
+                + f"Extract structured Gmail-message-DELETE parameters from "
+                f"this step description. The action is MOVE TO TRASH "
+                f"(reversible — 30 days retention).\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts (pick the one that owns the message): "
+                f"{accounts_list}\n\n"
+                f"Rules:\n"
+                f"- `account` must be one of the available accounts, verbatim.\n"
+                f"- `message_id` is the Gmail message id of the email to "
+                f"trash. It is a hex-alphanumeric string typically 16-20 "
+                f"characters (like '194e2d3a9c8e7f1b').\n"
+                f"- If prior step results above include a gmail_read with "
+                f"emails, FIRST match the description against those emails "
+                f"by subject, sender, or date, then pull the matching "
+                f"email's `id` field. Do NOT invent a message_id.\n"
+                f"- If no message_id can be confidently identified, return "
+                f"null for message_id — do NOT guess.\n\n"
+                f"Respond in JSON:\n"
+                f'{{"account": "<account>", "message_id": "<gmail_message_id_or_null>"}}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=512,
+                disable_thinking=True,
+            )
+
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "gmail_delete",
+                }
+
+            account = (params.get("account") or "").strip()
+            message_id = (params.get("message_id") or "").strip()
+
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"extracted account '{account}' is not in connected "
+                        f"accounts — refusing. Available: {accounts_list}"
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete",
+                    "extracted": {"account": account, "message_id": message_id},
+                }
+            if not message_id:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extracted message_id is empty — refusing to trash. "
+                        "Either no prior gmail_read provided context, or "
+                        "the description didn't match any prior message."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete",
+                    "extracted": {"account": account, "message_id": message_id},
+                }
+
+            # Verify-by-GET before trash. If the GET fails (wrong id,
+            # message deleted), refuse cleanly — trashing the wrong
+            # message would be worse than refusing.
+            existing = await get_email_body(account, message_id)
+            if not existing or not existing.get("id"):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"could not fetch message {message_id} before "
+                        f"trash — refusing. Message may not exist or be "
+                        f"accessible to this account."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete",
+                    "extracted": {"account": account, "message_id": message_id},
+                }
+            trashed_from = (existing.get("from") or "")[:120]
+            trashed_subject = (existing.get("subject") or "")[:120]
+            trashed_date = (existing.get("date") or "")[:32]
+
+            success = await trash_email(account, message_id)
+            return {
+                "ok": bool(success),
+                "result": {
+                    "account": account,
+                    "message_id": message_id,
+                    "trashed_from": trashed_from,
+                    "trashed_subject": trashed_subject,
+                    "trashed_date": trashed_date,
+                    "trashed": bool(success),
+                    "reversible": True,
+                    "retention_days": 30,
+                },
+                "verified": bool(success),
+                "method": "gmail_delete",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"gmail_delete failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gmail_delete",
+            }
+
     if capability_key == "calendar_delete":
         # Destructive sibling of calendar_write. Same three-layer safety:
         #   1. Registry: external_effect=True, approval_required=True
@@ -851,10 +988,15 @@ async def _execute_step(step: Dict[str, Any],
 
             # Compact summary — full email bodies would bloat the trace.
             # Keep enough to confirm the read worked and feed downstream steps.
+            # `id` (Gmail message id) is included so chain-aware consumers
+            # (gmail_delete especially) can resolve "trash that vinted email
+            # from earlier" → match by subject/from/date → pull the id.
+            # Same pattern as calendar_read's id addition.
             summary = []
             for e in (emails or [])[:10]:
                 name, addr, raw = _parse_from(e.get("from") or "")
                 summary.append({
+                    "id": e.get("id"),
                     "account": e.get("account"),
                     "from_name": name,
                     "from_address": addr,  # parsed email (empty if not present)
