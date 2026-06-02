@@ -48,6 +48,17 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ (2026-06-02): added backend dispatcher branch in plan_executor. Calls selling.drafts.get_draft(draft_id) and returns compact summary {title, description_chars, price, condition, image_count, status, warnings} for downstream chat/reason. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results. Android UI piece unchanged (Stage 2d, commit b88614c).",
     },
     {
+        "name": "memory_recall",
+        "description": "Semantic search over Tony's persistent memory (semantic_memories table, pgvector cosine similarity). Returns the top-k most relevant memories for a given query — useful for personalisation context ('what do I prefer for X?'), history lookups ('when did I last mention Y?'), and recall-then-reason chains.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.semantic_memory.search_memories(query=description, top_k=10). Returns compact list of {id, category, text, similarity, importance, created_at}. Read-with-bookkeeping (search_memories updates access_count + last_accessed as a side effect — same shape as a Postgres LRU cache touch, semantically still a read).",
+    },
+    {
         "name": "web_fetch",
         "description": "Fetch a single URL and return its readable text content. Complements brave_search (which only returns snippets) by retrieving the full page body for downstream reasoning/summarisation. Chain-aware: when a prior brave_search step provided URLs, this step can resolve the URL by description (e.g. 'fetch the BBC result').",
         "status": "active",

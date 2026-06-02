@@ -312,6 +312,52 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "gemini_reason",
             }
 
+    if capability_key == "memory_recall":
+        # Semantic search over Tony's persistent memory. The step
+        # description IS the query — pgvector cosine similarity
+        # handles natural language well, no LLM extraction needed.
+        # Returns the top-10 closest matches. Read-only (with the
+        # caveat that search_memories updates access_count +
+        # last_accessed as a side effect — same shape as a Postgres
+        # LRU cache touch, semantically still a read).
+        try:
+            from app.core.semantic_memory import search_memories
+            query = (description or "").strip()
+            if not query:
+                return {
+                    "ok": False,
+                    "error": "memory_recall step description was empty — nothing to query",
+                    "verified": False,
+                    "method": "memory_recall",
+                }
+            memories = await search_memories(query=query, top_k=10)
+            compact = [
+                {
+                    "id": m.get("id"),
+                    "category": m.get("category"),
+                    "text": (m.get("text") or "")[:300],
+                    "similarity": round(float(m.get("similarity") or 0), 4),
+                    "importance": m.get("importance"),
+                    "created_at": str(m.get("created_at") or ""),
+                }
+                for m in (memories or [])
+            ]
+            return {
+                "ok": True,
+                "result": compact,
+                "verified": True,
+                "method": "memory_recall",
+                "count": len(compact),
+                "query": query[:200],
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"memory_recall failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "memory_recall",
+            }
+
     if capability_key == "gmail_send":
         # Sends email. Three layers of safety:
         #   1. Governor (R2.1b) default-denies external_effect+approval_required
