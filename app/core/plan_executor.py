@@ -186,7 +186,14 @@ async def _execute_step(step: Dict[str, Any],
                 "Request:\n"
                 + description
             )
-            text = await gemini(prompt, task="reasoning", max_tokens=2048)
+            # task="general" → flash tier, no Google Search grounding.
+            # Reasoning here is over the prior_results context (internal
+            # data), not the open web — grounding wastes tokens. Flash
+            # keeps thinking-mode enabled at a lower thinking-budget than
+            # pro, leaving enough output budget for the structured answer.
+            # Original task="reasoning" attempt landed thoughts=2045
+            # output=0 (per Litmus 14a).
+            text = await gemini(prompt, task="general", max_tokens=2048)
             return {
                 "ok": bool(text),
                 "result": (text or "")[:1500],
