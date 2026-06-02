@@ -48,6 +48,17 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ (2026-06-02): added backend dispatcher branch in plan_executor. Calls selling.drafts.get_draft(draft_id) and returns compact summary {title, description_chars, price, condition, image_count, status, warnings} for downstream chat/reason. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results. Android UI piece unchanged (Stage 2d, commit b88614c).",
     },
     {
+        "name": "web_fetch",
+        "description": "Fetch a single URL and return its readable text content. Complements brave_search (which only returns snippets) by retrieving the full page body for downstream reasoning/summarisation. Chain-aware: when a prior brave_search step provided URLs, this step can resolve the URL by description (e.g. 'fetch the BBC result').",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.research.fetch_page(url) which does httpx GET + HTML strip + 8000-char cap. URL extracted via regex from step description/goal_text first, then LLM extractor scans prior_results for URL when description references one (e.g. 'fetch the first result').",
+    },
+    {
         "name": "vinted_drafts_list",
         "description": "List recent Vinted drafts. Two surfaces: Android UI (drawer/chat command over filesDir persistence) and backend (chain-aware programmatic read over tony_drafts table for planner steps that need to enumerate then resolve a specific draft by description).",
         "status": "active",

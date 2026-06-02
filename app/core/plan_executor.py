@@ -135,6 +135,101 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "brave_search",
             }
 
+    if capability_key == "web_fetch":
+        # Single-URL fetch returning readable text body. Complements
+        # brave_search (snippets) by giving downstream reason/chat
+        # steps the full page content.
+        #
+        # URL resolution priority:
+        #   1. http(s) URL in step description (regex)
+        #   2. http(s) URL in original goal_text (regex)
+        #   3. LLM extractor over prior_results (chain-aware — when a
+        #      prior brave_search produced a list of URLs and the
+        #      description says "fetch the first/BBC/official one")
+        # If no URL found at any layer → clean refusal.
+        try:
+            import re as _re_local
+            from app.core.research import fetch_page
+
+            url_regex = r"https?://[^\s'\"<>)]+"
+            url: Optional[str] = None
+            extracted_via = None
+            for haystack in ((description or ""), (goal_text or "")):
+                m = _re_local.search(url_regex, haystack)
+                if m:
+                    url = m.group(0).rstrip(".,;:")
+                    extracted_via = "regex"
+                    break
+
+            prior_block = _format_prior_results(prior_results)
+            if not url and prior_block:
+                from app.core.model_router import gemini_json
+                extract_prompt = (
+                    prior_block
+                    + "Extract the URL to fetch for this step.\n\n"
+                    f"Description: {description}\n\n"
+                    "Rules:\n"
+                    "- The URL must be a full http(s)://... value.\n"
+                    "- If prior step results above include search results "
+                    "with `url` fields, match the description's cues "
+                    "('first result', 'BBC one', 'official site') against "
+                    "those entries and pick the matching URL.\n"
+                    "- If no URL can be confidently identified, return null.\n\n"
+                    'Respond in JSON: {"url": "<url_or_null>"}'
+                )
+                params = await gemini_json(
+                    extract_prompt, task="general", max_tokens=256,
+                    disable_thinking=True,
+                )
+                if isinstance(params, dict):
+                    candidate = params.get("url")
+                    if isinstance(candidate, str) and _re_local.match(url_regex, candidate):
+                        url = candidate.rstrip(".,;:")
+                        extracted_via = "llm"
+
+            if not url:
+                return {
+                    "ok": False,
+                    "error": (
+                        "no URL found in step description, goal, or prior "
+                        "results — refusing to fetch. Either include an "
+                        "explicit https:// URL or pair this step with a "
+                        "prior brave_search."
+                    ),
+                    "verified": False,
+                    "method": "web_fetch",
+                }
+
+            content = await fetch_page(url)
+            if not content:
+                return {
+                    "ok": False,
+                    "error": f"fetch_page returned empty body for {url} (non-200, blocked, or empty)",
+                    "verified": False,
+                    "method": "web_fetch",
+                    "url": url,
+                    "extracted_via": extracted_via,
+                }
+            return {
+                "ok": True,
+                "result": {
+                    "url": url,
+                    "content_chars": len(content),
+                    "content": content[:5000],
+                },
+                "verified": True,
+                "method": "web_fetch",
+                "extracted_via": extracted_via,
+                "used_prior_results": extracted_via == "llm",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"web_fetch failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "web_fetch",
+            }
+
     if capability_key == "chat":
         try:
             from app.core.model_router import gemini
