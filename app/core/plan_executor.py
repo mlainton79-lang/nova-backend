@@ -312,6 +312,73 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "gemini_reason",
             }
 
+    if capability_key == "fact_extractor":
+        # Structured fact extraction over a text block. Returns a list
+        # of {subject, predicate, object, confidence} triples that
+        # downstream steps can consume (memory_save, reason, chat).
+        #
+        # Text source priority:
+        #   1. prior_results — concatenate verbatim text content from
+        #      previous steps (web_fetch body, gmail_read snippets,
+        #      calendar_read events, anything). This is the common case
+        #      because fact extraction usually runs AFTER a read.
+        #   2. description fallback — if no prior_results, use the
+        #      description itself. Less common but supported.
+        # Refuses cleanly when there's nothing to extract from.
+        try:
+            from app.core.fact_extractor import extract_facts_from_text
+            import json as _json
+
+            text_source = ""
+            if prior_results:
+                parts = []
+                for r in prior_results:
+                    result = r.get("result")
+                    if isinstance(result, str):
+                        parts.append(result)
+                    elif isinstance(result, (dict, list)):
+                        try:
+                            parts.append(_json.dumps(result, default=str))
+                        except Exception:
+                            parts.append(str(result))
+                    elif result is not None:
+                        parts.append(str(result))
+                text_source = "\n\n".join(p for p in parts if p)[:6000]
+
+            if not text_source.strip():
+                text_source = (description or "").strip()
+
+            if not text_source:
+                return {
+                    "ok": False,
+                    "error": (
+                        "no text source to extract from — pair with a "
+                        "prior read step (web_fetch / gmail_read / "
+                        "calendar_read / memory_recall) or put the text "
+                        "in the step description."
+                    ),
+                    "verified": False,
+                    "method": "fact_extractor",
+                }
+
+            facts = await extract_facts_from_text(text_source, max_facts=10)
+            return {
+                "ok": True,
+                "result": facts,
+                "verified": True,
+                "method": "fact_extractor",
+                "count": len(facts),
+                "used_prior_results": bool(prior_results),
+                "source_chars": len(text_source),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"fact_extractor failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "fact_extractor",
+            }
+
     if capability_key == "memory_save":
         # Persist a new memory. LLM extracts {text, category} from the
         # step description so the saved row is the FACT itself, not the

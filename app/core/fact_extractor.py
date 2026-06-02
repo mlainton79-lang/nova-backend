@@ -127,6 +127,83 @@ If no fact-worthy content, return: []
 Respond with JSON array only, no prose:"""
 
 
+async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
+    """Extract atomic fact triples from a single block of text.
+
+    Sibling to `extract_facts` (which is conversation-shaped — User/Tony
+    turns) for use cases where the input is unstructured: a web page
+    body, an email body, prior-step results, etc. Same return shape
+    `[{subject, predicate, object, confidence}, ...]` so downstream
+    callers (memory_save dispatcher, save_facts) can consume either
+    interchangeably.
+
+    Unlike `extract_facts`, this version doesn't bias toward Matthew-
+    related facts — the input may be about any topic.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key or not text or not text.strip():
+        return []
+
+    prompt = (
+        "Extract atomic facts from the text below. A fact is a triple: "
+        "(subject, predicate, object).\n\n"
+        "ONLY extract facts that are:\n"
+        "- Explicitly stated in the text (not inferred, not assumed)\n"
+        "- Concrete and self-contained (would still make sense out of context)\n"
+        "- NOT trivial (don't extract things like 'the page has a title')\n\n"
+        "Return STRICT JSON: an array of "
+        '{"subject", "predicate", "object", "confidence"}. '
+        f"At most {max_facts} facts.\n\n"
+        "Subject is the entity the fact is about (a person, place, thing, concept).\n"
+        "Predicate is a short verb phrase.\n"
+        "Object is the value (string).\n"
+        "Confidence: 0.5 (weak/possibly inferred), 0.7 (clear), 0.9 (certain).\n\n"
+        "Text:\n"
+        f'"""\n{text[:6000]}\n"""\n\n'
+        "If no fact-worthy content, return: []\n\n"
+        "Respond with JSON array only, no prose:"
+    )
+
+    try:
+        from app.core import gemini_client
+        resp = await gemini_client.generate_content(
+            tier="flash",
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config={"maxOutputTokens": 1200, "temperature": 0.1},
+            timeout=15.0,
+            caller_context="fact_extractor.from_text",
+        )
+        response = gemini_client.extract_text(resp)
+
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+
+        first = cleaned.find("[")
+        last = cleaned.rfind("]")
+        if first < 0 or last < 0:
+            return []
+
+        facts = json.loads(cleaned[first:last+1])
+        valid = []
+        for f in facts:
+            if not isinstance(f, dict):
+                continue
+            if all(k in f for k in ("subject", "predicate", "object")):
+                valid.append({
+                    "subject": str(f["subject"])[:100],
+                    "predicate": str(f["predicate"])[:100],
+                    "object": str(f["object"])[:500],
+                    "confidence": float(f.get("confidence", 0.7)),
+                })
+        return valid[:max_facts]
+    except Exception as e:
+        print(f"[FACTS] extract_facts_from_text error: {e}")
+        return []
+
+
 async def extract_facts(user_message: str, assistant_reply: str) -> List[Dict]:
     """Run Gemini extraction on a conversation turn. Returns list of facts."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
