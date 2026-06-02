@@ -168,14 +168,43 @@ async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
     )
 
     try:
-        from app.core.model_router import gemini_json
-        parsed = await gemini_json(
-            prompt, task="general", max_tokens=1500,
-            disable_thinking=True,
+        from app.core.model_router import gemini
+        import re as _re
+        raw = await gemini(
+            prompt, task="general", max_tokens=2048,
+            disable_thinking=True, temperature=0.1,
         )
-        if not isinstance(parsed, dict):
+        if not raw:
+            print(f"[FACTS] extract_facts_from_text: gemini returned empty (text_chars={len(text)})")
             return []
-        facts = parsed.get("facts") or []
+        # Try to parse as either a plain array or a {facts: [...]} object.
+        cleaned = _re.sub(r'```json|```', '', raw).strip()
+        parsed = None
+        try:
+            parsed = json.loads(cleaned)
+        except Exception:
+            arr_match = _re.search(r'\[.*\]', cleaned, _re.DOTALL)
+            if arr_match:
+                try:
+                    parsed = json.loads(arr_match.group())
+                except Exception:
+                    pass
+            if parsed is None:
+                obj_match = _re.search(r'\{.*\}', cleaned, _re.DOTALL)
+                if obj_match:
+                    try:
+                        parsed = json.loads(obj_match.group())
+                    except Exception:
+                        pass
+        if parsed is None:
+            print(f"[FACTS] extract_facts_from_text: failed to parse JSON. raw[:300]={raw[:300]!r}")
+            return []
+        if isinstance(parsed, list):
+            facts = parsed
+        elif isinstance(parsed, dict):
+            facts = parsed.get("facts") or []
+        else:
+            return []
         if not isinstance(facts, list):
             return []
         valid = []
