@@ -1207,6 +1207,266 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "calendar_delete",
             }
 
+    if capability_key == "calendar_update":
+        # Modify an existing calendar event. Same three-layer safety as
+        # calendar_delete (governor + LLM extract + verify-by-GET +
+        # match-evidence cross-check) — destruction of intent is just
+        # as bad as destruction of the row when the wrong event gets
+        # silently rewritten.
+        #
+        # Extra v0 guard: at least one updateable field must be present
+        # in the extractor's response. A "PATCH with no fields" would
+        # be a no-op API call but a footgun in autonomous flows.
+        try:
+            from app.core.gmail_service import get_all_accounts
+            from app.core.calendar_service import update_event, get_event
+            from app.core.model_router import gemini_json
+            from datetime import datetime as _dt
+
+            accounts = get_all_accounts()
+            if not accounts:
+                return {
+                    "ok": False,
+                    "error": "no connected accounts — calendar uses Gmail OAuth tokens",
+                    "verified": False,
+                    "method": "calendar_update",
+                }
+            accounts_list = ", ".join(accounts)
+
+            prior_block = _format_prior_results(prior_results)
+            today_str = _dt.utcnow().strftime("%Y-%m-%d (%A)")
+            extract_prompt = (
+                (prior_block if prior_block else "")
+                + "Extract structured calendar-event-UPDATE parameters from "
+                "this step description.\n\n"
+                f"Description: {description}\n\n"
+                f"Available accounts (calendar uses Gmail OAuth — pick one): "
+                f"{accounts_list}\n\n"
+                f"Today's date is {today_str} UTC. Any relative date "
+                "you produce ('tomorrow', '2pm') MUST resolve against "
+                "this date.\n\n"
+                "Rules:\n"
+                "- `account` must be one of the available accounts, verbatim.\n"
+                "- `event_id` is the Google Calendar event id to update. If "
+                "prior step results above include a calendar_read with "
+                "events, FIRST match the description against those events "
+                "by title and/or start. If no match → return null.\n"
+                "- `match_evidence` is a substring of the matching event's "
+                "title OR start datetime. VERIFIED against the fetched "
+                "event before update — refused if not present.\n"
+                "- `updates` is a dict of fields to change. Include ONLY "
+                "fields the description explicitly modifies. Valid keys:\n"
+                "    title (str), description (str), location (str),\n"
+                "    start_iso (str, ISO 8601 like '2026-06-03T14:00:00'),\n"
+                "    end_iso (str, ISO 8601).\n"
+                "- If only start_iso is given without end_iso, the dispatcher "
+                "preserves the original event's duration — return start_iso "
+                "alone in that case.\n"
+                "- If no update fields can be extracted → return updates={}.\n\n"
+                "Respond in JSON:\n"
+                '{"account": "<account>", '
+                '"event_id": "<id_or_null>", '
+                '"match_evidence": "<substring>", '
+                '"updates": {"title": "...", "start_iso": "...", "end_iso": "...", "description": "...", "location": "..."}}'
+            )
+            params = await gemini_json(
+                extract_prompt, task="general", max_tokens=768,
+                disable_thinking=True,
+            )
+            if not isinstance(params, dict):
+                return {
+                    "ok": False,
+                    "error": f"parameter extraction returned non-dict: {type(params).__name__}",
+                    "verified": False,
+                    "method": "calendar_update",
+                }
+
+            account = (params.get("account") or "").strip()
+            event_id = (params.get("event_id") or "").strip()
+            match_evidence = (params.get("match_evidence") or "").strip()
+            updates_in = params.get("updates") or {}
+            if not isinstance(updates_in, dict):
+                updates_in = {}
+
+            if account not in accounts:
+                return {
+                    "ok": False,
+                    "error": f"extracted account '{account}' not in connected accounts. Available: {accounts_list}",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                }
+            if not event_id:
+                return {
+                    "ok": False,
+                    "error": "extracted event_id is empty — refusing to update. Either no prior calendar_read context, or description didn't match any prior event.",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                }
+            if not match_evidence:
+                return {
+                    "ok": False,
+                    "error": "extractor did not provide match_evidence — refusing. Destructive-by-overwrite actions require a verifiable justification.",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                }
+
+            # Verify-by-GET (BEFORE state).
+            existing = await get_event(account, event_id)
+            if not existing.get("ok"):
+                return {
+                    "ok": False,
+                    "error": f"could not fetch event {event_id} before update — refusing. {existing.get('error', '')[:200]}",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                }
+            before_obj = existing.get("event", {}) or {}
+            before_title = before_obj.get("summary", "(no title)")
+            before_start_obj = before_obj.get("start") or {}
+            before_end_obj = before_obj.get("end") or {}
+            before_start = before_start_obj.get("dateTime") or before_start_obj.get("date") or ""
+            before_end = before_end_obj.get("dateTime") or before_end_obj.get("date") or ""
+
+            # Match-evidence cross-check.
+            ev_lower = match_evidence.lower()
+            haystack = (before_title + " " + before_start).lower()
+            if ev_lower not in haystack:
+                return {
+                    "ok": False,
+                    "error": f"match_evidence '{match_evidence}' does NOT appear in the fetched event's title/start — refusing.",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                    "fetched": {"title": before_title, "start": before_start},
+                }
+
+            # Shape the PATCH payload. Title → summary, start_iso →
+            # start.dateTime, etc. Preserve duration when only start_iso
+            # given.
+            tz = "Europe/London"
+            patch: Dict[str, Any] = {}
+            new_title = (updates_in.get("title") or "").strip()
+            if new_title:
+                patch["summary"] = new_title
+            new_desc = updates_in.get("description")
+            if isinstance(new_desc, str) and new_desc.strip():
+                patch["description"] = new_desc.strip()
+            new_loc = updates_in.get("location")
+            if isinstance(new_loc, str) and new_loc.strip():
+                patch["location"] = new_loc.strip()
+
+            start_iso = (updates_in.get("start_iso") or "").strip()
+            end_iso = (updates_in.get("end_iso") or "").strip()
+            if start_iso:
+                try:
+                    new_start_dt = _dt.fromisoformat(start_iso)
+                except ValueError:
+                    return {
+                        "ok": False,
+                        "error": f"start_iso '{start_iso}' is not valid ISO 8601 — refusing.",
+                        "verified": False,
+                        "method": "calendar_update",
+                        "extracted": params,
+                    }
+                patch["start"] = {"dateTime": start_iso, "timeZone": tz}
+                if end_iso:
+                    try:
+                        new_end_dt = _dt.fromisoformat(end_iso)
+                    except ValueError:
+                        return {
+                            "ok": False,
+                            "error": f"end_iso '{end_iso}' is not valid ISO 8601 — refusing.",
+                            "verified": False,
+                            "method": "calendar_update",
+                            "extracted": params,
+                        }
+                    if new_end_dt <= new_start_dt:
+                        return {
+                            "ok": False,
+                            "error": "end_iso must be strictly after start_iso — refusing.",
+                            "verified": False,
+                            "method": "calendar_update",
+                            "extracted": params,
+                        }
+                    patch["end"] = {"dateTime": end_iso, "timeZone": tz}
+                else:
+                    # Preserve original duration: shift end by the same
+                    # delta the start moved.
+                    try:
+                        old_start_dt = _dt.fromisoformat(before_start.replace("Z", "+00:00"))
+                        old_end_dt = _dt.fromisoformat(before_end.replace("Z", "+00:00"))
+                        duration = old_end_dt - old_start_dt
+                        # new_start_dt may be naive; use replace-tzinfo-free arithmetic
+                        new_end_dt = new_start_dt + duration
+                        patch["end"] = {"dateTime": new_end_dt.isoformat(), "timeZone": tz}
+                    except Exception:
+                        # If we can't parse before_start/end, refuse rather
+                        # than send a start-without-end PATCH (Google's
+                        # API would 400 anyway, and silent misbehaviour
+                        # is worse than explicit refusal).
+                        return {
+                            "ok": False,
+                            "error": "could not preserve original duration (before_start/end unparseable) and no end_iso supplied — refusing.",
+                            "verified": False,
+                            "method": "calendar_update",
+                            "extracted": params,
+                            "fetched": {"start": before_start, "end": before_end},
+                        }
+            elif end_iso:
+                return {
+                    "ok": False,
+                    "error": "end_iso supplied without start_iso — ambiguous, refusing. Provide both or neither.",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                }
+
+            if not patch:
+                return {
+                    "ok": False,
+                    "error": "no updateable fields extracted — refusing to send empty PATCH.",
+                    "verified": False,
+                    "method": "calendar_update",
+                    "extracted": params,
+                }
+
+            # PATCH and capture AFTER state.
+            patch_result = await update_event(account, event_id, patch)
+            success = bool(patch_result.get("ok"))
+            after_obj = patch_result.get("event", {}) if success else {}
+            after_title = after_obj.get("summary", "")
+            after_start = (after_obj.get("start") or {}).get("dateTime") \
+                          or (after_obj.get("start") or {}).get("date") or ""
+            after_end = (after_obj.get("end") or {}).get("dateTime") \
+                        or (after_obj.get("end") or {}).get("date") or ""
+
+            return {
+                "ok": success,
+                "result": {
+                    "account": account,
+                    "event_id": event_id,
+                    "before": {"title": before_title, "start": before_start, "end": before_end},
+                    "after": {"title": after_title, "start": after_start, "end": after_end},
+                    "patch_sent": patch,
+                    "calendar_api_response": patch_result.get("error", "")[:200]
+                                              if not success
+                                              else "HTTP 200",
+                },
+                "verified": success,
+                "method": "calendar_update",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"calendar_update failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "calendar_update",
+            }
+
     if capability_key == "vinted_drafts_list":
         # Pure read of the recent tony_drafts rows. Returns a compact
         # array shaped for downstream chain-aware draft_id resolution

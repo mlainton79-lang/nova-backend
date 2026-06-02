@@ -143,6 +143,41 @@ async def delete_event(email: str, event_id: str) -> Dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+async def update_event(email: str, event_id: str, updates: Dict) -> Dict:
+    """PATCH a single calendar event with partial updates.
+
+    `updates` is a dict whose keys map to Google Calendar event fields
+    (`summary`, `description`, `location`, `start`, `end`). Time fields
+    must be pre-shaped as `{"dateTime": "<ISO>", "timeZone": "Europe/London"}`
+    by the caller — the dispatcher does that shaping from its extractor
+    output.
+
+    Returns `{ok, event}` on 200, `{ok: False, status_code, error}` otherwise.
+    Pre-flight verify-by-GET (does this event exist? does it match the
+    intended target?) is the dispatcher's responsibility, not this helper's
+    — same separation as delete_event.
+    """
+    token = await get_calendar_token(email)
+    if not token:
+        return {"ok": False, "error": "No calendar token"}
+    if not event_id:
+        return {"ok": False, "error": "event_id is required"}
+    if not isinstance(updates, dict) or not updates:
+        return {"ok": False, "error": "updates dict is required and must be non-empty"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.patch(
+                f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=updates,
+            )
+            if r.status_code == 200:
+                return {"ok": True, "event": r.json()}
+            return {"ok": False, "status_code": r.status_code, "error": r.text[:300]}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 async def get_event(email: str, event_id: str) -> Dict:
     """Fetch a single calendar event by id. Used by the calendar_delete
     dispatcher to verify the event exists and matches expectations BEFORE

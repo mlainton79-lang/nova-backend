@@ -267,6 +267,17 @@ CAPABILITIES_V1 = [
         "notes": "R2.4+ (2026-06-02). Governor default-denies. Dispatcher extracts {account, event_id} via gemini_json (disable_thinking=True), validates the account is connected + event_id is non-empty, fetches the event via get_event to confirm it exists, then calls delete_event. Trace captures the event's title/start so audits can see what was deleted.",
     },
     {
+        "name": "calendar_update",
+        "description": "Modify an existing calendar event (move time, rename, edit description/location). Same safety stack as calendar_delete: governor approval + verify-by-GET + match-evidence cross-check. Chain-aware: resolves event_id from a prior calendar_read step's results. Use for goals like 'move my 11am to 2pm' or 'rename the test event'.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "high",
+        "approval_required": True,
+        "external_effect": True,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch. PATCH /calendars/primary/events/{id} via calendar_service.update_event. Dispatcher extracts {account, event_id, match_evidence, updates: {title?, start_iso?, end_iso?, description?, location?}} via gemini_json. Verify-by-GET captures the BEFORE state into the trace; match_evidence cross-check refuses if the LLM's claimed justification substring doesn't appear in the fetched event's title/start. After PATCH the trace captures the AFTER state too — full before/after audit for every update.",
+    },
+    {
         "name": "proactive_alerts",
         "description": "Periodic scan for urgent items requiring attention.",
         "status": "active",
