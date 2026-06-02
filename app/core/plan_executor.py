@@ -159,6 +159,49 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "gemini_general",
             }
 
+    if capability_key == "reason":
+        # Gap-bridge reasoning capability. The planner naturally
+        # decomposes goals into [read → analyse → write] but the
+        # `analyse` step has no concrete read/write capability to
+        # match — it becomes a `gap` and the executor halts. `reason`
+        # exists to satisfy those intermediate steps. Same underlying
+        # gemini call as chat, but the prompt frames the model as a
+        # bridge in a multi-step plan, biasing toward structured
+        # concrete output the downstream step can consume rather than
+        # a conversational reply.
+        try:
+            from app.core.model_router import gemini
+            prior_block = _format_prior_results(prior_results)
+            prompt = (
+                (prior_block if prior_block else "")
+                + "You are running an intermediate REASONING step inside "
+                "a multi-step plan. The next steps will use your output "
+                "to act. Analyse the prior step results above (if any) "
+                "and the request below. Be brief, structured, and "
+                "concrete — output exactly what the next step needs, "
+                "no preamble, no conversational fluff. If the request "
+                "is to pick a value (a time slot, a recipient, an item) "
+                "give that value plainly. If it's to summarise, give "
+                "the bullet points without commentary.\n\n"
+                "Request:\n"
+                + description
+            )
+            text = await gemini(prompt, task="reasoning", max_tokens=2048)
+            return {
+                "ok": bool(text),
+                "result": (text or "")[:1500],
+                "verified": bool(text and text.strip()),
+                "method": "gemini_reason",
+                "used_prior_results": bool(prior_block),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"reason failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gemini_reason",
+            }
+
     if capability_key == "gmail_send":
         # Sends email. Three layers of safety:
         #   1. Governor (R2.1b) default-denies external_effect+approval_required

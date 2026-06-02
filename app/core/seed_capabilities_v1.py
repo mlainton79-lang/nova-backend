@@ -100,6 +100,24 @@ CAPABILITIES_V1 = [
         "notes": "Shipped. Returns unread count and per-account breakdown.",
     },
     {
+        # R2.4+ reason: gap-bridge reasoning capability. Registered to
+        # satisfy planner-decomposed analysis steps (e.g. "find a free
+        # 30-min slot tomorrow from the calendar_read results") that
+        # would otherwise fall into `gap` because no underlying read or
+        # write capability matches. Internal-only — no external effect,
+        # no spending, no approval. Chain-aware by default (sees prior
+        # step results via the prior_results plumbing).
+        "name": "reason",
+        "description": "Internal reasoning / analysis step. Takes prior step results plus the step description, returns structured concrete output the next step can consume. Use this for 'analyse', 'find', 'pick', 'decide' steps between concrete read and write capabilities.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02). Registered to bridge planner-decomposed analysis steps. Plan executor dispatcher uses gemini with a structured-analysis prompt frame and prior_results context.",
+    },
+    {
         # R2.4+ gmail_send: corrected metadata. The legacy capabilities row
         # backfilled into tony_capabilities defaulted to external_effect=
         # False / approval_required=False, which is unsafe — sending email
