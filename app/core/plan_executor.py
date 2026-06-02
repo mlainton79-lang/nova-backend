@@ -491,8 +491,15 @@ async def _execute_step(step: Dict[str, Any],
                 }
             accounts_list = ", ".join(accounts)
 
+            # Chain-aware: if prior steps produced calendar_read results,
+            # inject them so the extractor can pick slots that don't
+            # conflict with existing events. Useful for goals like
+            # "find a free hour tomorrow and schedule X" or "book a
+            # meeting after my last event today."
+            prior_block = _format_prior_results(prior_results)
             extract_prompt = (
-                f"Extract structured calendar-event-creation parameters from "
+                (prior_block if prior_block else "")
+                + f"Extract structured calendar-event-creation parameters from "
                 f"this step description.\n\n"
                 f"Description: {description}\n\n"
                 f"Available accounts (calendar uses Gmail OAuth — pick one): "
@@ -504,6 +511,13 @@ async def _execute_step(step: Dict[str, Any],
                 f"like '2026-06-02T15:00:00'. If the description gives "
                 f"relative times (e.g. 'tomorrow 3pm'), resolve them against "
                 f"today's date above. End must be after start.\n"
+                f"- If prior step results above include calendar_read events, "
+                f"prefer a slot that does NOT overlap with any existing "
+                f"event (look at each event's start/end). For goals like "
+                f"'find a free time' or 'after my last meeting', use those "
+                f"events to choose a non-conflicting time. Brief gap-of-15-"
+                f"minutes between adjacent events is fine; overlapping is "
+                f"not.\n"
                 f"- `title` must be a non-empty string.\n"
                 f"- `description` and `location` are optional — return empty "
                 f"strings if not mentioned.\n"
@@ -596,6 +610,7 @@ async def _execute_step(step: Dict[str, Any],
                 },
                 "verified": success,
                 "method": "calendar_write",
+                "used_prior_results": bool(prior_block),
             }
         except Exception as e:
             return {
