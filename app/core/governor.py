@@ -161,10 +161,20 @@ def evaluate_action(
     Returns:
         {
           allowed: bool,
-          action_class: str,
-          reason: str,
-          requires_approval: bool,    # would this class normally need approval?
-          approval_satisfied: bool,   # is the approval requirement satisfied?
+          action_class: str,           # read_only | internal_write | external_effect | financial | self_modify
+          reason: str,                 # outcome label; differentiated for the new internal_write path
+                                       #   ("internal_write_approval_required_but_not_provided")
+                                       #   vs the existing class-gated deny
+                                       #   ("approval_required_but_not_provided")
+          requires_approval: bool,     # would this capability need approval (class-gated OR registry opt-in)?
+          approval_satisfied: bool,    # is the approval requirement satisfied?
+          approval_source: str | None, # which side of the policy required approval:
+                                       #   "class_gate"      → external_effect/financial/self_modify
+                                       #   "registry_opt_in" → internal_write with approval_required=True
+                                       #   None              → no approval requirement at all (read_only, or
+                                       #                       internal_write without opt-in)
+                                       # Only present on decisions emitted via _emit_decision; absent on
+                                       # the class_does_not_require_approval short-circuit.
         }
 
     The function is pure and never raises. If the governor kill-switch
