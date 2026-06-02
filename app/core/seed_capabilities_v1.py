@@ -15,6 +15,17 @@ from app.core.capabilities import upsert_capability
 
 CAPABILITIES_V1 = [
     {
+        "name": "news_check",
+        "description": "Search the latest news (past week) for a given topic via Brave's news API. Returns titles, URLs, descriptions, age, and source for the top results. Use for goals like 'what's the news about X', 'any developments on Y', or 'check latest headlines on Z'. Distinct from brave_search (general web): this hits the news endpoint specifically and biases to fresh items.",
+        "status": "active",
+        "runner": "backend_python",
+        "risk_level": "low",
+        "approval_required": False,
+        "external_effect": False,
+        "cost_type": "free",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.news_monitor.search_news(query=description, count=8). Read-only HTTP fetch — same policy classification as brave_search. No persistence. Future enhancement: tony_scan_news() would surface watched-topic monitoring but it persists to tony_news_items so that's MANDATORY-Codex territory.",
+    },
+    {
         "name": "weather",
         "description": "Current weather + 3-day forecast for Matthew's location (Rotherham). Includes condition, temperature, wind, precipitation, today's range, and rule-based practical advice (coat / wrap up / wet-roads warning). Free Open-Meteo API, no key. Use for goals like 'what's the weather' or 'will it rain today'.",
         "status": "active",

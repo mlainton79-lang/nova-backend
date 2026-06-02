@@ -117,6 +117,43 @@ async def _execute_step(step: Dict[str, Any],
 
     # --- Dispatcher (v0: 2 capabilities) -----------------------------------
 
+    if capability_key == "news_check":
+        # Brave news API — read-only fresh-items search biased to the
+        # past week. Distinct from brave_search (general web) because
+        # the news endpoint surfaces articles with `age` + source
+        # metadata that downstream chat/reason steps can use to
+        # prioritise recency. The step description is the query
+        # verbatim (no LLM extraction needed; Brave handles natural
+        # language fine).
+        try:
+            from app.core.news_monitor import search_news
+            results = await search_news(query=description, count=8)
+            compact = []
+            for r in (results or [])[:8]:
+                if not isinstance(r, dict):
+                    continue
+                compact.append({
+                    "title": (r.get("title") or "")[:200],
+                    "url": r.get("url"),
+                    "description": (r.get("description") or "")[:400],
+                    "age": r.get("age") or r.get("age_friendly"),
+                    "source": (r.get("meta_url", {}) or {}).get("hostname") if isinstance(r.get("meta_url"), dict) else None,
+                })
+            return {
+                "ok": bool(compact),
+                "result": compact,
+                "verified": bool(compact),
+                "method": "news_check",
+                "count": len(compact),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"news_check failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "news_check",
+            }
+
     if capability_key == "brave_search":
         try:
             from app.core.brave_search import brave_search
