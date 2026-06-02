@@ -447,15 +447,29 @@ async def _execute_step(step: Dict[str, Any],
                 f"- `account` must be one of the available accounts, verbatim.\n"
                 f"- `message_id` is the Gmail message id of the email to "
                 f"trash. It is a hex-alphanumeric string typically 16-20 "
-                f"characters (like '194e2d3a9c8e7f1b').\n"
+                f"characters.\n"
                 f"- If prior step results above include a gmail_read with "
-                f"emails, FIRST match the description against those emails "
-                f"by subject, sender, or date, then pull the matching "
-                f"email's `id` field. Do NOT invent a message_id.\n"
-                f"- If no message_id can be confidently identified, return "
-                f"null for message_id — do NOT guess.\n\n"
+                f"emails, FIRST match the description against those emails. "
+                f"For each candidate, the description usually quotes a "
+                f"subject, names a sender, or gives a date — use ONLY those "
+                f"explicit cues. If multiple emails could match, OR no "
+                f"email's subject/from/date matches the description's "
+                f"explicit cues, return null for message_id. Do NOT guess "
+                f"or pick the first one in the list.\n"
+                f"- `match_evidence` is your stated reason for picking this "
+                f"id: a substring of the matching email's subject, OR a "
+                f"substring of the from-line, OR a substring of the date. "
+                f"This will be verified against the actual message before "
+                f"the trash proceeds — if the fetched message doesn't "
+                f"contain your stated evidence, the trash is REFUSED. So "
+                f"only return evidence you're certain matches.\n"
+                f"- If you cannot articulate a specific match_evidence "
+                f"substring, return null for both message_id and "
+                f"match_evidence.\n\n"
                 f"Respond in JSON:\n"
-                f'{{"account": "<account>", "message_id": "<gmail_message_id_or_null>"}}'
+                f'{{"account": "<account>", '
+                f'"message_id": "<gmail_message_id_or_null>", '
+                f'"match_evidence": "<substring_from_subject_or_from_or_date>"}}'
             )
             params = await gemini_json(
                 extract_prompt, task="general", max_tokens=512,
@@ -472,6 +486,7 @@ async def _execute_step(step: Dict[str, Any],
 
             account = (params.get("account") or "").strip()
             message_id = (params.get("message_id") or "").strip()
+            match_evidence = (params.get("match_evidence") or "").strip()
 
             if account not in accounts:
                 return {
@@ -482,7 +497,7 @@ async def _execute_step(step: Dict[str, Any],
                     ),
                     "verified": False,
                     "method": "gmail_delete",
-                    "extracted": {"account": account, "message_id": message_id},
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
                 }
             if not message_id:
                 return {
@@ -494,7 +509,21 @@ async def _execute_step(step: Dict[str, Any],
                     ),
                     "verified": False,
                     "method": "gmail_delete",
-                    "extracted": {"account": account, "message_id": message_id},
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
+                }
+            if not match_evidence:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extractor did not provide match_evidence — refusing "
+                        "to trash. Destructive actions require the LLM to "
+                        "state which subject/from/date substring justified "
+                        "the id resolution, so the dispatcher can verify "
+                        "against the fetched message."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete",
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
                 }
 
             # Verify-by-GET before trash. If the GET fails (wrong id,
@@ -511,11 +540,42 @@ async def _execute_step(step: Dict[str, Any],
                     ),
                     "verified": False,
                     "method": "gmail_delete",
-                    "extracted": {"account": account, "message_id": message_id},
+                    "extracted": {"account": account, "message_id": message_id, "match_evidence": match_evidence},
                 }
             trashed_from = (existing.get("from") or "")[:120]
             trashed_subject = (existing.get("subject") or "")[:120]
             trashed_date = (existing.get("date") or "")[:32]
+
+            # Match-evidence cross-check: the fetched message MUST contain
+            # the LLM's stated match_evidence in subject, from, or date.
+            # Catches the failure mode where the LLM picked an arbitrary
+            # id from prior_results without actually matching the goal —
+            # exactly what trashed Matthew's April draft in the first
+            # gmail_delete live test (2026-06-02).
+            ev_lower = match_evidence.lower()
+            haystack = (
+                (trashed_subject + " " + trashed_from + " " + trashed_date).lower()
+            )
+            if ev_lower not in haystack:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"match_evidence '{match_evidence}' does NOT appear "
+                        f"in the fetched message's subject/from/date — "
+                        f"refusing to trash. LLM extractor picked an id "
+                        f"that doesn't match its own stated evidence."
+                    ),
+                    "verified": False,
+                    "method": "gmail_delete",
+                    "extracted": {
+                        "account": account,
+                        "message_id": message_id,
+                        "match_evidence": match_evidence,
+                        "fetched_subject": trashed_subject,
+                        "fetched_from": trashed_from,
+                        "fetched_date": trashed_date,
+                    },
+                }
 
             success = await trash_email(account, message_id)
             return {
@@ -582,17 +642,24 @@ async def _execute_step(step: Dict[str, Any],
                 f"Rules:\n"
                 f"- `account` must be one of the available accounts, verbatim.\n"
                 f"- `event_id` is the Google Calendar event id of the event "
-                f"to delete. It is typically a 20-30 character alphanumeric "
-                f"string (like 'e52nn5v552dltp6s7kc57m1228').\n"
+                f"to delete. Typically 20-30 char alphanumeric.\n"
                 f"- If prior step results above include a calendar_read with "
                 f"events, FIRST match the description against those events "
-                f"by title and/or start time, then pull the matching event's "
-                f"`id` field. Do NOT invent an event id.\n"
-                f"- If no event id can be confidently identified (no prior "
-                f"calendar_read, or no match), return null for event_id — "
-                f"do NOT guess.\n\n"
+                f"by title and/or start time. If multiple match, OR no "
+                f"event's title/start matches the description's explicit "
+                f"cues, return null for event_id. Do NOT guess.\n"
+                f"- `match_evidence` is your stated reason for picking this "
+                f"id: a substring of the matching event's title OR a "
+                f"substring of its start datetime. This is VERIFIED against "
+                f"the fetched event before delete — if the actual event "
+                f"doesn't contain your stated evidence, the delete is "
+                f"REFUSED. So only return evidence you're certain matches.\n"
+                f"- If you cannot articulate a specific match_evidence, "
+                f"return null for both event_id and match_evidence.\n\n"
                 f"Respond in JSON:\n"
-                f'{{"account": "<account>", "event_id": "<google_event_id_or_null>"}}'
+                f'{{"account": "<account>", '
+                f'"event_id": "<google_event_id_or_null>", '
+                f'"match_evidence": "<substring_from_title_or_start>"}}'
             )
             params = await gemini_json(
                 extract_prompt, task="general", max_tokens=512,
@@ -609,6 +676,7 @@ async def _execute_step(step: Dict[str, Any],
 
             account = (params.get("account") or "").strip()
             event_id = (params.get("event_id") or "").strip()
+            match_evidence = (params.get("match_evidence") or "").strip()
 
             if account not in accounts:
                 return {
@@ -619,7 +687,7 @@ async def _execute_step(step: Dict[str, Any],
                     ),
                     "verified": False,
                     "method": "calendar_delete",
-                    "extracted": {"account": account, "event_id": event_id},
+                    "extracted": {"account": account, "event_id": event_id, "match_evidence": match_evidence},
                 }
             if not event_id:
                 return {
@@ -631,7 +699,21 @@ async def _execute_step(step: Dict[str, Any],
                     ),
                     "verified": False,
                     "method": "calendar_delete",
-                    "extracted": {"account": account, "event_id": event_id},
+                    "extracted": {"account": account, "event_id": event_id, "match_evidence": match_evidence},
+                }
+            if not match_evidence:
+                return {
+                    "ok": False,
+                    "error": (
+                        "extractor did not provide match_evidence — refusing "
+                        "to delete. Destructive actions require the LLM to "
+                        "state which title/start substring justified the id "
+                        "resolution, so the dispatcher can verify against "
+                        "the fetched event."
+                    ),
+                    "verified": False,
+                    "method": "calendar_delete",
+                    "extracted": {"account": account, "event_id": event_id, "match_evidence": match_evidence},
                 }
 
             # Extra safety: GET the event first, surface what's about to be
@@ -646,12 +728,39 @@ async def _execute_step(step: Dict[str, Any],
                     ),
                     "verified": False,
                     "method": "calendar_delete",
-                    "extracted": {"account": account, "event_id": event_id},
+                    "extracted": {"account": account, "event_id": event_id, "match_evidence": match_evidence},
                 }
             event_obj = existing.get("event", {}) or {}
             event_title = event_obj.get("summary", "(no title)")
             event_start = (event_obj.get("start") or {}).get("dateTime") \
                           or (event_obj.get("start") or {}).get("date") or ""
+
+            # Match-evidence cross-check: the fetched event MUST contain
+            # the LLM's stated match_evidence in title or start. Same
+            # safety pattern as gmail_delete — catches the case where the
+            # LLM picks an arbitrary id from prior_results without
+            # actually matching the goal.
+            ev_lower = match_evidence.lower()
+            haystack = (event_title + " " + event_start).lower()
+            if ev_lower not in haystack:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"match_evidence '{match_evidence}' does NOT appear "
+                        f"in the fetched event's title or start — refusing "
+                        f"to delete. LLM extractor picked an id that "
+                        f"doesn't match its own stated evidence."
+                    ),
+                    "verified": False,
+                    "method": "calendar_delete",
+                    "extracted": {
+                        "account": account,
+                        "event_id": event_id,
+                        "match_evidence": match_evidence,
+                        "fetched_title": event_title,
+                        "fetched_start": event_start,
+                    },
+                }
 
             result = await delete_event(account, event_id)
             success = bool(result.get("ok"))
