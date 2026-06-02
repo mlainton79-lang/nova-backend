@@ -172,7 +172,37 @@ def evaluate_action(
     callers can log the rollback explicitly.
     """
     action_class = classify_capability(cap) if isinstance(cap, dict) else READ_ONLY
-    requires_approval = action_class in APPROVAL_REQUIRED_CLASSES
+    # `approval_required` has dual semantics by class. For internal_write
+    # capabilities, missing or False means "not opted in" (auto-allow);
+    # only True is treated as an opt-in to the approval gate. For
+    # external_effect/financial/self_modify the missing/True default is
+    # already enforced at the existing pre-approval check below (default
+    # True = require approval; False = pre-greenlit at registration).
+    cap_approval_required_internal_opt_in = (
+        bool(cap.get("approval_required") is True) if isinstance(cap, dict) else False
+    )
+    # Class-level approval policy: external_effect / financial / self_modify
+    # enter the approval gate. The downstream pre-greenlit check
+    # (approval_required=False at registration) preserves existing
+    # opt-out semantics for those classes.
+    class_requires_approval = action_class in APPROVAL_REQUIRED_CLASSES
+    # Internal_write capabilities can OPT IN to the same gate via the
+    # registry's approval_required=True flag. Closes the destructive-
+    # internal gap exposed by the 2026-06-02 vinted_draft_archive
+    # incident (archive ran against real user data with no governor
+    # gate because internal_write was auto-allowed regardless of the
+    # registry flag). Codex review APPROVE WITH NITS, 2026-06-02:
+    # nova-docs/ops/reviews/2026-06-02/codex-review-governor-destructive-gate.md
+    internal_opt_in = action_class == INTERNAL_WRITE and cap_approval_required_internal_opt_in
+    requires_approval = class_requires_approval or internal_opt_in
+    # Audit breadcrumb for dashboards: which side of the new policy
+    # triggered the gate. "class_gate" = traditional external_effect/
+    # financial/self_modify path; "registry_opt_in" = internal_write
+    # capability whose registry row sets approval_required=True.
+    approval_source = (
+        "class_gate" if class_requires_approval
+        else ("registry_opt_in" if internal_opt_in else None)
+    )
 
     # Kill-switch: when GOVERNOR_ENABLED=false, every action is allowed.
     if not _is_enabled():
@@ -198,15 +228,20 @@ def evaluate_action(
 
     # Approval needed. Check the row's pre-approval flag — if the
     # capability was registered with approval_required=False, Matthew
-    # already greenlit this class of action at registration time.
-    cap_approval_required = bool(cap.get("approval_required", True)) if isinstance(cap, dict) else True
-    if not cap_approval_required:
+    # already greenlit this class of action at registration time. This
+    # only applies to the class-gated path; internal_write opt-in
+    # capabilities reach this branch only when approval_required=True
+    # (otherwise requires_approval would have been False above) so the
+    # pre-greenlit short-circuit is structurally unreachable for them.
+    cap_approval_required_class = bool(cap.get("approval_required", True)) if isinstance(cap, dict) else True
+    if approval_source == "class_gate" and not cap_approval_required_class:
         decision = {
             "allowed": True,
             "action_class": action_class,
             "reason": "pre_approved_at_registration",
             "requires_approval": True,
             "approval_satisfied": True,
+            "approval_source": approval_source,
         }
         _emit_decision(cap, decision)
         return decision
@@ -219,17 +254,26 @@ def evaluate_action(
             "reason": "approval_token_present",
             "requires_approval": True,
             "approval_satisfied": True,
+            "approval_source": approval_source,
         }
         _emit_decision(cap, decision)
         return decision
 
-    # Default-deny.
+    # Default-deny. The reason string differentiates the new
+    # internal_write opt-in path from the existing class-driven path
+    # so log/dashboard consumers can tell which policy triggered.
+    deny_reason = (
+        "internal_write_approval_required_but_not_provided"
+        if approval_source == "registry_opt_in"
+        else "approval_required_but_not_provided"
+    )
     decision = {
         "allowed": False,
         "action_class": action_class,
-        "reason": "approval_required_but_not_provided",
+        "reason": deny_reason,
         "requires_approval": True,
         "approval_satisfied": False,
+        "approval_source": approval_source,
     }
     _emit_decision(cap, decision)
     return decision
@@ -263,6 +307,7 @@ def _emit_decision(cap: Dict[str, Any], decision: Dict[str, Any]) -> None:
                 "reason": decision["reason"],
                 "requires_approval": decision["requires_approval"],
                 "approval_satisfied": decision["approval_satisfied"],
+                "approval_source": decision.get("approval_source"),
             },
         )
     except Exception:

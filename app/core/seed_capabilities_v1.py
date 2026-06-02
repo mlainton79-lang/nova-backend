@@ -82,14 +82,14 @@ CAPABILITIES_V1 = [
     },
     {
         "name": "vinted_draft_archive",
-        "description": "Soft-delete a Vinted draft by setting archived_at — removes it from active list/review flows but the row is preserved (reversible). Use this for goals like 'archive the bad drafts' or 'remove the duplicate Schott jacket draft'. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results.",
+        "description": "Soft-delete a Vinted draft by setting archived_at — removes it from active list/review flows but the row is preserved (reversible). Use this for goals like 'archive the bad drafts' or 'remove the duplicate Schott jacket draft'. Chain-aware: resolves draft_id from a prior vinted_drafts_list step's results. Destructive internal action — requires governor approval per call via the registry's approval_required=True opt-in (closes the 2026-06-02 incident gap where internal_write was auto-allowed).",
         "status": "active",
         "runner": "backend_python",
         "risk_level": "medium",
-        "approval_required": False,
+        "approval_required": True,
         "external_effect": False,
         "cost_type": "free",
-        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls selling.drafts.archive_draft(draft_id) (idempotent — re-archiving returns already_archived=True). Internal write (governor classifies as internal_write, not in APPROVAL_REQUIRED_CLASSES — allowed without approval). Safety: regex fast-path for explicit draft_id, LLM fallback for chain-aware resolution from prior_results, REQUIRED match_evidence cross-check against the fetched draft's title/status — refuses if the LLM's claimed justification doesn't appear in the fetched row. Reversible (archived_at clear) so over-archiving has bounded blast radius.",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls selling.drafts.archive_draft(draft_id) (idempotent — re-archiving returns already_archived=True). Internal write but OPTED INTO the governor's approval gate via approval_required=True (per the governor change shipped 2026-06-02 after the live-data archive incident — Codex review APPROVE WITH NITS at nova-docs/ops/reviews/2026-06-02/codex-review-governor-destructive-gate.md). Two-layer safety: (1) governor default-denies without approval_token (NEW — was the structural gap); (2) match_evidence cross-check against fetched title (HARDENED in 77573cb — title-only haystack, min 4 chars). Reversible (clear archived_at) so over-archiving has bounded blast radius.",
     },
     {
         "name": "vinted_drafts_list",
