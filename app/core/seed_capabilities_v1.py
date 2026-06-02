@@ -147,14 +147,15 @@ CAPABILITIES_V1 = [
     },
     {
         "name": "gmail_morning_summary",
-        "description": "Daily morning summary of unread emails across accounts.",
+        "description": "Daily-glance digest of unread emails across all connected Gmail accounts. Parallel fan-out — total runtime bounded by the slowest account, not the sum. Per-account 8s cap so one stalled OAuth refresh can't poison the whole digest. Use for goals like 'what's in my inbox this morning' or 'summarise my unread mail'.",
         "status": "active",
         "runner": "backend_python",
         "risk_level": "low",
         "approval_required": False,
+        "external_effect": False,
         "cost_type": "free",
         "endpoint": "/api/v1/gmail/morning",
-        "notes": "Shipped. Returns unread count and per-account breakdown.",
+        "notes": "R2.4+ (2026-06-02): backend dispatcher branch in plan_executor. Calls app.core.gmail_service.get_morning_summary() which fans out via asyncio.gather across all accounts. Returns the formatted summary string verbatim — downstream chat/reason steps see the per-account breakdown without further extraction.",
     },
     {
         # R2.4+ reason: gap-bridge reasoning capability. Registered to

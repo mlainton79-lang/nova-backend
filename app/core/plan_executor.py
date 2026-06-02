@@ -2444,6 +2444,32 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "calendar_write",
             }
 
+    if capability_key == "gmail_morning_summary":
+        # Daily-glance digest of unread emails across all connected
+        # accounts. Parallel fan-out via asyncio.gather in
+        # get_morning_summary — total runtime is the slowest account,
+        # not the sum. Returns the formatted summary string verbatim
+        # so downstream chat/reason steps see the per-account
+        # breakdown without further extraction (no LLM step needed).
+        try:
+            from app.core.gmail_service import get_morning_summary
+            summary = await get_morning_summary()
+            text = summary or ""
+            return {
+                "ok": True,
+                "result": text,
+                "verified": bool(text.strip()),
+                "method": "gmail_morning_summary",
+                "chars": len(text),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"gmail_morning_summary failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "gmail_morning_summary",
+            }
+
     if capability_key == "gmail_read":
         # Reads across all connected Gmail accounts via search_all_accounts,
         # which internally calls build_smart_query to translate NL→Gmail
