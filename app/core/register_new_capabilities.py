@@ -14,7 +14,7 @@ NEW_CAPABILITIES = [
     ("evals",              "Regression test suite — 16 cases across voice, topic-isolation, honesty, fabrication, grief, commands", "active", "/api/v1/evals/run"),
     ("task_queue",         "Postgres-backed persistent queue for long-horizon background work",                   "active", "/api/v1/tasks"),
     ("skills",             "Modular capability bundles (SKILL.md) with progressive disclosure",                    "active", "/api/v1/skills"),
-    ("fact_extractor",     "Mem0-style structured fact extraction from conversations",                              "active", "/api/v1/facts"),
+    ("fact_extractor",     "Structured fact extraction (subject/predicate/object/confidence triples). Two modes: from conversation turns (live pipeline) AND from arbitrary text blocks via R2.4+ plan_executor dispatcher (e.g. extract facts from a prior web_fetch / gmail_read / calendar_read step's results).",                                                                                  "active", "/api/v1/facts"),
     ("email_triage",       "LLM-based email categorisation, urgency, drafted replies",                             "active", "/api/v1/triage/digest"),
     ("photo_to_video",     "ffmpeg-based reel/short generation from photos for Vinted/Reels/Shorts",              "active", "/api/v1/video/photos_to_reel"),
     ("eval_gate",          "Post-deploy safety check with auto-revert on critical regressions",                    "active", "internal"),
