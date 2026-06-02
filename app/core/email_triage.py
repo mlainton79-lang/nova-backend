@@ -239,10 +239,18 @@ async def get_smart_digest() -> Dict:
     by_urgency = {"urgent": [], "normal": [], "low": [], "spam": []}
     needs_reply = []
 
+    # Codex review 2026-06-02 (email_triage dispatcher): the LLM
+    # output (and any stale cached row) can carry an `urgency` value
+    # outside the known set, which previously KeyError'd this loop.
+    # Normalise unrecognised values to "normal" so a single rogue
+    # label can't blow up the whole digest. The dispatcher's
+    # try/except would catch the crash, but the loss of the digest
+    # is worse than one bucket misclassification.
     for e in triaged:
         t = e["triage"]
-        by_urgency[t["urgency"]].append(e)
-        if t["needs_reply"]:
+        urgency = t.get("urgency") if t.get("urgency") in by_urgency else "normal"
+        by_urgency[urgency].append(e)
+        if t.get("needs_reply"):
             needs_reply.append(e)
 
     # Build a human-readable digest

@@ -2444,6 +2444,51 @@ async def _execute_step(step: Dict[str, Any],
                 "method": "calendar_write",
             }
 
+    if capability_key == "email_triage":
+        # LLM-based per-email categorisation + drafted replies across
+        # all connected Gmail accounts. Calls get_smart_digest() which
+        # fans out via list_emails per account, then runs triage_emails
+        # over the union — each email gets {urgency, category,
+        # needs_reply, reply_draft, summary, action} from a Gemini
+        # flash call.
+        #
+        # PERSISTENCE WARNING: results are memoized in tony_email_triage
+        # keyed by sha256(message_id) so the same email isn't re-triaged
+        # on every call. The dispatcher does NOT expose a "skip cache"
+        # flag in v0 — opens a single write path per first-seen email
+        # (subsequent calls hit cache + no write). Schema is owned
+        # outside this branch (init_triage_tables at boot, router.py
+        # line 158). MANDATORY-Codex per the codex-review-discipline
+        # policy because of the cache writes.
+        #
+        # Returns the full smart-digest dict so downstream chat/reason
+        # steps can read counts + by_urgency breakdown + the formatted
+        # text + the triaged_emails detail. No LLM step needed between
+        # this and a user-facing summary.
+        try:
+            from app.core.email_triage import get_smart_digest
+            digest = await get_smart_digest()
+            if not isinstance(digest, dict) or not digest.get("ok"):
+                return {
+                    "ok": False,
+                    "error": (digest.get("error") if isinstance(digest, dict) else "email_triage call returned non-dict"),
+                    "verified": False,
+                    "method": "email_triage",
+                }
+            return {
+                "ok": True,
+                "result": digest,
+                "verified": digest.get("count", 0) > 0,
+                "method": "email_triage",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"email_triage failed: {type(e).__name__}: {e}",
+                "verified": False,
+                "method": "email_triage",
+            }
+
     if capability_key == "gmail_morning_summary":
         # Daily-glance digest of unread emails across all connected
         # accounts. Parallel fan-out via asyncio.gather in
