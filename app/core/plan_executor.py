@@ -171,7 +171,9 @@ async def _execute_step(step: Dict[str, Any],
         # a conversational reply.
         try:
             from app.core.model_router import gemini
+            from datetime import datetime
             prior_block = _format_prior_results(prior_results)
+            today_str = datetime.utcnow().strftime("%Y-%m-%d (%A)")
             prompt = (
                 (prior_block if prior_block else "")
                 + "You are running an intermediate REASONING step inside "
@@ -183,6 +185,11 @@ async def _execute_step(step: Dict[str, Any],
                 "is to pick a value (a time slot, a recipient, an item) "
                 "give that value plainly. If it's to summarise, give "
                 "the bullet points without commentary.\n\n"
+                f"Today's date is {today_str} UTC. Any relative dates "
+                "you produce ('tomorrow', 'next Tuesday', a specific "
+                "time slot) MUST resolve against this date, not against "
+                "your training cutoff. ISO timestamps must use this "
+                "year.\n\n"
                 "Request:\n"
                 + description
             )
