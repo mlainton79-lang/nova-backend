@@ -1855,18 +1855,28 @@ async def _execute_step(step: Dict[str, Any],
                     "- If the description contains an explicit integer id, "
                     "use it.\n"
                     "- If prior step results above include a vinted_drafts_list, "
-                    "match the description's cues ('the duplicate', 'the bad "
-                    "Schott jacket one', 'draft 7') against those entries and "
-                    "pick the matching `id`. Do NOT guess.\n"
-                    "- `match_evidence` is a substring of the matching draft's "
-                    "title OR status that justified picking this id. VERIFIED "
-                    "against the fetched draft before archive — refused if "
-                    "your stated evidence doesn't appear in the actual draft.\n"
-                    "- If you can't articulate a specific match_evidence, "
-                    "return null for both fields.\n\n"
+                    "match the description's cues against those entries' "
+                    "TITLES. If a draft's title clearly matches what the "
+                    "description names, pick its `id`. If NO draft's title "
+                    "matches the description's stated title — INCLUDING when "
+                    "only one draft exists in the list whose title doesn't "
+                    "match — return null. The presence of a single draft is "
+                    "NOT a reason to pick it; only a title match is.\n"
+                    "- `match_evidence` MUST be a distinctive substring of the "
+                    "matching draft's TITLE (NOT status, NOT approval_state — "
+                    "those are generic words like 'needs_review' that match "
+                    "anything). Minimum 4 characters. Pick a substring that "
+                    "uniquely identifies the draft. Example: for title "
+                    "'Paperback Book Cover Template 5x8\"' good evidence is "
+                    "'Paperback' or 'Book Cover'; bad evidence is 'a' or "
+                    "'needs_review'.\n"
+                    "- VERIFIED against the fetched draft's title before "
+                    "archive — refused if not present.\n"
+                    "- If you can't articulate a specific title-substring "
+                    "match_evidence, return null for both fields.\n\n"
                     "Respond in JSON:\n"
                     '{"draft_id": <integer_or_null>, '
-                    '"match_evidence": "<substring_from_title_or_status>"}'
+                    '"match_evidence": "<title_substring_or_null>"}'
                 )
                 params = await gemini_json(
                     extract_prompt, task="general", max_tokens=512,
@@ -1923,27 +1933,34 @@ async def _execute_step(step: Dict[str, Any],
             # match_evidence is optional — the user typed an explicit id
             # so they took responsibility for the target.
             if extracted_via == "llm":
-                if not match_evidence:
+                if not match_evidence or len(match_evidence) < 4:
                     return {
                         "ok": False,
                         "error": (
-                            "extractor did not provide match_evidence — "
+                            "match_evidence missing or too short (<4 chars) — "
                             "refusing. Destructive picks from prior_results "
-                            "must come with a verifiable justification."
+                            "must come with a distinctive title-substring "
+                            "justification."
                         ),
                         "verified": False,
                         "method": "vinted_draft_archive",
-                        "extracted": {"draft_id": draft_id, "match_evidence": ""},
+                        "extracted": {"draft_id": draft_id, "match_evidence": match_evidence},
                     }
+                # Title-ONLY haystack — status/approval_state are generic
+                # words ('needs_review', 'pending_review') that match
+                # almost any phrasing and let the LLM pass the check
+                # for the wrong draft. The TITLE is the unique
+                # identifier and the only safe cross-check surface.
                 ev_lower = match_evidence.lower()
-                haystack = (draft_title + " " + draft_status + " " + draft_approval_state).lower()
-                if ev_lower not in haystack:
+                if ev_lower not in draft_title.lower():
                     return {
                         "ok": False,
                         "error": (
                             f"match_evidence '{match_evidence}' does NOT "
-                            f"appear in the fetched draft's title/status — "
-                            f"refusing to archive."
+                            f"appear in the fetched draft's TITLE — refusing "
+                            f"to archive. (Title is the only allowed cross-"
+                            f"check surface; status/approval_state too "
+                            f"generic.)"
                         ),
                         "verified": False,
                         "method": "vinted_draft_archive",
