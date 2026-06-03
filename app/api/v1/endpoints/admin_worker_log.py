@@ -58,6 +58,42 @@ async def worker_log_recent(
         )
         raw = cur.fetchall()
         cur.close()
+        # tony_journal counts — best-effort, independent of worker-log read.
+        # A missing/broken journal table must not block the primary worker-log
+        # diagnostics, which is what this endpoint exists for.
+        journal = None
+        try:
+            jcur = conn.cursor()
+            jcur.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    COUNT(*) FILTER (
+                        WHERE created_at > NOW() - %s * INTERVAL '1 hour'
+                    ),
+                    MAX(created_at)
+                FROM tony_journal
+                """,
+                (hours,),
+            )
+            j_total, j_in_window, j_latest = jcur.fetchone()
+            jcur.close()
+            journal = {
+                "total": j_total,
+                "in_window": j_in_window,
+                "latest_at": _iso(j_latest),
+            }
+        except Exception as je:
+            record_run_event(
+                event_type=EVENT_TYPES["MEMORY_READ_FAILED"],
+                severity=EventSeverity.WARNING,
+                subsystem="admin.worker_log.journal",
+                message="tony_journal count query failed",
+                error_class=type(je).__name__,
+                error_message=str(je),
+                metadata={"hours": hours},
+            )
+            journal = {"error": str(je)}
     except Exception as e:
         record_run_event(
             event_type=EVENT_TYPES["MEMORY_READ_FAILED"],
@@ -102,4 +138,5 @@ async def worker_log_recent(
         "passed": passed,
         "failed": failed,
         "rows": rows,
+        "journal": journal,
     }
