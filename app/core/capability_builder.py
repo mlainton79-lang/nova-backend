@@ -696,21 +696,73 @@ async def update_router_for_capability(capability_name: str, module_name: str) -
 
 
 def register_capability(name: str, description: str, endpoint: str):
-    """Add the new capability to the registry."""
+    """Add the new capability to the canonical registry.
+
+    R2.1 (2026-06-04): redirected from the legacy `capabilities` table
+    to `tony_capabilities`. Closes the autonomous-build write-path hole
+    that left auto-built caps invisible to the planner, gap_detector,
+    prompt_assembler, and the engine-screen UI.
+
+    Governance-preserving (post-Codex review 2026-06-04): the canonical
+    register_capability does an INSERT ... ON CONFLICT DO UPDATE that
+    overwrites every column from EXCLUDED. A naïve upsert from this
+    autonomous-build path would therefore reset risk_level, approval_
+    required, external_effect, runner, notes, etc. of any pre-seeded
+    capability_key it collides with — silently disabling per-use
+    approval gates on high-risk seeds like code_edit_kotlin_frontend or
+    capability_builder_self_expansion. The fix splits the path:
+
+      • If capability_key already exists → update_capability with only
+        description/endpoint/status/source. The whitelisted-column UPDATE
+        leaves every governance field untouched.
+
+      • If capability_key does not exist → upsert_capability with
+        safe-by-default governance: approval_required=True,
+        external_effect=True, risk_level='medium'. An autonomously-built
+        capability whose behaviour has not been hand-classified must
+        require per-use governor approval until an operator downgrades
+        it. The build-time human approval at POST /builder/approve only
+        sanctioned the code landing, not unrestricted per-use invocation.
+
+    Provenance: `source="capability_builder.register_capability"` so the
+    canonical row records the autonomous-build origin alongside
+    legacy_capabilities_backfill and register_new_capabilities.register_all.
+    """
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO capabilities (name, description, status, endpoint)
-            VALUES (%s, %s, 'active', %s)
-            ON CONFLICT (name) DO UPDATE SET
-                status = 'active',
-                description = EXCLUDED.description,
-                endpoint = EXCLUDED.endpoint
-        """, (name, description, endpoint))
-        conn.commit()
-        cur.close()
-        conn.close()
+        from app.core.capabilities import (
+            get_capability,
+            update_capability,
+            upsert_capability,
+        )
+
+        if get_capability(name) is not None:
+            # Existing row — update only the build-derived fields, never
+            # touch governance. Includes capability_type='http_endpoint'
+            # to flip seeded `not_built_placeholder` rows over to the
+            # real executable type when activated; the deploy half always
+            # registers with endpoint=`/api/v1/<module>` so http_endpoint
+            # is the correct inferred type per
+            # app.core.capabilities._infer_capability_type.
+            update_capability(
+                name,
+                description=description,
+                endpoint=endpoint,
+                status="active",
+                capability_type="http_endpoint",
+                source="capability_builder.register_capability",
+            )
+        else:
+            # New row — insert with safe-by-default governance.
+            upsert_capability(
+                name=name,
+                description=description,
+                status="active",
+                endpoint=endpoint,
+                approval_required=True,
+                external_effect=True,
+                risk_level="medium",
+                source="capability_builder.register_capability",
+            )
     except Exception as e:
         print(f"[BUILDER] Registry update failed: {e}")
 
