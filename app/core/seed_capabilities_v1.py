@@ -463,11 +463,48 @@ CAPABILITIES_V1 = [
 
 
 def run_once():
-    """Upsert all v1.1 capabilities. Called once at startup by router.py."""
+    """Upsert all v1.1 capabilities. Called once at startup by router.py.
+
+    R2.1 closure (2026-06-04, post-Codex review): seed entries with
+    status='not_built' MUST NOT overwrite a row that the autonomous-build
+    path (`capability_builder.register_capability`) has marked active.
+    The canonical register_capability does an ON CONFLICT DO UPDATE that
+    overwrites every column from EXCLUDED, so a naïve upsert would re-set
+    a freshly-built capability back to `not_built` on every backend
+    restart — making the planner / engine UI lose the capability after
+    each deploy. Check the existing status before upserting and skip the
+    seed downgrade when the row has been claimed by the builder.
+
+    Other status combinations are unchanged: not_built seed onto
+    not_built row (re-seed), active seed onto either state (operator-
+    curated metadata wins), and missing row (first-time seed) all run the
+    upsert normally.
+    """
     try:
+        from app.core.capabilities import get_capability
+        seeded = 0
+        preserved = 0
         for cap in CAPABILITIES_V1:
+            existing = get_capability(cap["name"])
+            # Skip ONLY the case where this row was claimed by the
+            # autonomous-build path (source marker) AND the seed entry
+            # is trying to downgrade it to not_built. Other downgrades —
+            # operator-curated rollbacks, deprecation decisions reflected
+            # in the seed list — must still land normally.
+            if (
+                existing is not None
+                and existing.get("status") == "active"
+                and existing.get("source") == "capability_builder.register_capability"
+                and cap.get("status") == "not_built"
+            ):
+                preserved += 1
+                continue
             upsert_capability(**cap)
-        print(f"[CAPABILITIES_V1] Seeded {len(CAPABILITIES_V1)} capabilities")
+            seeded += 1
+        msg = f"[CAPABILITIES_V1] Seeded {seeded} capabilities"
+        if preserved:
+            msg += f" ({preserved} preserved as builder-claimed active)"
+        print(msg)
     except Exception as e:
         print(f"[CAPABILITIES_V1] Seed failed: {e}")
 

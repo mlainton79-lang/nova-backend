@@ -114,6 +114,8 @@ from app.api.v1.endpoints import planner
 router.include_router(planner.router, tags=["planner"])
 from app.api.v1.endpoints import agent_runner
 router.include_router(agent_runner.router, tags=["agent_runner"])
+from app.api.v1.endpoints import admin_worker_log
+router.include_router(admin_worker_log.router, tags=["admin"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
