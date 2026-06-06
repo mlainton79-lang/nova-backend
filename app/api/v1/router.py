@@ -136,6 +136,7 @@ _inits = [
     ("app.core.proactive",              "init_proactive_tables",      "Proactive"),
     ("app.core.world_model",            "init_world_model",           "World model"),
     ("app.core.capabilities",           "init_capabilities_table",    "Capabilities"),
+    ("app.core.approval_lock",          "init_approval_lock_tables",  "Approval lock (governor narrow-fix)"),
     ("app.core.email_drafter",          "init_draft_tables",          "Email drafter"),
     ("app.core.self_eval",              "init_eval_tables",           "Self-eval"),
     ("app.core.episodic_memory",        "init_episodic_tables",       "Episodic memory"),

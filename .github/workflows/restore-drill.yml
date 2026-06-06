@@ -176,3 +176,23 @@ jobs:
             echo "=== RESTORE DRILL FAILED ==="
             exit 1
           fi
+
+      - name: Verify approval-lock trigger (governor narrow-fix)
+        # Wedged here per the brick-build decision (alpha trust model, brick 1).
+        # Applies db/migrations/20260606120000_create_approval_lock_tables.sql
+        # to the scratch DB, then runs db/tests/test_approval_lock_trigger.sql
+        # which exercises the BEFORE INSERT OR UPDATE trigger on
+        # tony_pending_approvals (alpha §2 with r2 #1, #2, #6 fixes).
+        # Any trigger test failure RAISES inside a DO block, psql exits
+        # non-zero, and this step fails the workflow.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          export PATH=/usr/lib/postgresql/18/bin:$PATH
+          echo "=== applying approval-lock migration ==="
+          psql -h localhost -U postgres -d nova_restore -v ON_ERROR_STOP=1 \
+            -f db/migrations/20260606120000_create_approval_lock_tables.sql
+          echo "=== running trigger test suite ==="
+          psql -h localhost -U postgres -d nova_restore -v ON_ERROR_STOP=1 \
+            -f db/tests/test_approval_lock_trigger.sql
+          echo "=== trigger tests PASSED ==="
