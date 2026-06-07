@@ -334,7 +334,14 @@ def test_capability_builder_routes_through_canonical():
     print("\n# capability_builder routes through canonical facade")
     from app.core import capability_builder
 
-    with unittest.mock.patch("app.core.capabilities.upsert_capability") as mock_upsert:
+    # Mock get_capability=None so the builder's R2.1 split-path takes
+    # the new-key → upsert_capability branch (the path this test
+    # asserts). Without this, get_capability would hit the real
+    # get_conn() which fails on the missing DATABASE_URL env var, the
+    # builder's outer except would swallow the KeyError, and
+    # mock_upsert would never be called.
+    with unittest.mock.patch.object(capabilities, "get_capability", return_value=None), \
+         unittest.mock.patch("app.core.capabilities.upsert_capability") as mock_upsert:
         mock_upsert.return_value = 12345
         capability_builder.register_capability(
             name="some_new_skill",
@@ -353,8 +360,10 @@ def test_capability_builder_routes_through_canonical():
         _check("status defaulted to active", kwargs.get("status"), "active")
 
     # Now confirm that an ungated destructive name routes through and
-    # the ValueError is caught (non-fatal — printed not raised).
-    with unittest.mock.patch("app.core.capabilities.upsert_capability") as mock_upsert:
+    # the ValueError is caught (non-fatal — printed not raised). Same
+    # get_capability=None mock so the builder reaches the upsert path.
+    with unittest.mock.patch.object(capabilities, "get_capability", return_value=None), \
+         unittest.mock.patch("app.core.capabilities.upsert_capability") as mock_upsert:
         mock_upsert.side_effect = ValueError("destructive-name pattern...")
         # Should NOT raise — the builder catches ValueError and prints.
         try:
@@ -436,10 +445,14 @@ def test_audit_destructive_gating_dual_table():
 
 
 def test_update_capability_re_checks_when_flags_change():
-    """update_capability must re-run the assertion when either gate
-    flag is being modified. Setting external_effect=False on a
-    destructive-keyed row with approval_required also False should
-    raise; setting them both to False on a non-destructive row is fine."""
+    """update_capability must re-run the assertion on every update of
+    a destructive-keyed row (including updates that don't touch the
+    gate flags — see
+    test_update_capability_re_asserts_with_no_gate_field_in_update
+    below). This test covers the flag-flip slice: setting
+    approval_required=False on a destructive-keyed row whose only
+    gate was approval_required must raise; the same flag on a
+    non-destructive row is fine."""
     print("\n# update_capability — re-checks gate flags")
 
     # Patch get_capability so we control the existing row state.
@@ -489,6 +502,106 @@ def test_update_capability_re_checks_when_flags_change():
             print(f"  FAIL  non-destructive key update proceeds :: {e}")
 
 
+def test_update_capability_re_asserts_with_no_gate_field_in_update():
+    """THE hardening test (closes
+    nova-docs/2026-06-06-capbuilder-activation-gate-gap.md).
+
+    Pre-hardening, the outer if-guard
+        if "external_effect" in canonical or "approval_required" in canonical:
+    meant an update that only set status / capability_type / source on
+    an existing destructive-keyed row with both gate flags False would
+    silently activate the row — _assert_destructive_gated was never
+    invoked. The hardening drops that guard; the assertion now runs on
+    every update of a destructive-keyed row, using the merged
+    post-update state (fields not in the payload default to the
+    existing-row value).
+
+    This test simulates the dangerous precondition (ungated
+    destructive row pre-existing in the registry — unreachable today
+    via any INSERT path, but defence-in-depth) and asserts the update
+    now raises ValueError instead of silently activating."""
+    print("\n# update_capability — re-asserts even with no gate field in update")
+
+    # Existing destructive-keyed row that is somehow already ungated.
+    with unittest.mock.patch.object(
+        capabilities, "get_capability",
+        return_value={
+            "capability_key": "vinted_draft_archive",
+            "external_effect": False,
+            "approval_required": False,
+        },
+    ):
+        try:
+            capabilities.update_capability(
+                "vinted_draft_archive",
+                status="active",
+                capability_type="http_endpoint",
+                # NOTE: no external_effect, no approval_required in the
+                # payload. Pre-hardening, the outer if-guard would have
+                # skipped the assertion entirely on this call shape.
+            )
+            results.append(
+                ("update_capability ungated-existing-row + no-gate-field raises", False)
+            )
+            print(
+                "  FAIL  update_capability ungated-existing-row + no-gate-field raises"
+                " :: did not raise"
+            )
+        except ValueError as e:
+            _check(
+                "update_capability ungated-existing-row + no-gate-field raises (caught ValueError)",
+                "destructive-name pattern" in str(e),
+                True,
+            )
+
+
+def test_update_capability_no_false_deny_on_gated_existing_row():
+    """Hardening must not false-deny: an innocuous status/type-only
+    update of a CORRECTLY GATED destructive-keyed row must still
+    succeed. The merged-state assertion sees at least one gate flag
+    True (from the existing row's defaults when the payload omits
+    them) and passes."""
+    print("\n# update_capability — no false-deny on gated row")
+
+    # Existing destructive-keyed row is correctly gated
+    # (approval_required=True). An update with no gate flag in the
+    # payload must NOT raise — new_approval defaults to existing True.
+    with unittest.mock.patch.object(
+        capabilities, "get_capability",
+        return_value={
+            "capability_key": "vinted_draft_archive",
+            "external_effect": False,
+            "approval_required": True,
+        },
+    ):
+        with unittest.mock.patch.object(capabilities, "get_conn") as mock_conn:
+            cur_obj = unittest.mock.MagicMock()
+            cur_obj.rowcount = 1
+            # Build the context-manager chain: get_conn() → conn,
+            # `with conn:` → conn, `with conn.cursor() as cur` → cur_obj
+            conn_obj = mock_conn.return_value
+            conn_obj.__enter__.return_value = conn_obj
+            conn_obj.cursor.return_value.__enter__.return_value = cur_obj
+            try:
+                capabilities.update_capability(
+                    "vinted_draft_archive",
+                    status="active",
+                    capability_type="http_endpoint",
+                )
+                _check(
+                    "gated destructive row, status/type-only update, no false-deny",
+                    True, True,
+                )
+            except ValueError as e:
+                results.append(
+                    ("gated destructive row, status/type-only update, no false-deny", False)
+                )
+                print(
+                    f"  FAIL  gated destructive row, status/type-only update,"
+                    f" no false-deny :: {e}"
+                )
+
+
 # ── Runner ──────────────────────────────────────────────────────────────
 
 
@@ -505,6 +618,8 @@ def main():
     test_capability_builder_routes_through_canonical()
     test_audit_destructive_gating_dual_table()
     test_update_capability_re_checks_when_flags_change()
+    test_update_capability_re_asserts_with_no_gate_field_in_update()
+    test_update_capability_no_false_deny_on_gated_existing_row()
 
     total = len(results)
     passed = sum(1 for _, ok in results if ok)

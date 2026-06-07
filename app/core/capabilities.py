@@ -803,12 +803,15 @@ def update_capability(name: str, **fields) -> bool:
     """Legacy facade — update by capability_key. Whitelisted columns only.
     Returns True if a row was updated, False if name not found.
 
-    If the update sets external_effect or approval_required, the
-    destructive-name assertion is re-checked against the post-update
-    values to prevent flipping a destructive-keyed row from gated to
-    ungated. Fields not touched by the update default to True (safe
-    side — assume the existing row is gated) so the assertion only
-    fails when the update itself would un-gate a destructive row.
+    The destructive-name assertion is re-checked on every update of a
+    destructive-keyed row, not only when external_effect or
+    approval_required is in the payload. Defence-in-depth: even an
+    update that only changes status / capability_type / source must
+    not silently activate an existing row that is somehow ungated.
+    Fields not touched by the update default to their existing-row
+    value (False if absent from the row), so the assertion evaluates
+    the full merged post-update state. See
+    nova-docs/2026-06-06-capbuilder-activation-gate-gap.md for context.
     """
     canonical = _map_legacy_kwargs(fields)
     # description is updatable here but not in _map_legacy_kwargs's allowlist
@@ -817,19 +820,22 @@ def update_capability(name: str, **fields) -> bool:
     if not canonical:
         return False
 
-    # Re-check destructive-name gating when either gate field is being
-    # set. Read what's NOT in the update from the existing row so we
-    # evaluate the post-update state, not just the partial diff.
-    if "external_effect" in canonical or "approval_required" in canonical:
-        if is_destructive_key(name) and name not in _DESTRUCTIVE_GATING_ALLOWLIST:
-            existing = get_capability(name) or {}
-            new_external = canonical.get("external_effect", existing.get("external_effect", False))
-            new_approval = canonical.get("approval_required", existing.get("approval_required", False))
-            _assert_destructive_gated(
-                capability_key=name,
-                external_effect=bool(new_external),
-                approval_required=bool(new_approval),
-            )
+    # Always re-check destructive-name gating for destructive-keyed rows
+    # (closes nova-docs/2026-06-06-capbuilder-activation-gate-gap.md).
+    # Read fields not in the update from the existing row so we evaluate
+    # the full merged post-update state. Defence-in-depth: even an update
+    # that only changes status / capability_type / source will fail the
+    # assertion if the existing row was somehow ungated, rather than be
+    # quietly activated.
+    if is_destructive_key(name) and name not in _DESTRUCTIVE_GATING_ALLOWLIST:
+        existing = get_capability(name) or {}
+        new_external = canonical.get("external_effect", existing.get("external_effect", False))
+        new_approval = canonical.get("approval_required", existing.get("approval_required", False))
+        _assert_destructive_gated(
+            capability_key=name,
+            external_effect=bool(new_external),
+            approval_required=bool(new_approval),
+        )
 
     set_parts: List[str] = []
     values: List[Any] = []
