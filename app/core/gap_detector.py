@@ -147,6 +147,20 @@ async def detect_capability_gap(user_message: str) -> Optional[Dict]:
     Uses Gemini for speed. Returns None on any error (fail safe = don't
     interrupt chat).
     """
+    # --- Recall guard (2026-06-07): memory/recall questions are answered
+    # --- from tony_facts via normal chat, NOT a capability gap. The LLM
+    # --- classifier below mislabelled these (e.g. "what happened to my
+    # --- dad?") and refused them as builds; short-circuit deterministically.
+    _m = (user_message or "").strip().lower()
+    _RECALL_STARTS = (
+        "what happened", "who is", "who was", "who are", "who's",
+        "do you remember", "tell me about", "what do you know about",
+        "when did", "when is", "when was", "where did", "where is",
+        "what's my", "what is my",
+    )
+    if any(_m.startswith(p) for p in _RECALL_STARTS):
+        return None
+
     # Get what Tony already can do
     try:
         from app.core.capabilities import get_capabilities

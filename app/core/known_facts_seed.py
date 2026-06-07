@@ -29,7 +29,7 @@ BEDROCK_FACTS = [
     ("Matthew", "daughter_is", "Amelia Jane Lainton", 1.0),
     ("Matthew", "daughter_is", "Margot Rose Lainton", 1.0),
     ("Matthew", "mother_is", "Christine", 1.0),
-    ("Matthew", "father_was", "Tony Lainton (passed 2 April 2026)", 1.0),
+    ("Matthew", "father_was", "his late father Tony Lainton, who died on 2 April 2026", 1.0),
 
     ("Georgina", "maiden_name", "Wilkinson", 1.0),
     ("Georgina", "full_name", "Georgina Rose Lainton (née Wilkinson)", 1.0),
