@@ -23,19 +23,20 @@ import re
 from typing import Optional, Dict
 
 
-# Providers temporarily excluded from auto-routing. Claude is disabled
-# here because the Anthropic account is out of credits (first observed
-# 2026-04-21 — every /v1/messages call came back HTTP 400 with an
-# invalid_request_error "Your credit balance is too low…"). The
-# adapter itself still works, so direct brain-picker selection of
-# "Claude" on Android continues to function — only auto-routing
-# skips it.
+# Providers excluded from auto-routing. Currently empty — the mechanism
+# is kept for future provider outages: add a lowercase provider name and
+# _apply_skip will transparently promote the first usable fallback.
 #
-# To re-enable once credits are topped up:
-#   SKIP_PROVIDERS = set()         # empty set turns it off entirely
-# or just remove "claude":
-#   SKIP_PROVIDERS = {"some_other"}
-SKIP_PROVIDERS = {"claude"}
+# History: {"claude"} from 2026-04-21 (Anthropic account out of credits;
+# every /v1/messages call returned HTTP 400 "credit balance is too low")
+# until 2026-06-10, when credits were restored and Claude was verified
+# working as Tony's voice provider. Note the skip only ever affected
+# auto/smart routing — manual brain-picker selection builds its chain
+# directly from the picked provider and bypasses this module.
+#
+# Example for a future outage:
+#   SKIP_PROVIDERS = {"openai"}
+SKIP_PROVIDERS = set()
 
 
 def _apply_skip(choice: Dict) -> Dict:
