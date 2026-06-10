@@ -43,9 +43,12 @@ def to_claude_history(history) -> list:
         content = h.content if hasattr(h, "content") else h.get("content", "")
         if role in ("user", "assistant"):
             messages.append({"role": role, "content": content})
-    # Claude rejects requests ending with assistant message
-    while messages and messages[-1]["role"] == "assistant":
-        messages.pop()
+    # NOTE: do NOT strip a trailing assistant message here. The Anthropic
+    # Messages API accepts histories ending with an assistant turn, and the
+    # frontend deliberately sends history ending with Tony's last reply
+    # (the new user message is appended separately by each caller). A
+    # previous trailing-pop here deleted Tony's most recent reply from
+    # every request, making each response re-answer the previous message.
     return _truncate_history(messages)
 
 
