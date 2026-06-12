@@ -77,6 +77,22 @@ async def gemini(
     else:
         tier = choose_model(task)  # "pro" or "flash"
 
+    # Pro-tier budget floor. Gemini 2.5 Pro cannot disable thinking, and
+    # thinking bills against maxOutputTokens — so small budgets spend it
+    # all on reasoning and return zero output (finishReason=MAX_TOKENS,
+    # text_chars=0). Confirmed live 2026-06-12: instant_memory (150) and
+    # living_memory (400) truncated with thoughts=147/397, output=None;
+    # ~10 analysis callers request under 1024. maxOutputTokens is a cap,
+    # not a target — short-answer prompts still answer short — so floor
+    # the budget here instead of re-tiering every caller.
+    if tier == "pro" and max_tokens < 1024:
+        log.warning(
+            "[MODEL_ROUTER] task=%s requested max_tokens=%d on pro tier; "
+            "flooring to 1024 (thinking bills against the output budget)",
+            task, max_tokens,
+        )
+        max_tokens = 1024
+
     # Pro-tier reasoning calls get Google Search grounding. Flash-tier
     # tasks (emotional classification, dedup, quick lookups) don't
     # benefit from fresh external facts and skip grounding.
@@ -96,7 +112,9 @@ async def gemini(
             system_instruction=system,
             tools=tools,
             generation_config=generation_config,
-            timeout=30.0,
+            # Pro + grounding + mandatory thinking routinely exceeds 30 s —
+            # the 2026-06-12 analysis ReadTimeouts were this. Flash stays 30.
+            timeout=75.0 if tier == "pro" else 30.0,
             caller_context=f"model_router.{task}",
         )
         text = gemini_client.extract_text(response)
