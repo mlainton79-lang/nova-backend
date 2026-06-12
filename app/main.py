@@ -15,6 +15,12 @@ logfire.configure(
     # cookie / ssn / credit_card / private_key / jwt / auth) ON and
     # VISIBLE in source — a deliberate choice, not an invisible default.
     scrubbing=logfire.ScrubbingOptions(),
+    # Console exporter OFF — it printed every span name to stdout, so the
+    # task-queue worker poll (worker_loop, 10 s) flooded Railway logs with
+    # a bare "UPDATE" line every cycle and drowned all runtime diagnostics
+    # (2026-06-10 deploy failure). Spans still reach Logfire cloud when a
+    # token is present; Railway logs return to application output only.
+    console=False,
 )
 logfire.instrument_psycopg()
 # ── MEMORIAL SAFETY — do not change this line without reading this ──
