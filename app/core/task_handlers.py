@@ -100,12 +100,19 @@ async def handle_deep_research(task_id: int, payload: Dict) -> Dict:
             update_progress(task_id, "Research complete, summarising findings", 90)
             return {"topic": topic, "findings": result}
         except ImportError:
-            # Fall back to simpler Brave search + Gemini summary
+            # Fall back to simpler Brave search.
+            # brave_search lives in app.core.brave_search (app.core.router
+            # never existed) and returns a preformatted string, or "" when
+            # there are no results or no API key — not a list.
             update_progress(task_id, "Using simple search fallback", 20)
-            from app.core.router import brave_search
-            hits = await brave_search(f"{topic} {angle}".strip(), max_results=max_sources)
-            update_progress(task_id, f"Got {len(hits)} results. Summarising", 60)
-            return {"topic": topic, "source_count": len(hits), "hits": hits[:max_sources]}
+            from app.core.brave_search import brave_search
+            results_text = await brave_search(
+                f"{topic} {angle}".strip(), count=max_sources
+            )
+            update_progress(task_id, "Search complete, summarising", 60)
+            if not results_text:
+                return {"topic": topic, "source_count": 0, "results": ""}
+            return {"topic": topic, "results": results_text}
     except Exception as e:
         return {"error": str(e)}
 
