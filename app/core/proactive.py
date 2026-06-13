@@ -324,44 +324,58 @@ If nothing is urgent, return: {{"urgent_items": []}}"""
 
 async def tony_check_legal_deadlines():
     """
-    Tony monitors any active tracked cases and legal deadlines.
-    Flags anything approaching.
+    Tony monitors the LEGAL dimension of the world model and raises an
+    alert when it records an active matter.
+
+    Rewritten 2026-06-12: the previous body was written against the v1
+    world model (nested dimension -> key -> {"value": {...}} dicts) and
+    was orphaned by the 9-dimension rewrite (555c4dd), which stores one
+    flat text string per dimension. It failed with ImportError on every
+    proactive scan since. Revised same day after review: whitespace-only
+    content guard, and both queries share one connection closed in
+    finally on every path.
     """
     try:
-        from app.core.world_model import get_world_model
-        model = get_world_model("LEGAL")
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT content FROM tony_world_model
+                WHERE dimension = 'LEGAL'
+            """)
+            row = cur.fetchone()
+            content = (row[0] or "").strip() if row else ""
 
-        legal = model.get("LEGAL", {})
-        for key, data in legal.items():
-            value = data.get("value", {})
-            if isinstance(value, dict):
-                # Check for any deadline mentions
-                tony_next = value.get("tony_next_action", "")
-                status = value.get("status", "")
+            # Empty/whitespace content, or the inactive seed text ("No
+            # active legal matters currently tracked."), means nothing
+            # to flag. update_world_model() only rewrites this dimension
+            # when a real conversation surfaces a matter.
+            if not content or content.lower().startswith("no "):
+                return
 
-                if "pending" in status.lower() or "in progress" in status.lower():
-                    # Check if we haven't alerted about this recently
-                    conn = get_conn()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        SELECT id FROM tony_alerts
-                        WHERE source = %s
-                        AND created_at > NOW() - INTERVAL '7 days'
-                        LIMIT 1
-                    """, (key,))
-                    recent = cur.fetchone()
-                    cur.close()
-                    conn.close()
+            # Dedup: one alert per week for this dimension. Check-then-
+            # create is racy in theory, but scans run serially in one
+            # event loop; worst case is a duplicate notification.
+            # DB-level uniqueness on tony_alerts is ledgered separately.
+            cur.execute("""
+                SELECT id FROM tony_alerts
+                WHERE source = 'world_model_legal'
+                AND created_at > NOW() - INTERVAL '7 days'
+                LIMIT 1
+            """)
+            if cur.fetchone():
+                return
+        finally:
+            conn.close()
 
-                    if not recent and tony_next:
-                        create_alert(
-                            alert_type="legal",
-                            title=f"Legal: {key.replace('_', ' ').title()}",
-                            body=f"Status: {status}\nNext action: {tony_next}",
-                            priority="high",
-                            source=key,
-                            expires_hours=168  # 1 week
-                        )
+        create_alert(
+            alert_type="legal",
+            title="Legal: active matter in world model",
+            body=content[:400],
+            priority="high",
+            source="world_model_legal",
+            expires_hours=168  # 1 week
+        )
     except Exception as e:
         print(f"[PROACTIVE] Legal check failed: {e}")
 

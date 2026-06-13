@@ -228,22 +228,18 @@ def build_system_prompt(
     except Exception:
         pass
 
-    # Inject world model — condensed
+    # Inject world model — condensed. Rewritten 2026-06-12: the previous
+    # block called v1's get_world_model() (removed in 555c4dd) and read
+    # dims GOALS/THREATS that v2 does not have; the bare except hid the
+    # ImportError forever. Now uses the same v2 getter prompt_assembler
+    # uses, and failures log instead of vanishing.
     try:
-        from app.core.world_model import get_world_model
-        model = get_world_model()
-        lines = ["[CONTEXT]"]
-        # Only inject highest priority items
-        for dim in ["LEGAL", "GOALS", "THREATS"]:
-            if dim in model:
-                for key, data in list(model[dim].items())[:2]:
-                    v = data["value"]
-                    summary = v.get("status","") or v.get("goal","") or str(v)[:80]
-                    lines.append(f"{dim}/{key}: {summary}")
-        if len(lines) > 1:
-            parts.append("\n".join(lines))
-    except Exception:
-        pass
+        from app.core.world_model import get_world_model_for_prompt
+        world = get_world_model_for_prompt()
+        if world:
+            parts.append(world)
+    except Exception as e:
+        print(f"[TONY_PROMPT] World model unavailable: {e}")
 
     # Inject capability summary — brief
     try:

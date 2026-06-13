@@ -554,11 +554,17 @@ async def _call_gemini(prompt: str, max_tokens: int = 2000) -> Optional[str]:
 
 async def _get_world_context() -> str:
     """Pull condensed world model for prompt context."""
+    # get_world_model_summary was the v1 API, removed in the 9-dimension
+    # rewrite (555c4dd). This caller was orphaned, and the except below
+    # silently substituted a hardcoded — and rotting — fallback string
+    # into every draft. Repointed to the live v2 getter; failures now
+    # log loudly instead of impersonating success.
     try:
-        from app.core.world_model import get_world_model_summary
-        return get_world_model_summary()
-    except Exception:
-        return "Matthew Lainton, Rotherham. Works at Sid Bailey Care Home. Wife Georgina, daughters Amelia (5) and Margot (9 months)."
+        from app.core.world_model import get_world_model_for_prompt
+        return get_world_model_for_prompt()
+    except Exception as e:
+        print(f"[EMAIL DRAFTER] World context unavailable: {e}")
+        return ""
 
 
 async def _needs_reply(email: Dict) -> Optional[Dict]:

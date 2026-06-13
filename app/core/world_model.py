@@ -29,8 +29,8 @@ def get_conn():
 
 
 WORLD_MODEL_SEED = {
-    "SELF": "Matthew Lainton, 30s, Rotherham. Night shift care worker. Building AI app on his phone. Recently lost his father Tony (2 April 2026). Resourceful, determined, working under real financial and emotional pressure.",
-    "FAMILY": "Married to Georgina (b.26 Feb 1992). Daughters Amelia (5, starting school soon) and Margot (9 months). Mother Christine. Late father Tony Lainton (b.4 Jun 1945, d.2 Apr 2026) — Nova's Tony is named after him.",
+    "SELF": "Matthew Lainton (b. 20 Oct 1979), Rotherham. Night shift care worker. Building AI app on his phone. Lost his father Tony on 2 April 2026. Resourceful, determined, working under real financial and emotional pressure.",
+    "FAMILY": "Married to Georgina (b. 26 Feb 1992). Daughters Amelia Jane (b. 7 Mar 2021) and Margot Rose (b. 20 Jul 2025). Mother Christine. Late father Tony Lainton (b. 4 Jun 1945, d. 2 Apr 2026) — Nova's Tony is named after him.",
     "WORK": "Night shifts at Sid Bailey Care Home, Brampton, Rotherham. CQC Outstanding rated. Reliable employment, physically demanding. Limits time available for other activities.",
     "FINANCIAL": "Working class income from care work. Supplementing income with Vinted/eBay selling. No known bank account details.",
     "LEGAL": "No active legal matters currently tracked.",
@@ -55,13 +55,17 @@ def init_world_model():
             )
         """)
         
+        # Seed is INSERT-only. DO UPDATE here (added for the one-time CCJ
+        # purge, 789e516) re-imposed the static seed on EVERY startup,
+        # wiping whatever update_world_model() had learned from real
+        # conversations — a lobotomy on every deploy. DO NOTHING lets the
+        # seed land once on an empty table; learned state persists. Ages
+        # in the seed are expressed as birthdates so the text never rots.
         for dimension, content in WORLD_MODEL_SEED.items():
             cur.execute("""
                 INSERT INTO tony_world_model (dimension, content)
                 VALUES (%s, %s)
-                ON CONFLICT (dimension) DO UPDATE SET
-                    content = EXCLUDED.content,
-                    updated_at = NOW()
+                ON CONFLICT (dimension) DO NOTHING
             """, (dimension, content))
         
         conn.commit()
