@@ -64,12 +64,14 @@ Respond in JSON:
 {{
     "can_act_autonomously": true/false,
     "autonomous_actions": ["specific action Tony will take"],
+    "action_params": {{"company_name": "exact firm name if any action checks FCA", "email_query": "Gmail search terms if any action searches email"}},
     "needs_matthew_for": ["what requires Matthew's input or approval"],
     "priority_ask": "the single most important thing Tony needs from Matthew to unblock this",
     "honest_assessment": "Tony's honest view of this goal's current state"
 }}
 
-Only include actions Tony can actually execute with his available tools."""
+Only include actions Tony can actually execute with his available tools.
+If an action checks the FCA register, put the exact company name in action_params.company_name. If an action searches email, put the search terms in action_params.email_query. Leave a param empty if no action needs it."""
 
     plan = await gemini_json(prompt, task="reasoning", max_tokens=512)
     if not plan:
@@ -83,7 +85,23 @@ Only include actions Tony can actually execute with his available tools."""
             action_lower = action.lower()
 
             try:
-                if "search" in action_lower and ("web" in action_lower or "research" in action_lower):
+                if "fca" in action_lower or "fos" in action_lower:
+                    from app.core.browser_agent import check_fca_register
+                    company_name = (plan.get("action_params") or {}).get("company_name", "").strip()
+                    if company_name:
+                        fca = await check_fca_register(company_name)
+                        results["actions_taken"].append(f"FCA register checked for {company_name}: {fca.get('status') or ('found' if fca.get('found') else 'not found')}")
+                        await _store_goal_insight(title, f"FCA check — {company_name}: {fca}")
+
+                elif "email" in action_lower or "correspondence" in action_lower:
+                    from app.core.gmail_service import search_all_accounts
+                    email_query = (plan.get("action_params") or {}).get("email_query", "").strip() or title
+                    emails = await search_all_accounts(email_query, max_per_account=5)
+                    if emails:
+                        results["actions_taken"].append(f"Found {len(emails)} relevant emails")
+                        await _store_goal_insight(title, f"Email search: {len(emails)} emails found")
+
+                elif "search" in action_lower and ("web" in action_lower or "research" in action_lower):
                     from app.core.brave_search import brave_search
                     query = f"{title} latest 2026"
                     result = await brave_search(query)
@@ -91,17 +109,6 @@ Only include actions Tony can actually execute with his available tools."""
                         results["actions_taken"].append(f"Web research: found relevant information")
                         # Store as insight
                         await _store_goal_insight(title, f"Web research: {result[:200]}")
-
-                elif "fca" in action_lower or "fos" in action_lower:
-                    from app.core.browser_agent import check_fca_register
-                    results["actions_taken"].append(f"FCA register checked: {fca.get('status', 'unknown')}")
-                    await _store_goal_insight(title, f"FCA status: {fca.get('status', 'unknown')}")
-
-                elif "email" in action_lower or "correspondence" in action_lower:
-                    from app.core.gmail_service import search_all_accounts
-                    if emails:
-                        results["actions_taken"].append(f"Found {len(emails)} relevant emails")
-                        await _store_goal_insight(title, f"Email search: {len(emails)} emails found")
 
             except Exception as e:
                 results["actions_taken"].append(f"Action attempted but failed: {str(e)[:50]}")
