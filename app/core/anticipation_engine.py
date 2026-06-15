@@ -39,20 +39,8 @@ async def anticipate_shift_needs() -> List[Dict]:
     """Check if Matthew has a shift coming up and surface relevant things."""
     insights = []
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        
-        # Get upcoming calendar events
-        cur.execute("""
-            SELECT title, content FROM tony_living_memory 
-            WHERE section = 'RECENT_EVENTS'
-        """)
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        
         now = datetime.utcnow()
-        
+
         # Night shift pattern: Matthew typically works 20:00-08:00
         if 17 <= now.hour <= 19:  # Late afternoon before typical night shift
             insights.append({
