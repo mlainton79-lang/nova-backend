@@ -16,6 +16,7 @@ Tony doesn't spam. He surfaces things when they actually matter.
 """
 import os
 import psycopg2
+from psycopg2 import errors as psycopg2_errors
 from datetime import datetime, timedelta, date
 from typing import List, Dict
 from app.core.model_router import gemini_json
@@ -59,6 +60,12 @@ async def check_calendar_for_today() -> List[Dict]:
                         "title": f"Tomorrow: {title}",
                         "priority": "normal"
                     })
+    except psycopg2_errors.UndefinedTable:
+        # samsung_calendar_events isn't built yet — the Samsung-calendar
+        # sync that would populate it was never wired up. Treat as
+        # "feature not live yet": no alerts, no noise. When the table and
+        # its sync are added, this function starts working with no change.
+        pass
     except Exception as e:
         print(f"[PROACTIVE_SCHED] Calendar check failed: {e}")
     return alerts
