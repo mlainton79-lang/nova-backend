@@ -10,7 +10,7 @@ If a convention here contradicts something in `HANDOVER.md`, `HANDOVER.md` wins 
 
 Nova is a single-user personal AI assistant. **nova-backend** is the Python/FastAPI HTTP backend deployed on Railway, backed by a single Railway Postgres instance with pgvector. There is exactly one user (Matthew Lainton); there will never be a second user, a tenant, or an org. Multi-user concerns (`user_id` columns, per-tenant partitioning, row-level security, OAuth-per-user fan-out) are explicitly out of scope and should never be proposed even when "obviously good practice." The companion repos are **nova-android** (Kotlin client running on Matthew's phone, primary surface) and **nova-docs** (operational evidence + briefs + architecture memos; this is where session briefs and code-review write-ups live).
 
-The backend hosts the chat surface (a multi-provider "Council" pattern that fans out across OpenAI/Anthropic/Gemini/Groq/Mistral/etc.), a sizable set of background "organs" (memory consolidation, goal extraction, financial intelligence, email triage, etc., most living under `app/core/`), a Gmail integration, and a growing selling-operator pipeline (eBay, Discogs, musicMagpie, WoB via REST APIs; Vinted via Android UI automation). It deploys via `railway up` from a local checkout — **not** via GitHub push for the `web` service (the webhook is broken; see "Deploy verification" below).
+The backend hosts the chat surface (a multi-provider "Council" pattern that fans out across OpenAI/Anthropic/Gemini/Groq/Mistral/etc.), a sizable set of background "organs" (memory consolidation, goal extraction, financial intelligence, email triage, etc., most living under `app/core/`), a Gmail integration, and a growing selling-operator pipeline (eBay, Discogs, musicMagpie, WoB via REST APIs; Vinted via Android UI automation). The `web` service auto-deploys on push to `mlainton79-lang/nova-backend@main`; `railway up` from a local checkout remains supported as an alternative path (see "Deploy verification" below).
 
 nova-docs is documentation-only — briefs, reviews, architecture memos. Never put runnable code there. Production code lives in nova-backend (Python/FastAPI) and nova-android (Kotlin client).
 
@@ -64,14 +64,14 @@ User-facing chat flows go through a multi-provider Council pattern (fan-out acro
 
 ## Deploy verification (Railway)
 
-- **The `web` service's GitHub webhook is broken.** Deploys happen via `railway up` from a local checkout against the `web` service, never via `git push`. This is a known and accepted state — don't try to "fix" the webhook without explicit user direction.
-- **`railway up` exit code is NOT reliable.** It can exit 0 while the build still fails, or exit non-zero on transient CLI issues while the build actually completes. Always three-signal verify:
+- **The `web` service auto-deploys on push to `mlainton79-lang/nova-backend@main`** (GitHub source connected 2026-06-16 via Railway MCP). `railway up` from a local checkout is still supported as a parallel path — useful for deploying un-pushed work or testing a branch — but the default is now: commit, push, wait. Every push to `main` triggers a fresh build.
+- **`railway up` exit code is NOT reliable.** It can exit 0 while the build still fails, or exit non-zero on transient CLI issues while the build actually completes. Always three-signal verify (applies to both push-driven and `railway up` deploys):
   1. New deployment ID returned by `railway status --json` (different from the previous one).
   2. HTTP 200 on `https://web-production-be42b.up.railway.app/api/v1/health`.
   3. A `worker_started` (or comparable startup) row appearing in `tony_run_events` with a `created_at` after the deploy timestamp.
 - **Variable changes auto-trigger redeploys of the current built image.** Not a fresh build, just a relaunch with the new env. This means: adding `EBAY_*` Variables before the code that consumes them lands is *harmless* — the redeploy is a no-op for the application, the variables just sit there unused until code references them.
 - **The `web` service is the only currently active service.** `peaceful-harmony` is scaled to 0 replicas (image preserved, available for manual `railway run` invocation). Cron runs `think_worker.py` on its own schedule. Don't deploy code intended for the cron via the web service path or vice versa.
-- **`backend_commit_sha` reports `"unknown"` after `railway up` deploys** because `RAILWAY_GIT_COMMIT_SHA` isn't auto-populated for CLI deploys. Use deployment ID + timestamp instead of git SHA for identifying which deploy is running.
+- **`backend_commit_sha` only reports `"unknown"` after `railway up` deploys** (because `RAILWAY_GIT_COMMIT_SHA` isn't auto-populated for CLI deploys). Push-driven deploys populate it correctly. Use deployment ID + timestamp as the fallback identifier when SHA is `unknown`.
 
 ---
 
