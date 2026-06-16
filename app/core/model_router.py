@@ -77,18 +77,17 @@ async def gemini(
     else:
         tier = choose_model(task)  # "pro" or "flash"
 
-    # Pro-tier budget floor. Gemini 2.5 Pro cannot disable thinking, and
-    # thinking bills against maxOutputTokens — so small budgets spend it
-    # all on reasoning and return zero output (finishReason=MAX_TOKENS,
-    # text_chars=0). Confirmed live 2026-06-12: instant_memory (150) and
-    # living_memory (400) truncated with thoughts=147/397, output=None;
+    # Pro-tier budget floor. Defensive: even with thinking bounded
+    # separately below, sub-1024 maxOutputTokens leaves no room for a
+    # real JSON response. Confirmed live 2026-06-12: instant_memory (150)
+    # and living_memory (400) truncated with thoughts=147/397, output=None;
     # ~10 analysis callers request under 1024. maxOutputTokens is a cap,
     # not a target — short-answer prompts still answer short — so floor
     # the budget here instead of re-tiering every caller.
     if tier == "pro" and max_tokens < 1024:
         log.warning(
             "[MODEL_ROUTER] task=%s requested max_tokens=%d on pro tier; "
-            "flooring to 1024 (thinking bills against the output budget)",
+            "flooring to 1024",
             task, max_tokens,
         )
         max_tokens = 1024
@@ -103,7 +102,17 @@ async def gemini(
         "temperature": temperature,
     }
     if disable_thinking:
+        # Flash-only path. Pro rejects thinkingBudget=0 with HTTP 400.
         generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+    elif tier == "pro":
+        # Bound thinking explicitly so it can't consume the response
+        # slot. Without this, Gemini 2.5 Pro can spend the entire
+        # generation budget on thoughts and emit finishReason=MAX_TOKENS
+        # with candidatesTokenCount=None — the symptom that bricked the
+        # autonomous goal executor (thoughts=1021, output=None, text_chars=0).
+        # 2048 covers every truncation we've observed live (max thoughts
+        # seen: 1021); Gemini 2.5 Pro accepts thinkingBudget in [128, 32768].
+        generation_config["thinkingConfig"] = {"thinkingBudget": 2048}
 
     try:
         response = await gemini_client.generate_content(

@@ -73,7 +73,7 @@ Respond in JSON:
 Only include actions Tony can actually execute with his available tools.
 If an action checks the FCA register, put the exact company name in action_params.company_name. If an action searches email, put the search terms in action_params.email_query. Leave a param empty if no action needs it."""
 
-    plan = await gemini_json(prompt, task="reasoning", max_tokens=512)
+    plan = await gemini_json(prompt, task="reasoning", max_tokens=4096)
     if not plan:
         return {"goal": title, "status": "planning_failed"}
 
