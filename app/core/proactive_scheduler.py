@@ -17,7 +17,7 @@ Tony doesn't spam. He surfaces things when they actually matter.
 import os
 import psycopg2
 from psycopg2 import errors as psycopg2_errors
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import List, Dict
 from app.core.model_router import gemini_json
 
@@ -44,7 +44,7 @@ async def check_calendar_for_today() -> List[Dict]:
         cur.close()
         conn.close()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for title, start, end, desc in events:
             if start:
                 hours_until = (start - now).total_seconds() / 3600

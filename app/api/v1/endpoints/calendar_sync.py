@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.core.security import verify_token
 from app.core.samsung_calendar import upsert_events
+from app.observability import record_run_event, EventSeverity
 
 router = APIRouter()
 
@@ -37,4 +38,13 @@ async def sync_calendar(req: CalendarSyncRequest, _=Depends(verify_token)):
         count = upsert_events([ev.model_dump() for ev in req.events])
         return {"ok": True, "synced_count": count}
     except Exception as e:
-        return {"ok": False, "synced_count": 0, "error": str(e)}
+        record_run_event(
+            event_type="calendar_sync_failed",
+            severity=EventSeverity.ERROR,
+            subsystem="calendar.sync.samsung",
+            message="samsung calendar upsert failed",
+            error_class=type(e).__name__,
+            error_message=str(e)[:300],
+            metadata={"batch_size": len(req.events)},
+        )
+        return {"ok": False, "synced_count": 0, "error": "calendar_sync_failed"}
