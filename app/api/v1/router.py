@@ -30,6 +30,8 @@ from app.api.v1.endpoints import proactive
 router.include_router(proactive.router, tags=["proactive"])
 from app.api.v1.endpoints import calendar
 router.include_router(calendar.router, tags=["calendar"])
+from app.api.v1.endpoints import calendar_sync
+router.include_router(calendar_sync.router, tags=["calendar_sync"])
 from app.api.v1.endpoints import goals
 router.include_router(goals.router, tags=["goals"])
 from app.api.v1.endpoints import push
@@ -176,6 +178,7 @@ _inits = [
     ("app.core.push_notifications",    "init_push_table",            "Push notifications"),
     ("app.core.push_notifications",    "init_config_table",          "Tony config"),
     ("app.core.training_pairs",        "init_training_pairs_table",  "Training pairs (distillation harvest)"),
+    ("app.core.samsung_calendar",      "init_samsung_calendar_table","Samsung calendar"),
     ("app.core.register_new_capabilities", "register_all",            "New capabilities registry"),
     ("app.core.seed_capabilities_v1",      "run_once",                 "Capabilities v1.1 seed"),
 ]
