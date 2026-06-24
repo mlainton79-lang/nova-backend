@@ -57,15 +57,15 @@ def test_latest_push_sends_one_fixed_notification(monkeypatch):
 
     monkeypatch.setattr(push, "get_push_token", lambda: "registered")
 
-    async def fake_send(title, body):
-        calls.append((title, body))
+    async def fake_send(notification_type):
+        calls.append(notification_type)
         return True
 
-    monkeypatch.setattr(push, "send_push", fake_send)
+    monkeypatch.setattr(push, "send_user_notification", fake_send)
 
     result = asyncio.run(push.test_latest_push())
 
-    assert calls == [("Nova test", "Push notifications are connected.")]
+    assert calls == [push.NotificationType.IMPORTANT_ALERT]
     assert result == {
         "ok": True,
         "status": "sent",
@@ -76,10 +76,10 @@ def test_latest_push_sends_one_fixed_notification(monkeypatch):
 def test_latest_push_does_not_send_without_token(monkeypatch):
     monkeypatch.setattr(push, "get_push_token", lambda: None)
 
-    async def unexpected_send(title, body):
+    async def unexpected_send(notification_type):
         raise AssertionError("send_push must not be called without a token")
 
-    monkeypatch.setattr(push, "send_push", unexpected_send)
+    monkeypatch.setattr(push, "send_user_notification", unexpected_send)
 
     result = asyncio.run(push.test_latest_push())
 

@@ -5,6 +5,7 @@ from app.core.push_notifications import (
     save_push_token, get_push_token,
     send_push, tony_notify, store_config,
 )
+from app.core.user_notifications import NotificationType, send_user_notification
 
 router = APIRouter()
 
@@ -70,7 +71,7 @@ async def test_latest_push(_=Depends(verify_token)):
             "message": "No push token registered",
         }
 
-    ok = await send_push("Nova test", "Push notifications are connected.")
+    ok = await send_user_notification(NotificationType.IMPORTANT_ALERT)
     return {
         "ok": ok,
         "status": "sent" if ok else "send_failed",
