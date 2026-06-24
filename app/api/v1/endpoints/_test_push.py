@@ -1,5 +1,8 @@
+import asyncio
+
 from fastapi import HTTPException
 
+from app.api.v1.endpoints import push
 from app.api.v1.endpoints.push import _resolve_push_registration
 
 
@@ -47,3 +50,38 @@ def test_missing_or_blank_token_is_rejected():
 def test_platform_defaults_to_android():
     result = _resolve_push_registration(None, None, {"token": "body-value"})
     assert result == ("body-value", "android")
+
+
+def test_latest_push_sends_one_fixed_notification(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(push, "get_push_token", lambda: "registered")
+
+    async def fake_send(title, body):
+        calls.append((title, body))
+        return True
+
+    monkeypatch.setattr(push, "send_push", fake_send)
+
+    result = asyncio.run(push.test_latest_push())
+
+    assert calls == [("Nova test", "Push notifications are connected.")]
+    assert result == {
+        "ok": True,
+        "status": "sent",
+        "message": "Test notification sent",
+    }
+
+
+def test_latest_push_does_not_send_without_token(monkeypatch):
+    monkeypatch.setattr(push, "get_push_token", lambda: None)
+
+    async def unexpected_send(title, body):
+        raise AssertionError("send_push must not be called without a token")
+
+    monkeypatch.setattr(push, "send_push", unexpected_send)
+
+    result = asyncio.run(push.test_latest_push())
+
+    assert result["ok"] is False
+    assert result["status"] == "no_token"
