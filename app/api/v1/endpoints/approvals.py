@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from app.core.approval_lock import (
     create_pending_approval_once,
     list_active_pending_approvals,
+    reject_pending_approval,
 )
 from app.core.security import verify_token
 from app.core.user_notifications import NotificationType, send_user_notification
@@ -61,5 +62,24 @@ async def create_test_pending_approval(
             "Test approval created and notification sent."
             if notification_sent
             else "Test approval created; notification was unavailable."
+        ),
+    }
+
+
+@router.post("/approvals/{pending_id}/reject")
+async def reject_approval(
+    pending_id: str,
+    _=Depends(verify_token),
+):
+    """Deny one awaiting approval without running its associated action."""
+    rejected = reject_pending_approval(pending_id)
+    return {
+        "ok": True,
+        "rejected": rejected,
+        "status": "rejected" if rejected else "not_found",
+        "message": (
+            "Pending approval rejected."
+            if rejected
+            else "No awaiting approval matched that identifier."
         ),
     }

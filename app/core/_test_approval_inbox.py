@@ -38,14 +38,26 @@ class _Cursor:
     def fetchall(self):
         return self.rows
 
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
 
 class _Connection:
     def __init__(self, rows):
         self.cursor_instance = _Cursor(rows)
         self.closed = False
+        self.committed = False
+        self.rolled_back = False
+        self.autocommit = True
 
     def cursor(self):
         return self.cursor_instance
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
 
     def close(self):
         self.closed = True
@@ -74,6 +86,50 @@ class ApprovalInboxTests(unittest.TestCase):
     def test_test_pending_endpoint_is_protected(self):
         response = self._request("POST", "/api/v1/approvals/test-pending")
         self.assertEqual(response.status_code, 422)
+
+    def test_reject_endpoint_is_protected(self):
+        pending_id = str(uuid.uuid4())
+        response = self._request("POST", f"/api/v1/approvals/{pending_id}/reject")
+        self.assertEqual(response.status_code, 422)
+
+    def test_awaiting_approval_can_be_denied(self):
+        pending_id = str(uuid.uuid4())
+        connection = _Connection(rows=[(pending_id,)])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            rejected = approval_lock.reject_pending_approval(pending_id)
+
+        self.assertTrue(rejected)
+        self.assertTrue(connection.committed)
+        statement, params = connection.cursor_instance.statements[0]
+        normalized_statement = " ".join(statement.split())
+        self.assertIn("SET status = 'denied'", normalized_statement)
+        self.assertIn("AND status = 'awaiting'", normalized_statement)
+        self.assertEqual(params, (pending_id,))
+
+    def test_reject_endpoint_returns_sanitized_outcomes(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        reject = MagicMock(side_effect=[True, False])
+        first_id = str(uuid.uuid4())
+        missing_id = str(uuid.uuid4())
+        with patch(
+            "app.api.v1.endpoints.approvals.reject_pending_approval",
+            reject,
+        ):
+            rejected = self._request(
+                "POST", f"/api/v1/approvals/{first_id}/reject"
+            )
+            missing = self._request(
+                "POST", f"/api/v1/approvals/{missing_id}/reject"
+            )
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(missing.status_code, 200)
+        self.assertTrue(rejected.json()["rejected"])
+        self.assertFalse(missing.json()["rejected"])
+        self.assertEqual(set(rejected.json()), {"ok", "rejected", "status", "message"})
+        self.assertEqual(set(missing.json()), {"ok", "rejected", "status", "message"})
 
     def test_test_pending_creates_once_and_notifies_once(self):
         self.app.dependency_overrides[verify_token] = lambda: True

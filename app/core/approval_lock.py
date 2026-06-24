@@ -576,3 +576,47 @@ def create_pending_approval_once(
                 conn.close()
             except Exception:
                 pass
+
+
+def reject_pending_approval(pending_id: str) -> bool:
+    """Mark one awaiting approval as denied without executing any action."""
+    try:
+        normalized_id = str(uuid.UUID(str(pending_id)))
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+    conn = None
+    try:
+        conn = _connect()
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE tony_pending_approvals
+                SET status = 'denied'
+                WHERE pending_id = %s
+                  AND status = 'awaiting'
+                RETURNING pending_id
+                """,
+                (normalized_id,),
+            )
+            rejected = cur.fetchone() is not None
+        conn.commit()
+        return rejected
+    except Exception as error:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        print(
+            "[APPROVAL_LOCK] Pending approval rejection failed: "
+            f"{type(error).__name__}"
+        )
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
