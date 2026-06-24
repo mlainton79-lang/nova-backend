@@ -71,6 +71,39 @@ def _format_prior_results(prior_results: Optional[List[Dict[str, Any]]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+async def _notify_pending_approval_once(step: Dict[str, Any]) -> bool:
+    """Persist one approval pause and notify only for a new active record."""
+    registry_match = step.get("registry_match") or {}
+    decision = step.get("governor_decision") or {}
+    try:
+        from app.core.approval_lock import create_pending_approval_once
+
+        created = create_pending_approval_once(
+            capability_key=(
+                registry_match.get("capability_key")
+                or step.get("required_capability")
+                or "unknown_capability"
+            ),
+            action_type=decision.get("action_class") or "unknown_action",
+            step_summary=step.get("description") or "Approval required",
+        )
+    except Exception:
+        return False
+
+    if not created:
+        return False
+
+    try:
+        from app.core.user_notifications import NotificationType, send_user_notification
+
+        await send_user_notification(NotificationType.APPROVAL_REQUIRED)
+    except Exception:
+        # Delivery is best-effort. The approval record and paused execution
+        # state remain authoritative and fail closed.
+        pass
+    return True
+
+
 async def _execute_step(step: Dict[str, Any],
                          payload: Optional[Dict[str, Any]] = None,
                          prior_results: Optional[List[Dict[str, Any]]] = None,
@@ -2788,6 +2821,7 @@ async def execute_plan(
                         f"resume by re-calling with approval_token"
                     ),
                 }
+                await _notify_pending_approval_once(step)
                 break
             # Re-evaluate with the token. If governor still denies (e.g.,
             # capability changed since plan was produced), halt.

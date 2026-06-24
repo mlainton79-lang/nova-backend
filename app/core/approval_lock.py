@@ -33,8 +33,15 @@ Foundational contract per AGENTS.md:
     the correct fail-closed posture; nothing else in the request path is
     broken.
 """
+import hashlib
+import json
 import os
+import secrets
+import uuid
+
 import psycopg2
+
+from app.core.secrets_redact import redact
 
 
 def _connect():
@@ -246,6 +253,14 @@ def init_approval_lock_tables() -> None:
                     WHERE status = 'awaiting'
                 """
             )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    uq_tony_pending_approvals_awaiting_action
+                    ON tony_pending_approvals(capability_key, action_hash)
+                    WHERE status = 'awaiting'
+                """
+            )
 
             # §3  tony_action_grants
             cur.execute(
@@ -344,6 +359,117 @@ def init_approval_lock_tables() -> None:
             # If the ledger write itself fails, the print() above is the
             # last line of defense. Do not re-raise — init is best-effort.
             pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _safe_action_snapshot(
+    capability_key: str,
+    action_type: str,
+    step_summary: str,
+) -> dict[str, str]:
+    """Build the bounded, redacted fields used for approval deduplication."""
+    safe_capability_key = " ".join(str(capability_key or "").split())[:200]
+    safe_action_type = " ".join(str(action_type or "").split())[:100]
+    try:
+        safe_summary = redact(str(step_summary or ""))
+    except Exception:
+        safe_summary = ""
+    safe_summary = " ".join(safe_summary.split())[:500]
+    return {
+        "capability_key": safe_capability_key or "unknown_capability",
+        "action_type": safe_action_type or "unknown_action",
+        "step_summary": safe_summary or "Approval required",
+    }
+
+
+def create_pending_approval_once(
+    *,
+    capability_key: str,
+    action_type: str,
+    step_summary: str,
+    ttl_minutes: int = 15,
+) -> bool:
+    """Create one active approval row per stable action, failing closed.
+
+    Returns True only for the transaction that inserts a new awaiting row.
+    Equivalent active rows return False through the unique partial index.
+    """
+    snapshot = _safe_action_snapshot(capability_key, action_type, step_summary)
+    canonical = json.dumps(
+        snapshot,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    action_hash = hashlib.sha256(canonical).digest()
+    try:
+        bounded_ttl = max(1, min(int(ttl_minutes), 60))
+    except (TypeError, ValueError):
+        bounded_ttl = 15
+
+    conn = None
+    try:
+        conn = _connect()
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE tony_pending_approvals
+                SET status = 'expired'
+                WHERE capability_key = %s
+                  AND action_hash = %s
+                  AND status = 'awaiting'
+                  AND expires_at <= NOW()
+                """,
+                (snapshot["capability_key"], action_hash),
+            )
+            cur.execute(
+                """
+                INSERT INTO tony_pending_approvals (
+                    pending_id,
+                    capability_key,
+                    action_hash,
+                    action_snapshot,
+                    expires_at,
+                    approval_challenge
+                ) VALUES (
+                    %s, %s, %s, %s::jsonb,
+                    NOW() + (%s * INTERVAL '1 minute'),
+                    %s
+                )
+                ON CONFLICT (capability_key, action_hash)
+                    WHERE status = 'awaiting'
+                    DO NOTHING
+                RETURNING pending_id
+                """,
+                (
+                    str(uuid.uuid4()),
+                    snapshot["capability_key"],
+                    action_hash,
+                    canonical.decode("utf-8"),
+                    bounded_ttl,
+                    secrets.token_bytes(32),
+                ),
+            )
+            created = cur.fetchone() is not None
+        conn.commit()
+        return created
+    except Exception as error:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        print(
+            "[APPROVAL_LOCK] Pending approval create failed: "
+            f"{type(error).__name__}"
+        )
+        return False
     finally:
         if conn is not None:
             try:
