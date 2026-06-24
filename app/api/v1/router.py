@@ -36,6 +36,8 @@ from app.api.v1.endpoints import goals
 router.include_router(goals.router, tags=["goals"])
 from app.api.v1.endpoints import push
 router.include_router(push.router, tags=["push"])
+from app.api.v1.endpoints import approvals
+router.include_router(approvals.router, tags=["approvals"])
 from app.api.v1.endpoints import notifications
 router.include_router(notifications.router, tags=["notifications"])
 from app.api.v1.endpoints import monitor

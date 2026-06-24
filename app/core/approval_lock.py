@@ -38,6 +38,7 @@ import json
 import os
 import secrets
 import uuid
+from collections.abc import Mapping, Sequence
 
 import psycopg2
 
@@ -385,6 +386,105 @@ def _safe_action_snapshot(
         "action_type": safe_action_type or "unknown_action",
         "step_summary": safe_summary or "Approval required",
     }
+
+
+def _sanitize_pending_approval_value(value):
+    """Recursively redact sensitive values before exposing approval rows."""
+    if isinstance(value, Mapping):
+        sanitized = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if any(
+                token in key_text
+                for token in (
+                    "approval_challenge",
+                    "action_hash",
+                    "secret",
+                    "token",
+                    "password",
+                    "passphrase",
+                    "authorization",
+                    "credential",
+                    "api_key",
+                    "apikey",
+                    "refresh",
+                    "access",
+                    "body",
+                    "payload",
+                    "headers",
+                    "header",
+                    "request",
+                    "response",
+                    "private",
+                    "cookie",
+                )
+            ):
+                sanitized[key] = "[REDACTED]"
+            else:
+                sanitized[key] = _sanitize_pending_approval_value(item)
+        return sanitized
+    if isinstance(value, str):
+        return " ".join(redact(value).split())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_sanitize_pending_approval_value(item) for item in value]
+    return value
+
+
+def _coerce_dt(value):
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def list_active_pending_approvals(limit: int = 20) -> list[dict]:
+    """Return sanitized awaiting approvals that have not expired yet."""
+    try:
+        bounded_limit = max(1, min(int(limit), 20))
+    except (TypeError, ValueError):
+        bounded_limit = 20
+
+    conn = None
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pending_id, capability_key, action_snapshot,
+                       created_at, expires_at, status
+                FROM tony_pending_approvals
+                WHERE status = 'awaiting'
+                  AND expires_at > NOW()
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (bounded_limit,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "pending_id": str(row[0]),
+                "capability_key": row[1],
+                "action_snapshot": _sanitize_pending_approval_value(row[2]),
+                "created_at": _coerce_dt(row[3]),
+                "expires_at": _coerce_dt(row[4]),
+                "status": row[5],
+            }
+            for row in rows
+        ]
+    except Exception as error:
+        print(
+            "[APPROVAL_LOCK] Pending approval list failed: "
+            f"{type(error).__name__}"
+        )
+        return []
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def create_pending_approval_once(
