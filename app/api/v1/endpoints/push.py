@@ -1,5 +1,5 @@
 """Push notification endpoints."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.security import verify_token
 from app.core.push_notifications import (
     save_push_token, get_push_token,
@@ -8,11 +8,44 @@ from app.core.push_notifications import (
 
 router = APIRouter()
 
+def _resolve_push_registration(
+    query_token: str | None,
+    query_platform: str | None,
+    body: object,
+) -> tuple[str, str]:
+    payload = body if isinstance(body, dict) else {}
+    candidate = query_token if query_token is not None else payload.get("token")
+    if not isinstance(candidate, str) or not candidate.strip():
+        raise HTTPException(status_code=422, detail="A non-empty token is required")
+
+    platform_candidate = (
+        query_platform if query_platform is not None else payload.get("platform")
+    )
+    resolved_platform = (
+        platform_candidate.strip()
+        if isinstance(platform_candidate, str) and platform_candidate.strip()
+        else "android"
+    )
+    return candidate.strip(), resolved_platform
+
+
 @router.post("/push/register")
-async def register_token(token: str, platform: str = "android", _=Depends(verify_token)):
-    """Register Matthew's device for push notifications."""
-    save_push_token(token, platform)
-    return {"ok": True, "message": "Tony can now reach you directly"}
+async def register_token(
+    request: Request,
+    token: str | None = None,
+    platform: str | None = None,
+    _: bool = Depends(verify_token),
+):
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+
+    resolved_token, resolved_platform = _resolve_push_registration(
+        token, platform, body
+    )
+    save_push_token(resolved_token, resolved_platform)
+    return {"ok": True, "message": "Push token registered"}
 
 @router.post("/push/send")
 async def send_notification(title: str, body: str, _=Depends(verify_token)):
