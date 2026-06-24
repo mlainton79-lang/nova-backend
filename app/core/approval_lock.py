@@ -578,11 +578,24 @@ def create_pending_approval_once(
                 pass
 
 
+def _normalize_pending_approval_id(pending_id: str) -> str | None:
+    """Accept the pending_id string returned by the approval list endpoint."""
+    if pending_id is None:
+        return None
+
+    value = str(pending_id).strip()
+    if not value or len(value) > 128:
+        return None
+    if any(ord(character) < 33 for character in value):
+        return None
+
+    return value
+
+
 def reject_pending_approval(pending_id: str) -> bool:
-    """Mark one awaiting approval as denied without executing any action."""
-    try:
-        normalized_id = str(uuid.UUID(str(pending_id)))
-    except (TypeError, ValueError, AttributeError):
+    """Mark one awaiting approval as denied without running any action."""
+    normalized_id = _normalize_pending_approval_id(pending_id)
+    if normalized_id is None:
         return False
 
     conn = None

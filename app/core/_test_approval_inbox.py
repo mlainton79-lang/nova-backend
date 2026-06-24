@@ -105,7 +105,32 @@ class ApprovalInboxTests(unittest.TestCase):
         normalized_statement = " ".join(statement.split())
         self.assertIn("SET status = 'denied'", normalized_statement)
         self.assertIn("AND status = 'awaiting'", normalized_statement)
+        self.assertNotIn("DELETE", normalized_statement.upper())
         self.assertEqual(params, (pending_id,))
+
+    def test_non_uuid_pending_approval_id_can_be_denied(self):
+        pending_id = "test-pending-approval-id"
+        connection = _Connection(rows=[(pending_id,)])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            rejected = approval_lock.reject_pending_approval(pending_id)
+
+        self.assertTrue(rejected)
+        statement, params = connection.cursor_instance.statements[0]
+        normalized_statement = " ".join(statement.split())
+        self.assertIn("SET status = 'denied'", normalized_statement)
+        self.assertIn("AND status = 'awaiting'", normalized_statement)
+        self.assertNotIn("DELETE", normalized_statement.upper())
+        self.assertEqual(params, (pending_id,))
+
+    def test_invalid_pending_approval_id_is_not_queried(self):
+        connection = _Connection(rows=[("ignored",)])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            rejected = approval_lock.reject_pending_approval("")
+
+        self.assertFalse(rejected)
+        self.assertEqual(connection.cursor_instance.statements, [])
 
     def test_reject_endpoint_returns_sanitized_outcomes(self):
         self.app.dependency_overrides[verify_token] = lambda: True
