@@ -7,7 +7,7 @@ import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.modules.setdefault("psycopg2", MagicMock())
@@ -18,6 +18,7 @@ import httpx
 from app.api.v1.endpoints.approvals import router as approvals_router  # noqa: E402
 from app.core.security import verify_token  # noqa: E402
 from app.core import approval_lock  # noqa: E402
+from app.core.user_notifications import NotificationType  # noqa: E402
 
 
 class _Cursor:
@@ -69,6 +70,47 @@ class ApprovalInboxTests(unittest.TestCase):
     def test_endpoint_is_protected(self):
         response = self._request("GET", "/api/v1/approvals/pending")
         self.assertEqual(response.status_code, 422)
+
+    def test_test_pending_endpoint_is_protected(self):
+        response = self._request("POST", "/api/v1/approvals/test-pending")
+        self.assertEqual(response.status_code, 422)
+
+    def test_test_pending_creates_once_and_notifies_once(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        create = MagicMock(side_effect=[True, False])
+        notify = AsyncMock(return_value=True)
+        with (
+            patch(
+                "app.api.v1.endpoints.approvals.create_pending_approval_once",
+                create,
+            ),
+            patch(
+                "app.api.v1.endpoints.approvals.send_user_notification",
+                notify,
+            ),
+        ):
+            first = self._request("POST", "/api/v1/approvals/test-pending")
+            duplicate = self._request("POST", "/api/v1/approvals/test-pending")
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(first.json()["created"])
+        self.assertFalse(duplicate.json()["created"])
+        notify.assert_awaited_once_with(NotificationType.APPROVAL_REQUIRED)
+        create.assert_called_with(
+            capability_key="test.approval_inbox",
+            action_type="test_pending_approval",
+            step_summary="Test approval for Android Approval Inbox display",
+            ttl_minutes=10,
+        )
+
+        allowed_keys = {"ok", "created", "status", "message"}
+        self.assertEqual(set(first.json()), allowed_keys)
+        self.assertEqual(set(duplicate.json()), allowed_keys)
+        for payload in (first.json(), duplicate.json()):
+            self.assertNotIn("approval_challenge", payload)
+            self.assertNotIn("action_hash", payload)
 
     def test_helper_sanitizes_and_binds_limit(self):
         now = datetime.now(timezone.utc)
