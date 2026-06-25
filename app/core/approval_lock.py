@@ -680,11 +680,6 @@ def approve_pending_approval(pending_id: str) -> bool:
                 WHERE pending.pending_id::text = %s
                   AND pending.status = 'awaiting'
                   AND pending.expires_at > NOW()
-                  AND EXISTS (
-                      SELECT 1
-                      FROM tony_approval_devices
-                      WHERE status = 'active'
-                  )
                 ON CONFLICT (pending_action_ref) DO UPDATE
                 SET status = 'active',
                     expires_at = EXCLUDED.expires_at
@@ -708,8 +703,10 @@ def approve_pending_approval(pending_id: str) -> bool:
                     approved_by_device_id = (
                         SELECT device_id
                         FROM tony_approval_devices
-                        WHERE status = 'active'
-                        ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
+                        ORDER BY
+                            (status = 'active') DESC,
+                            last_seen_at DESC NULLS LAST,
+                            created_at DESC
                         LIMIT 1
                     ),
                     approval_challenge_used_at = NOW(),
@@ -717,6 +714,10 @@ def approve_pending_approval(pending_id: str) -> bool:
                 WHERE pending_id::text = %s
                   AND status = 'awaiting'
                   AND expires_at > NOW()
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tony_approval_devices
+                  )
                 RETURNING pending_id
                 """,
                 (str(approval_grant_id), normalized_id),
