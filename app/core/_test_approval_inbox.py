@@ -97,6 +97,12 @@ class ApprovalInboxTests(unittest.TestCase):
         response = self._request("POST", f"/api/v1/approvals/{pending_id}/approve")
         self.assertEqual(response.status_code, 422)
 
+    def test_resume_test_endpoints_are_protected(self):
+        pending = self._request("POST", "/api/v1/approvals/test-resume-pending")
+        run = self._request("POST", "/api/v1/approvals/test-resume-run")
+        self.assertEqual(pending.status_code, 422)
+        self.assertEqual(run.status_code, 422)
+
     def test_awaiting_approval_can_be_denied(self):
         pending_id = str(uuid.uuid4())
         connection = _Connection(rows=[(pending_id,)])
@@ -188,6 +194,49 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertEqual(grant_params[1], pending_id)
         self.assertEqual(update_params[1], pending_id)
 
+    def test_test_resume_grant_can_be_consumed_once(self):
+        connection = _Connection(rows=[(str(uuid.uuid4()),)])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            consumed = approval_lock.consume_test_approval_resume_grant()
+
+        self.assertTrue(consumed)
+        self.assertTrue(connection.committed)
+        statement, params = connection.cursor_instance.statements[0]
+        normalized_statement = " ".join(statement.split())
+        self.assertIn("WITH selected_grant AS", normalized_statement)
+        self.assertIn("JOIN tony_pending_approvals pending", normalized_statement)
+        self.assertIn("grant.capability_key = %s", normalized_statement)
+        self.assertIn("pending.capability_key = %s", normalized_statement)
+        self.assertIn("pending.status = 'approved'", normalized_statement)
+        self.assertIn("grant.status = 'active'", normalized_statement)
+        self.assertIn("grant.consumed_at IS NULL", normalized_statement)
+        self.assertIn("grant.expires_at > NOW()", normalized_statement)
+        self.assertIn("pending.expires_at > NOW()", normalized_statement)
+        self.assertIn("SET status = 'consumed'", normalized_statement)
+        self.assertIn("consumed_at = NOW()", normalized_statement)
+        self.assertNotIn("DELETE", normalized_statement.upper())
+        self.assertEqual(
+            params,
+            (
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+            ),
+        )
+
+    def test_test_resume_grant_missing_or_already_consumed_returns_false(self):
+        connection = _Connection(rows=[])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            consumed = approval_lock.consume_test_approval_resume_grant()
+
+        self.assertFalse(consumed)
+        statement, _ = connection.cursor_instance.statements[0]
+        normalized_statement = " ".join(statement.split())
+        self.assertIn("grant.status = 'active'", normalized_statement)
+        self.assertIn("grant.consumed_at IS NULL", normalized_statement)
+
     def test_non_existent_approval_returns_false_when_marking_approved(self):
         pending_id = str(uuid.uuid4())
         connection = _Connection(rows=[])
@@ -225,11 +274,18 @@ class ApprovalInboxTests(unittest.TestCase):
     def test_approve_endpoint_returns_sanitized_outcomes(self):
         self.app.dependency_overrides[verify_token] = lambda: True
         approve = MagicMock(side_effect=[True, False])
+        resume = MagicMock(return_value=True)
         first_id = str(uuid.uuid4())
         missing_id = str(uuid.uuid4())
-        with patch(
-            "app.api.v1.endpoints.approvals.approve_pending_approval",
-            approve,
+        with (
+            patch(
+                "app.api.v1.endpoints.approvals.approve_pending_approval",
+                approve,
+            ),
+            patch(
+                "app.api.v1.endpoints.approvals.consume_test_approval_resume_grant",
+                resume,
+            ),
         ):
             approved = self._request(
                 "POST", f"/api/v1/approvals/{first_id}/approve"
@@ -252,6 +308,7 @@ class ApprovalInboxTests(unittest.TestCase):
             self.assertNotIn("pending_id", payload)
             self.assertNotIn("token", payload)
             self.assertNotIn("secret", payload)
+        resume.assert_not_called()
 
     def test_test_pending_creates_once_and_notifies_once(self):
         self.app.dependency_overrides[verify_token] = lambda: True
@@ -289,6 +346,84 @@ class ApprovalInboxTests(unittest.TestCase):
         for payload in (first.json(), duplicate.json()):
             self.assertNotIn("approval_challenge", payload)
             self.assertNotIn("action_hash", payload)
+
+    def test_test_resume_pending_creates_only_resume_capability_and_notifies_once(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        create = MagicMock(side_effect=[True, False])
+        notify = AsyncMock(return_value=True)
+        with (
+            patch(
+                "app.api.v1.endpoints.approvals.create_pending_approval_once",
+                create,
+            ),
+            patch(
+                "app.api.v1.endpoints.approvals.send_user_notification",
+                notify,
+            ),
+        ):
+            first = self._request("POST", "/api/v1/approvals/test-resume-pending")
+            duplicate = self._request("POST", "/api/v1/approvals/test-resume-pending")
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(first.json()["created"])
+        self.assertFalse(duplicate.json()["created"])
+        self.assertTrue(first.json()["notification_sent"])
+        self.assertFalse(duplicate.json()["notification_sent"])
+        notify.assert_awaited_once_with(NotificationType.APPROVAL_REQUIRED)
+        create.assert_called_with(
+            capability_key=approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+            action_type=approval_lock.TEST_APPROVAL_RESUME_ACTION_TYPE,
+            step_summary=approval_lock.TEST_APPROVAL_RESUME_STEP_SUMMARY,
+            ttl_minutes=10,
+        )
+
+        allowed_keys = {"ok", "created", "notification_sent", "status", "message"}
+        self.assertEqual(set(first.json()), allowed_keys)
+        self.assertEqual(set(duplicate.json()), allowed_keys)
+        for payload in (first.json(), duplicate.json()):
+            self.assertNotIn("approval_challenge", payload)
+            self.assertNotIn("action_hash", payload)
+            self.assertNotIn("pending_id", payload)
+            self.assertNotIn("grant_id", payload)
+            self.assertNotIn("token", payload)
+            self.assertNotIn("secret", payload)
+
+    def test_test_resume_run_consumes_only_harmless_test_grant(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        consume = MagicMock(side_effect=[True, False])
+        notify = AsyncMock(return_value=True)
+        with (
+            patch(
+                "app.api.v1.endpoints.approvals.consume_test_approval_resume_grant",
+                consume,
+            ),
+            patch(
+                "app.api.v1.endpoints.approvals.send_user_notification",
+                notify,
+            ),
+        ):
+            resumed = self._request("POST", "/api/v1/approvals/test-resume-run")
+            missing = self._request("POST", "/api/v1/approvals/test-resume-run")
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(resumed.status_code, 200)
+        self.assertEqual(missing.status_code, 200)
+        self.assertTrue(resumed.json()["resumed"])
+        self.assertFalse(missing.json()["resumed"])
+        consume.assert_called()
+        notify.assert_not_awaited()
+        allowed_keys = {"ok", "resumed", "status", "message"}
+        self.assertEqual(set(resumed.json()), allowed_keys)
+        self.assertEqual(set(missing.json()), allowed_keys)
+        for payload in (resumed.json(), missing.json()):
+            self.assertNotIn("approval_challenge", payload)
+            self.assertNotIn("action_hash", payload)
+            self.assertNotIn("pending_id", payload)
+            self.assertNotIn("grant_id", payload)
+            self.assertNotIn("token", payload)
+            self.assertNotIn("secret", payload)
 
     def test_helper_sanitizes_and_binds_limit(self):
         now = datetime.now(timezone.utc)

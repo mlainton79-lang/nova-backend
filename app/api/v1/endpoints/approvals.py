@@ -3,7 +3,11 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.core.approval_lock import (
+    TEST_APPROVAL_RESUME_ACTION_TYPE,
+    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+    TEST_APPROVAL_RESUME_STEP_SUMMARY,
     approve_pending_approval,
+    consume_test_approval_resume_grant,
     create_pending_approval_once,
     list_active_pending_approvals,
     reject_pending_approval,
@@ -63,6 +67,65 @@ async def create_test_pending_approval(
             "Test approval created and notification sent."
             if notification_sent
             else "Test approval created; notification was unavailable."
+        ),
+    }
+
+
+@router.post("/approvals/test-resume-pending")
+async def create_test_resume_pending_approval(
+    _=Depends(verify_token),
+):
+    """Create one harmless, deduplicated pending approval for resume testing."""
+    created = create_pending_approval_once(
+        capability_key=TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+        action_type=TEST_APPROVAL_RESUME_ACTION_TYPE,
+        step_summary=TEST_APPROVAL_RESUME_STEP_SUMMARY,
+        ttl_minutes=10,
+    )
+    notification_sent = False
+    if created:
+        try:
+            notification_sent = await send_user_notification(
+                NotificationType.APPROVAL_REQUIRED
+            )
+        except Exception:
+            notification_sent = False
+
+    return {
+        "ok": True,
+        "created": created,
+        "notification_sent": notification_sent,
+        "status": (
+            "created"
+            if created and notification_sent
+            else "created_notification_unavailable"
+            if created
+            else "not_created"
+        ),
+        "message": (
+            "Resume test approval created and notification sent."
+            if created and notification_sent
+            else "Resume test approval created; notification was unavailable."
+            if created
+            else "An equivalent active resume test approval already exists."
+        ),
+    }
+
+
+@router.post("/approvals/test-resume-run")
+async def run_test_resume_harness(
+    _=Depends(verify_token),
+):
+    """Consume one approved harmless test grant without executing real work."""
+    resumed = consume_test_approval_resume_grant()
+    return {
+        "ok": True,
+        "resumed": resumed,
+        "status": "completed" if resumed else "not_resumed",
+        "message": (
+            "Harmless resume test task completed."
+            if resumed
+            else "No approved unconsumed resume test grant was available."
         ),
     }
 

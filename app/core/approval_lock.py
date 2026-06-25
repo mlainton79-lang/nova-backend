@@ -44,6 +44,12 @@ import psycopg2
 
 from app.core.secrets_redact import redact
 
+TEST_APPROVAL_RESUME_CAPABILITY_KEY = "test.approval_resume"
+TEST_APPROVAL_RESUME_ACTION_TYPE = "test_resume_task"
+TEST_APPROVAL_RESUME_STEP_SUMMARY = (
+    "Harmless test approval for backend-only resume verification"
+)
+
 
 def _connect():
     """Single source of connection shape per AGENTS.md."""
@@ -760,6 +766,70 @@ def approve_pending_approval(pending_id: str) -> bool:
                 pass
         print(
             "[APPROVAL_LOCK] Pending approval mark-approved failed: "
+            f"{type(error).__name__}"
+        )
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def consume_test_approval_resume_grant() -> bool:
+    """Consume one approved grant for the harmless resume-test capability only."""
+    conn = None
+    try:
+        conn = _connect()
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH selected_grant AS (
+                    SELECT grant.grant_id
+                    FROM tony_action_grants grant
+                    JOIN tony_pending_approvals pending
+                      ON pending.pending_id = grant.pending_action_ref
+                    WHERE grant.capability_key = %s
+                      AND pending.capability_key = %s
+                      AND pending.status = 'approved'
+                      AND grant.status = 'active'
+                      AND grant.consumed_at IS NULL
+                      AND grant.expires_at > NOW()
+                      AND pending.expires_at > NOW()
+                    ORDER BY pending.approved_at DESC NULLS LAST,
+                             pending.created_at DESC
+                    LIMIT 1
+                    FOR UPDATE OF grant
+                )
+                UPDATE tony_action_grants grant
+                SET status = 'consumed',
+                    consumed_at = NOW()
+                FROM selected_grant
+                WHERE grant.grant_id = selected_grant.grant_id
+                  AND grant.capability_key = %s
+                  AND grant.status = 'active'
+                  AND grant.consumed_at IS NULL
+                RETURNING grant.grant_id
+                """,
+                (
+                    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                ),
+            )
+            consumed = cur.fetchone() is not None
+        conn.commit()
+        return consumed
+    except Exception as error:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        print(
+            "[APPROVAL_LOCK] Test approval resume consume failed: "
             f"{type(error).__name__}"
         )
         return False
