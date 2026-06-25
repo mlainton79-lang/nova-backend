@@ -12,13 +12,21 @@ Setup:
 """
 import os
 import json
+import hashlib
 import httpx
 import psycopg2
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "nova-f83e3")
 FIREBASE_SERVICE_ACCOUNT = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
+NON_APPROVAL_URGENT_PUSH_ENABLED = os.environ.get(
+    "NOVA_NON_APPROVAL_URGENT_PUSH_ENABLED",
+    "",
+).lower() in {"1", "true", "yes", "on"}
+NON_APPROVAL_URGENT_COOLDOWN_MINUTES = int(
+    os.environ.get("NOVA_NON_APPROVAL_URGENT_COOLDOWN_MINUTES", "360")
+)
 
 def get_firebase_credentials():
     """Get Firebase service account - from env var or DB."""
@@ -87,6 +95,12 @@ def init_push_table():
                 platform TEXT DEFAULT 'android',
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS urgent_push_dedupe (
+                dedupe_key TEXT PRIMARY KEY,
+                last_sent_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
         """)
         conn.commit()
@@ -226,7 +240,62 @@ async def send_push(title: str, body: str, data: dict = None) -> bool:
     return False
 
 
+def _urgent_dedupe_key(title: str, body: str, data: dict | None = None) -> str:
+    safe_data = json.dumps(data or {}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(f"{title}\n{body}\n{safe_data}".encode("utf-8")).hexdigest()
+
+
+def _claim_non_approval_urgent_send(dedupe_key: str) -> bool:
+    cooldown_minutes = max(1, min(NON_APPROVAL_URGENT_COOLDOWN_MINUTES, 24 * 60))
+    cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS urgent_push_dedupe (
+                dedupe_key TEXT PRIMARY KEY,
+                last_sent_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            INSERT INTO urgent_push_dedupe (dedupe_key, last_sent_at)
+            VALUES (%s, NOW())
+            ON CONFLICT (dedupe_key) DO UPDATE
+            SET last_sent_at = NOW()
+            WHERE urgent_push_dedupe.last_sent_at < %s
+            RETURNING dedupe_key
+        """, (dedupe_key, cutoff))
+        claimed = cur.fetchone() is not None
+        conn.commit()
+        cur.close()
+        conn.close()
+        return claimed
+    except Exception as error:
+        print(f"[PUSH] Urgent dedupe unavailable: {type(error).__name__}")
+        return False
+
+
+async def send_non_approval_urgent_push(
+    title: str,
+    body: str,
+    data: dict = None,
+    dedupe_key: str | None = None,
+) -> bool:
+    """Gate and dedupe non-approval urgent notifications."""
+    if not NON_APPROVAL_URGENT_PUSH_ENABLED:
+        print("[PUSH] Non-approval urgent notification blocked by default gate")
+        return False
+
+    key = dedupe_key or _urgent_dedupe_key(title, body, data)
+    if not _claim_non_approval_urgent_send(key):
+        print("[PUSH] Non-approval urgent notification blocked by cooldown")
+        return False
+
+    return await send_push(title, body, data=data)
+
+
 async def tony_notify(message: str, priority: str = "normal"):
     """Tony sends Matthew a notification."""
-    title = "Tony" if priority == "normal" else "⚠️ Tony — Urgent"
-    return await send_push(title, message)
+    if priority == "normal":
+        return await send_push("Tony", message)
+    return await send_non_approval_urgent_push("⚠️ Tony — Urgent", message)

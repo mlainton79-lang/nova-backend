@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
-from app.core.push_notifications import send_push
+from app.core.push_notifications import send_non_approval_urgent_push, send_push
 
 
 class NotificationType(str, Enum):
@@ -67,6 +67,13 @@ async def send_user_notification(
 ) -> bool:
     """Send one typed notification to the latest registered device."""
     notification = resolve_notification(notification_type)
+    if notification.type is NotificationType.IMPORTANT_ALERT:
+        return await send_non_approval_urgent_push(
+            notification.title,
+            notification.body,
+            data={"notification_type": notification.type.value},
+            dedupe_key=f"typed:{notification.type.value}",
+        )
     return await send_push(
         notification.title,
         notification.body,
