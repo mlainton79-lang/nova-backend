@@ -104,8 +104,12 @@ class ApprovalInboxTests(unittest.TestCase):
         statement, params = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
         self.assertIn("SET status = 'denied'", normalized_statement)
+        self.assertIn("denied_at = NOW()", normalized_statement)
+        self.assertIn("denied_by_device_id = ( SELECT device_id", normalized_statement)
+        self.assertIn("approval_challenge_used_at = NOW()", normalized_statement)
         self.assertIn("WHERE pending_id::text = %s", normalized_statement)
         self.assertIn("AND status = 'awaiting'", normalized_statement)
+        self.assertIn("WHERE status = 'active'", normalized_statement)
         self.assertNotIn("DELETE", normalized_statement.upper())
         self.assertEqual(params, (pending_id,))
 
@@ -120,8 +124,12 @@ class ApprovalInboxTests(unittest.TestCase):
         statement, params = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
         self.assertIn("SET status = 'denied'", normalized_statement)
+        self.assertIn("denied_at = NOW()", normalized_statement)
+        self.assertIn("denied_by_device_id = ( SELECT device_id", normalized_statement)
+        self.assertIn("approval_challenge_used_at = NOW()", normalized_statement)
         self.assertIn("WHERE pending_id::text = %s", normalized_statement)
         self.assertIn("AND status = 'awaiting'", normalized_statement)
+        self.assertIn("WHERE status = 'active'", normalized_statement)
         self.assertNotIn("DELETE", normalized_statement.upper())
         self.assertEqual(params, (pending_id,))
 

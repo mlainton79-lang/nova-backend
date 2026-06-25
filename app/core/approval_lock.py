@@ -606,9 +606,23 @@ def reject_pending_approval(pending_id: str) -> bool:
             cur.execute(
                 """
                 UPDATE tony_pending_approvals
-                SET status = 'denied'
+                SET status = 'denied',
+                    denied_at = NOW(),
+                    denied_by_device_id = (
+                        SELECT device_id
+                        FROM tony_approval_devices
+                        WHERE status = 'active'
+                        ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
+                        LIMIT 1
+                    ),
+                    approval_challenge_used_at = NOW()
                 WHERE pending_id::text = %s
                   AND status = 'awaiting'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tony_approval_devices
+                      WHERE status = 'active'
+                  )
                 RETURNING pending_id
                 """,
                 (normalized_id,),
