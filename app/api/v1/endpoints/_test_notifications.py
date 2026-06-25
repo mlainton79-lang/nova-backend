@@ -20,6 +20,33 @@ def test_unknown_notification_type_is_rejected():
         user_notifications.resolve_notification("unknown")
 
 
+def test_routing_metadata_is_safe_and_screen_specific():
+    expected_targets = {
+        NotificationType.APPROVAL_REQUIRED: "approval_inbox",
+        NotificationType.IMPORTANT_ALERT: "alerts",
+        NotificationType.TASK_COMPLETE: "chat",
+        NotificationType.TASK_FAILED: "chat",
+        NotificationType.SUMMARY_READY: "chat",
+    }
+    forbidden = {
+        "approval_challenge",
+        "action_hash",
+        "pending_id",
+        "token",
+        "secret",
+        "authorization",
+    }
+
+    for notification_type, target_screen in expected_targets.items():
+        data = user_notifications.notification_routing_data(notification_type)
+
+        assert data == {
+            "notification_type": notification_type.value,
+            "target_screen": target_screen,
+        }
+        assert not (set(data) & forbidden)
+
+
 def test_gateway_sends_exactly_once(monkeypatch):
     calls = []
 
@@ -38,7 +65,7 @@ def test_gateway_sends_exactly_once(monkeypatch):
         (
             "Nova task complete",
             "Your Nova task completed successfully.",
-            {"notification_type": "task_complete"},
+            {"notification_type": "task_complete", "target_screen": "chat"},
         )
     ]
 

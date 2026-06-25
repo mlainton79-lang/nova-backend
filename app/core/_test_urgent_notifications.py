@@ -27,8 +27,12 @@ class UrgentNotificationGateTests(unittest.TestCase):
         self.assertTrue(result)
         send.assert_awaited_once()
         title, body = send.await_args.args[:2]
+        data = send.await_args.kwargs["data"]
         self.assertEqual(title, "Nova approval needed")
         self.assertIn("approval", body.lower())
+        self.assertEqual(data["notification_type"], "approval_required")
+        self.assertEqual(data["target_screen"], "approval_inbox")
+        self.assertEqual(set(data), {"notification_type", "target_screen"})
 
     def test_important_alert_is_blocked_by_default_gate(self):
         urgent = AsyncMock(return_value=False)
@@ -46,6 +50,13 @@ class UrgentNotificationGateTests(unittest.TestCase):
         self.assertFalse(result)
         urgent.assert_awaited_once()
         direct.assert_not_awaited()
+        self.assertEqual(
+            urgent.await_args.kwargs["data"],
+            {
+                "notification_type": "important_alert",
+                "target_screen": "alerts",
+            },
+        )
 
     def test_tony_urgent_is_blocked_by_default_gate(self):
         send = AsyncMock(return_value=True)

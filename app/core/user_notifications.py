@@ -50,6 +50,14 @@ _DEFAULT_NOTIFICATIONS: Final[dict[NotificationType, NotificationContent]] = {
     ),
 }
 
+_NOTIFICATION_TARGET_SCREENS: Final[dict[NotificationType, str]] = {
+    NotificationType.APPROVAL_REQUIRED: "approval_inbox",
+    NotificationType.IMPORTANT_ALERT: "alerts",
+    NotificationType.TASK_COMPLETE: "chat",
+    NotificationType.TASK_FAILED: "chat",
+    NotificationType.SUMMARY_READY: "chat",
+}
+
 
 def resolve_notification(
     notification_type: NotificationType | str,
@@ -62,20 +70,29 @@ def resolve_notification(
     return _DEFAULT_NOTIFICATIONS[resolved_type]
 
 
+def notification_routing_data(notification_type: NotificationType) -> dict[str, str]:
+    """Return safe Android notification tap-routing metadata."""
+    return {
+        "notification_type": notification_type.value,
+        "target_screen": _NOTIFICATION_TARGET_SCREENS[notification_type],
+    }
+
+
 async def send_user_notification(
     notification_type: NotificationType | str = NotificationType.APPROVAL_REQUIRED,
 ) -> bool:
     """Send one typed notification to the latest registered device."""
     notification = resolve_notification(notification_type)
+    routing_data = notification_routing_data(notification.type)
     if notification.type is NotificationType.IMPORTANT_ALERT:
         return await send_non_approval_urgent_push(
             notification.title,
             notification.body,
-            data={"notification_type": notification.type.value},
+            data=routing_data,
             dedupe_key=f"typed:{notification.type.value}",
         )
     return await send_push(
         notification.title,
         notification.body,
-        data={"notification_type": notification.type.value},
+        data=routing_data,
     )
