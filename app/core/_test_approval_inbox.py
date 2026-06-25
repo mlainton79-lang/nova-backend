@@ -104,6 +104,7 @@ class ApprovalInboxTests(unittest.TestCase):
         statement, params = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
         self.assertIn("SET status = 'denied'", normalized_statement)
+        self.assertIn("WHERE pending_id::text = %s", normalized_statement)
         self.assertIn("AND status = 'awaiting'", normalized_statement)
         self.assertNotIn("DELETE", normalized_statement.upper())
         self.assertEqual(params, (pending_id,))
@@ -119,6 +120,7 @@ class ApprovalInboxTests(unittest.TestCase):
         statement, params = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
         self.assertIn("SET status = 'denied'", normalized_statement)
+        self.assertIn("WHERE pending_id::text = %s", normalized_statement)
         self.assertIn("AND status = 'awaiting'", normalized_statement)
         self.assertNotIn("DELETE", normalized_statement.upper())
         self.assertEqual(params, (pending_id,))

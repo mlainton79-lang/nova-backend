@@ -607,7 +607,7 @@ def reject_pending_approval(pending_id: str) -> bool:
                 """
                 UPDATE tony_pending_approvals
                 SET status = 'denied'
-                WHERE pending_id = %s
+                WHERE pending_id::text = %s
                   AND status = 'awaiting'
                 RETURNING pending_id
                 """,
