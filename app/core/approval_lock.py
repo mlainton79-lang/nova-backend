@@ -690,8 +690,30 @@ def approve_pending_approval(pending_id: str) -> bool:
                 """,
                 (grant_id, normalized_id),
             )
-            grant_created = cur.fetchone() is not None
-            if not grant_created:
+            grant_row = cur.fetchone()
+            approval_grant_id = grant_row[0] if grant_row is not None else None
+            if approval_grant_id is None:
+                cur.execute(
+                    """
+                    SELECT grants.grant_id
+                    FROM tony_action_grants grants
+                    JOIN tony_pending_approvals pending
+                      ON pending.pending_id = grants.pending_action_ref
+                    WHERE pending.pending_id::text = %s
+                      AND pending.status = 'awaiting'
+                      AND pending.expires_at > NOW()
+                      AND grants.status = 'active'
+                    LIMIT 1
+                    """,
+                    (normalized_id,),
+                )
+                existing_grant_row = cur.fetchone()
+                approval_grant_id = (
+                    existing_grant_row[0]
+                    if existing_grant_row is not None
+                    else None
+                )
+            if approval_grant_id is None:
                 conn.rollback()
                 return False
 
@@ -714,7 +736,7 @@ def approve_pending_approval(pending_id: str) -> bool:
                   AND expires_at > NOW()
                 RETURNING pending_id
                 """,
-                (grant_id, normalized_id),
+                (str(approval_grant_id), normalized_id),
             )
             approved = cur.fetchone() is not None
             if not approved:
