@@ -647,3 +647,90 @@ def reject_pending_approval(pending_id: str) -> bool:
                 conn.close()
             except Exception:
                 pass
+
+
+def approve_pending_approval(pending_id: str) -> bool:
+    """Mark one awaiting approval as approved without running any action."""
+    normalized_id = _normalize_pending_approval_id(pending_id)
+    if normalized_id is None:
+        return False
+
+    grant_id = str(uuid.uuid4())
+    conn = None
+    try:
+        conn = _connect()
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH active_device AS (
+                    SELECT device_id
+                    FROM tony_approval_devices
+                    WHERE status = 'active'
+                    ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
+                    LIMIT 1
+                ),
+                target_pending AS (
+                    SELECT pending_id, capability_key, action_hash, expires_at
+                    FROM tony_pending_approvals
+                    WHERE pending_id::text = %s
+                      AND status = 'awaiting'
+                      AND EXISTS (SELECT 1 FROM active_device)
+                    FOR UPDATE
+                ),
+                inserted_grant AS (
+                    INSERT INTO tony_action_grants (
+                        grant_id,
+                        capability_key,
+                        action_hash,
+                        pending_action_ref,
+                        expires_at
+                    )
+                    SELECT
+                        %s,
+                        capability_key,
+                        action_hash,
+                        pending_id,
+                        expires_at
+                    FROM target_pending
+                    ON CONFLICT (pending_action_ref) DO NOTHING
+                    RETURNING grant_id, pending_action_ref
+                )
+                UPDATE tony_pending_approvals
+                SET status = 'approved',
+                    approved_at = NOW(),
+                    approved_by_device_id = (
+                        SELECT device_id FROM active_device
+                    ),
+                    approval_challenge_used_at = NOW(),
+                    grant_id = (
+                        SELECT grant_id FROM inserted_grant
+                    )
+                WHERE pending_id = (
+                    SELECT pending_action_ref FROM inserted_grant
+                )
+                  AND status = 'awaiting'
+                RETURNING pending_id
+                """,
+                (normalized_id, grant_id),
+            )
+            approved = cur.fetchone() is not None
+        conn.commit()
+        return approved
+    except Exception as error:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        print(
+            "[APPROVAL_LOCK] Pending approval mark-approved failed: "
+            f"{type(error).__name__}"
+        )
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

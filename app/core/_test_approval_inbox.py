@@ -92,6 +92,11 @@ class ApprovalInboxTests(unittest.TestCase):
         response = self._request("POST", f"/api/v1/approvals/{pending_id}/reject")
         self.assertEqual(response.status_code, 422)
 
+    def test_approve_endpoint_is_protected(self):
+        pending_id = str(uuid.uuid4())
+        response = self._request("POST", f"/api/v1/approvals/{pending_id}/approve")
+        self.assertEqual(response.status_code, 422)
+
     def test_awaiting_approval_can_be_denied(self):
         pending_id = str(uuid.uuid4())
         connection = _Connection(rows=[(pending_id,)])
@@ -142,6 +147,39 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertFalse(rejected)
         self.assertEqual(connection.cursor_instance.statements, [])
 
+    def test_awaiting_approval_can_be_marked_approved(self):
+        pending_id = str(uuid.uuid4())
+        connection = _Connection(rows=[(pending_id,)])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            approved = approval_lock.approve_pending_approval(pending_id)
+
+        self.assertTrue(approved)
+        self.assertTrue(connection.committed)
+        statement, params = connection.cursor_instance.statements[0]
+        normalized_statement = " ".join(statement.split())
+        self.assertIn("SET status = 'approved'", normalized_statement)
+        self.assertIn("approved_at = NOW()", normalized_statement)
+        self.assertIn("approved_by_device_id = (", normalized_statement)
+        self.assertIn("approval_challenge_used_at = NOW()", normalized_statement)
+        self.assertIn("grant_id = (", normalized_statement)
+        self.assertIn("INSERT INTO tony_action_grants", normalized_statement)
+        self.assertIn("WHERE pending_id::text = %s", normalized_statement)
+        self.assertIn("AND status = 'awaiting'", normalized_statement)
+        self.assertNotIn("DELETE", normalized_statement.upper())
+        self.assertNotIn("send_user_notification", normalized_statement)
+        self.assertEqual(params[0], pending_id)
+
+    def test_non_existent_approval_returns_false_when_marking_approved(self):
+        pending_id = str(uuid.uuid4())
+        connection = _Connection(rows=[])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            approved = approval_lock.approve_pending_approval(pending_id)
+
+        self.assertFalse(approved)
+        self.assertTrue(connection.committed)
+
     def test_reject_endpoint_returns_sanitized_outcomes(self):
         self.app.dependency_overrides[verify_token] = lambda: True
         reject = MagicMock(side_effect=[True, False])
@@ -165,6 +203,37 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertFalse(missing.json()["rejected"])
         self.assertEqual(set(rejected.json()), {"ok", "rejected", "status", "message"})
         self.assertEqual(set(missing.json()), {"ok", "rejected", "status", "message"})
+
+    def test_approve_endpoint_returns_sanitized_outcomes(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        approve = MagicMock(side_effect=[True, False])
+        first_id = str(uuid.uuid4())
+        missing_id = str(uuid.uuid4())
+        with patch(
+            "app.api.v1.endpoints.approvals.approve_pending_approval",
+            approve,
+        ):
+            approved = self._request(
+                "POST", f"/api/v1/approvals/{first_id}/approve"
+            )
+            missing = self._request(
+                "POST", f"/api/v1/approvals/{missing_id}/approve"
+            )
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(missing.status_code, 200)
+        self.assertTrue(approved.json()["approved"])
+        self.assertFalse(missing.json()["approved"])
+        allowed_keys = {"ok", "approved", "status", "message"}
+        self.assertEqual(set(approved.json()), allowed_keys)
+        self.assertEqual(set(missing.json()), allowed_keys)
+        for payload in (approved.json(), missing.json()):
+            self.assertNotIn("approval_challenge", payload)
+            self.assertNotIn("action_hash", payload)
+            self.assertNotIn("pending_id", payload)
+            self.assertNotIn("token", payload)
+            self.assertNotIn("secret", payload)
 
     def test_test_pending_creates_once_and_notifies_once(self):
         self.app.dependency_overrides[verify_token] = lambda: True

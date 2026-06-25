@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.core.approval_lock import (
+    approve_pending_approval,
     create_pending_approval_once,
     list_active_pending_approvals,
     reject_pending_approval,
@@ -80,6 +81,25 @@ async def reject_approval(
         "message": (
             "Pending approval rejected."
             if rejected
+            else "No awaiting approval matched that identifier."
+        ),
+    }
+
+
+@router.post("/approvals/{pending_id}/approve")
+async def approve_approval(
+    pending_id: str,
+    _=Depends(verify_token),
+):
+    """Mark one awaiting approval as approved without running its action."""
+    approved = approve_pending_approval(pending_id)
+    return {
+        "ok": True,
+        "approved": approved,
+        "status": "approved" if approved else "not_found",
+        "message": (
+            "Pending approval marked approved."
+            if approved
             else "No awaiting approval matched that identifier."
         ),
     }
