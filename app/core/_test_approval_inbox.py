@@ -205,17 +205,20 @@ class ApprovalInboxTests(unittest.TestCase):
         statement, params = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
         self.assertIn("WITH selected_grant AS", normalized_statement)
-        self.assertIn("JOIN tony_pending_approvals pending", normalized_statement)
-        self.assertIn("grant.capability_key = %s", normalized_statement)
-        self.assertIn("pending.capability_key = %s", normalized_statement)
-        self.assertIn("pending.status = 'approved'", normalized_statement)
-        self.assertIn("grant.status = 'active'", normalized_statement)
-        self.assertIn("grant.consumed_at IS NULL", normalized_statement)
-        self.assertIn("grant.expires_at > NOW()", normalized_statement)
-        self.assertIn("pending.expires_at > NOW()", normalized_statement)
+        self.assertIn("FROM tony_action_grants action_grant", normalized_statement)
+        self.assertIn("JOIN tony_pending_approvals pending_approval", normalized_statement)
+        self.assertIn("action_grant.capability_key = %s", normalized_statement)
+        self.assertIn("pending_approval.capability_key = %s", normalized_statement)
+        self.assertIn("pending_approval.status = 'approved'", normalized_statement)
+        self.assertIn("action_grant.status = 'active'", normalized_statement)
+        self.assertIn("action_grant.consumed_at IS NULL", normalized_statement)
+        self.assertIn("action_grant.expires_at > NOW()", normalized_statement)
+        self.assertIn("pending_approval.expires_at > NOW()", normalized_statement)
+        self.assertIn("FOR UPDATE OF action_grant", normalized_statement)
         self.assertIn("SET status = 'consumed'", normalized_statement)
         self.assertIn("consumed_at = NOW()", normalized_statement)
         self.assertNotIn("DELETE", normalized_statement.upper())
+        self.assertNotIn(" tony_action_grants grant ", normalized_statement)
         self.assertEqual(
             params,
             (
@@ -234,8 +237,8 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertFalse(consumed)
         statement, _ = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
-        self.assertIn("grant.status = 'active'", normalized_statement)
-        self.assertIn("grant.consumed_at IS NULL", normalized_statement)
+        self.assertIn("action_grant.status = 'active'", normalized_statement)
+        self.assertIn("action_grant.consumed_at IS NULL", normalized_statement)
 
     def test_non_existent_approval_returns_false_when_marking_approved(self):
         pending_id = str(uuid.uuid4())

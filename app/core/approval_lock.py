@@ -787,31 +787,31 @@ def consume_test_approval_resume_grant() -> bool:
             cur.execute(
                 """
                 WITH selected_grant AS (
-                    SELECT grant.grant_id
-                    FROM tony_action_grants grant
-                    JOIN tony_pending_approvals pending
-                      ON pending.pending_id = grant.pending_action_ref
-                    WHERE grant.capability_key = %s
-                      AND pending.capability_key = %s
-                      AND pending.status = 'approved'
-                      AND grant.status = 'active'
-                      AND grant.consumed_at IS NULL
-                      AND grant.expires_at > NOW()
-                      AND pending.expires_at > NOW()
-                    ORDER BY pending.approved_at DESC NULLS LAST,
-                             pending.created_at DESC
+                    SELECT action_grant.grant_id
+                    FROM tony_action_grants action_grant
+                    JOIN tony_pending_approvals pending_approval
+                      ON pending_approval.pending_id = action_grant.pending_action_ref
+                    WHERE action_grant.capability_key = %s
+                      AND pending_approval.capability_key = %s
+                      AND pending_approval.status = 'approved'
+                      AND action_grant.status = 'active'
+                      AND action_grant.consumed_at IS NULL
+                      AND action_grant.expires_at > NOW()
+                      AND pending_approval.expires_at > NOW()
+                    ORDER BY pending_approval.approved_at DESC NULLS LAST,
+                             pending_approval.created_at DESC
                     LIMIT 1
-                    FOR UPDATE OF grant
+                    FOR UPDATE OF action_grant
                 )
-                UPDATE tony_action_grants grant
+                UPDATE tony_action_grants action_grant
                 SET status = 'consumed',
                     consumed_at = NOW()
                 FROM selected_grant
-                WHERE grant.grant_id = selected_grant.grant_id
-                  AND grant.capability_key = %s
-                  AND grant.status = 'active'
-                  AND grant.consumed_at IS NULL
-                RETURNING grant.grant_id
+                WHERE action_grant.grant_id = selected_grant.grant_id
+                  AND action_grant.capability_key = %s
+                  AND action_grant.status = 'active'
+                  AND action_grant.consumed_at IS NULL
+                RETURNING action_grant.grant_id
                 """,
                 (
                     TEST_APPROVAL_RESUME_CAPABILITY_KEY,
