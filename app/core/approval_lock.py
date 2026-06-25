@@ -656,11 +656,35 @@ def approve_pending_approval(pending_id: str) -> bool:
         return False
 
     grant_id = str(uuid.uuid4())
+    metadata_device_id = str(uuid.uuid4())
+    metadata_secret_hash = secrets.token_hex(32)
     conn = None
     try:
         conn = _connect()
         conn.autocommit = False
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO tony_approval_devices (
+                    device_id,
+                    device_name,
+                    secret_hash,
+                    status,
+                    revoked_at
+                )
+                SELECT %s, %s, %s, 'revoked', NOW()
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM tony_approval_devices
+                )
+                ON CONFLICT (device_id) DO NOTHING
+                """,
+                (
+                    metadata_device_id,
+                    "dev-token approval metadata",
+                    metadata_secret_hash,
+                ),
+            )
             cur.execute(
                 """
                 INSERT INTO tony_action_grants (

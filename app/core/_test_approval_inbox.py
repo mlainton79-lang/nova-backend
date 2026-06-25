@@ -156,10 +156,17 @@ class ApprovalInboxTests(unittest.TestCase):
 
         self.assertTrue(approved)
         self.assertTrue(connection.committed)
-        insert_statement, insert_params = connection.cursor_instance.statements[0]
-        update_statement, update_params = connection.cursor_instance.statements[1]
-        normalized_insert = " ".join(insert_statement.split())
+        device_statement, device_params = connection.cursor_instance.statements[0]
+        grant_statement, grant_params = connection.cursor_instance.statements[1]
+        update_statement, update_params = connection.cursor_instance.statements[2]
+        normalized_device = " ".join(device_statement.split())
+        normalized_insert = " ".join(grant_statement.split())
         normalized_update = " ".join(update_statement.split())
+        self.assertIn("INSERT INTO tony_approval_devices", normalized_device)
+        self.assertIn("status, revoked_at", normalized_device)
+        self.assertIn("SELECT %s, %s, %s, 'revoked', NOW()", normalized_device)
+        self.assertIn("WHERE NOT EXISTS", normalized_device)
+        self.assertEqual(device_params[1], "dev-token approval metadata")
         self.assertIn("INSERT INTO tony_action_grants", normalized_insert)
         self.assertIn("WHERE pending.pending_id::text = %s", normalized_insert)
         self.assertIn("AND pending.status = 'awaiting'", normalized_insert)
@@ -178,7 +185,7 @@ class ApprovalInboxTests(unittest.TestCase):
         combined_statement = f"{normalized_insert} {normalized_update}"
         self.assertNotIn("DELETE", combined_statement.upper())
         self.assertNotIn("send_user_notification", combined_statement)
-        self.assertEqual(insert_params[1], pending_id)
+        self.assertEqual(grant_params[1], pending_id)
         self.assertEqual(update_params[1], pending_id)
 
     def test_non_existent_approval_returns_false_when_marking_approved(self):
