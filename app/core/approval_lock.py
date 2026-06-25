@@ -663,58 +663,63 @@ def approve_pending_approval(pending_id: str) -> bool:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                WITH active_device AS (
-                    SELECT device_id
-                    FROM tony_approval_devices
-                    WHERE status = 'active'
-                    ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
-                    LIMIT 1
-                ),
-                target_pending AS (
-                    SELECT pending_id, capability_key, action_hash, expires_at
-                    FROM tony_pending_approvals
-                    WHERE pending_id::text = %s
-                      AND status = 'awaiting'
-                      AND EXISTS (SELECT 1 FROM active_device)
-                    FOR UPDATE
-                ),
-                inserted_grant AS (
-                    INSERT INTO tony_action_grants (
-                        grant_id,
-                        capability_key,
-                        action_hash,
-                        pending_action_ref,
-                        expires_at
-                    )
-                    SELECT
-                        %s,
-                        capability_key,
-                        action_hash,
-                        pending_id,
-                        expires_at
-                    FROM target_pending
-                    ON CONFLICT (pending_action_ref) DO NOTHING
-                    RETURNING grant_id, pending_action_ref
+                INSERT INTO tony_action_grants (
+                    grant_id,
+                    capability_key,
+                    action_hash,
+                    pending_action_ref,
+                    expires_at
                 )
+                SELECT
+                    %s,
+                    pending.capability_key,
+                    pending.action_hash,
+                    pending.pending_id,
+                    pending.expires_at
+                FROM tony_pending_approvals pending
+                WHERE pending.pending_id::text = %s
+                  AND pending.status = 'awaiting'
+                  AND pending.expires_at > NOW()
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tony_approval_devices
+                      WHERE status = 'active'
+                  )
+                ON CONFLICT (pending_action_ref) DO NOTHING
+                RETURNING grant_id
+                """,
+                (grant_id, normalized_id),
+            )
+            grant_created = cur.fetchone() is not None
+            if not grant_created:
+                conn.rollback()
+                return False
+
+            cur.execute(
+                """
                 UPDATE tony_pending_approvals
                 SET status = 'approved',
                     approved_at = NOW(),
                     approved_by_device_id = (
-                        SELECT device_id FROM active_device
+                        SELECT device_id
+                        FROM tony_approval_devices
+                        WHERE status = 'active'
+                        ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
+                        LIMIT 1
                     ),
                     approval_challenge_used_at = NOW(),
-                    grant_id = (
-                        SELECT grant_id FROM inserted_grant
-                    )
-                WHERE pending_id = (
-                    SELECT pending_action_ref FROM inserted_grant
-                )
+                    grant_id = %s
+                WHERE pending_id::text = %s
                   AND status = 'awaiting'
+                  AND expires_at > NOW()
                 RETURNING pending_id
                 """,
-                (normalized_id, grant_id),
+                (grant_id, normalized_id),
             )
             approved = cur.fetchone() is not None
+            if not approved:
+                conn.rollback()
+                return False
         conn.commit()
         return approved
     except Exception as error:

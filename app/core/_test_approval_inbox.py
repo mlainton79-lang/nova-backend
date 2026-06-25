@@ -156,19 +156,28 @@ class ApprovalInboxTests(unittest.TestCase):
 
         self.assertTrue(approved)
         self.assertTrue(connection.committed)
-        statement, params = connection.cursor_instance.statements[0]
-        normalized_statement = " ".join(statement.split())
-        self.assertIn("SET status = 'approved'", normalized_statement)
-        self.assertIn("approved_at = NOW()", normalized_statement)
-        self.assertIn("approved_by_device_id = (", normalized_statement)
-        self.assertIn("approval_challenge_used_at = NOW()", normalized_statement)
-        self.assertIn("grant_id = (", normalized_statement)
-        self.assertIn("INSERT INTO tony_action_grants", normalized_statement)
-        self.assertIn("WHERE pending_id::text = %s", normalized_statement)
-        self.assertIn("AND status = 'awaiting'", normalized_statement)
-        self.assertNotIn("DELETE", normalized_statement.upper())
-        self.assertNotIn("send_user_notification", normalized_statement)
-        self.assertEqual(params[0], pending_id)
+        insert_statement, insert_params = connection.cursor_instance.statements[0]
+        update_statement, update_params = connection.cursor_instance.statements[1]
+        normalized_insert = " ".join(insert_statement.split())
+        normalized_update = " ".join(update_statement.split())
+        self.assertIn("INSERT INTO tony_action_grants", normalized_insert)
+        self.assertIn("WHERE pending.pending_id::text = %s", normalized_insert)
+        self.assertIn("AND pending.status = 'awaiting'", normalized_insert)
+        self.assertIn("AND pending.expires_at > NOW()", normalized_insert)
+        self.assertIn("ON CONFLICT (pending_action_ref) DO NOTHING", normalized_insert)
+        self.assertIn("SET status = 'approved'", normalized_update)
+        self.assertIn("approved_at = NOW()", normalized_update)
+        self.assertIn("approved_by_device_id = (", normalized_update)
+        self.assertIn("approval_challenge_used_at = NOW()", normalized_update)
+        self.assertIn("grant_id = %s", normalized_update)
+        self.assertIn("WHERE pending_id::text = %s", normalized_update)
+        self.assertIn("AND status = 'awaiting'", normalized_update)
+        self.assertIn("AND expires_at > NOW()", normalized_update)
+        combined_statement = f"{normalized_insert} {normalized_update}"
+        self.assertNotIn("DELETE", combined_statement.upper())
+        self.assertNotIn("send_user_notification", combined_statement)
+        self.assertEqual(insert_params[1], pending_id)
+        self.assertEqual(update_params[1], pending_id)
 
     def test_non_existent_approval_returns_false_when_marking_approved(self):
         pending_id = str(uuid.uuid4())
@@ -178,7 +187,7 @@ class ApprovalInboxTests(unittest.TestCase):
             approved = approval_lock.approve_pending_approval(pending_id)
 
         self.assertFalse(approved)
-        self.assertTrue(connection.committed)
+        self.assertTrue(connection.rolled_back)
 
     def test_reject_endpoint_returns_sanitized_outcomes(self):
         self.app.dependency_overrides[verify_token] = lambda: True
