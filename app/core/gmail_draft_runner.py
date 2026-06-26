@@ -120,6 +120,28 @@ class GmailDraftApprovalPreview:
     approval_grant_consumed: bool = False
 
 
+@dataclass(frozen=True)
+class GmailDraftApprovalRequestPreview:
+    """Future pending-approval payload shape, without inserting anything."""
+
+    capability_key: str
+    action_type: str
+    task_type: str
+    risk_level: str
+    human_name: str
+    step_summary: str
+    ttl_minutes: int
+    preview: GmailDraftApprovalPreview
+    approval_required: bool
+    status: str
+    warnings: tuple[str, ...]
+    approval_created: bool = False
+    notification_sent: bool = False
+    external_action_performed: bool = False
+    draft_created: bool = False
+    approval_grant_consumed: bool = False
+
+
 def _as_nonempty_string(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -355,6 +377,53 @@ def prepare_gmail_create_draft_approval_preview(
         user_visible_summary=snapshot["user_visible_summary"],
         preview_fields=preview_fields,
         status="preview_only",
+        warnings=warnings,
+    )
+
+
+def prepare_gmail_create_draft_approval_request_preview(
+    proposal_or_snapshot_or_preview: (
+        GmailDraftProposalInput | dict[str, Any] | GmailDraftApprovalPreview
+    ),
+    ttl_minutes: int = 10,
+) -> GmailDraftApprovalRequestPreview:
+    """Build a disabled future pending-approval payload preview only."""
+    if not isinstance(ttl_minutes, int) or ttl_minutes < 1 or ttl_minutes > 60:
+        raise ValueError("ttl_minutes_out_of_range")
+
+    if isinstance(proposal_or_snapshot_or_preview, GmailDraftApprovalPreview):
+        preview = proposal_or_snapshot_or_preview
+    else:
+        preview = prepare_gmail_create_draft_approval_preview(
+            proposal_or_snapshot_or_preview
+        )
+
+    manifest = get_capability_manifest(GMAIL_CREATE_DRAFT_CAPABILITY_KEY)
+    if manifest is None:
+        raise ValueError("gmail_create_draft_manifest_missing")
+    if preview.capability_key != GMAIL_CREATE_DRAFT_CAPABILITY_KEY:
+        raise ValueError("preview_capability_mismatch")
+    if preview.action_type != GMAIL_CREATE_DRAFT_ACTION_TYPE:
+        raise ValueError("preview_action_type_mismatch")
+
+    recipients = preview.preview_fields["to"]
+    subject = preview.preview_fields["subject"]
+    step_summary = (
+        f"Review Gmail draft to {_format_recipients(recipients)} with subject "
+        f"'{subject}'"
+    )
+    warnings = preview.warnings + ("request_preview_only",)
+    return GmailDraftApprovalRequestPreview(
+        capability_key=manifest.capability_key,
+        action_type=manifest.action_type,
+        task_type=manifest.task_type,
+        risk_level=preview.risk_level,
+        human_name=manifest.human_name,
+        step_summary=step_summary,
+        ttl_minutes=ttl_minutes,
+        preview=preview,
+        approval_required=manifest.approval_required,
+        status="request_preview_only",
         warnings=warnings,
     )
 
