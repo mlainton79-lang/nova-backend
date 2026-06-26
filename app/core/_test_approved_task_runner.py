@@ -129,18 +129,29 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
     def test_manifest_allowlists_only_the_two_harmless_capabilities(self):
         manifests = approved_capability_manifest.APPROVED_CAPABILITY_MANIFESTS
         self.assertEqual(
-            set(manifests),
+            set(approved_capability_manifest.list_safe_test_capabilities()),
             {
                 approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
                 approval_lock.TEST_APPROVED_NOOP_CAPABILITY_KEY,
             },
         )
-        for manifest in manifests.values():
+        self.assertIn(
+            approved_capability_manifest.GMAIL_CREATE_DRAFT_CAPABILITY_KEY,
+            manifests,
+        )
+        self.assertNotIn(
+            approved_capability_manifest.GMAIL_CREATE_DRAFT_CAPABILITY_KEY,
+            approved_capability_manifest.list_safe_test_capabilities(),
+        )
+        for capability_key in approved_capability_manifest.list_safe_test_capabilities():
+            manifest = manifests[capability_key]
             self.assertEqual(manifest.risk_level, "test_only")
             self.assertTrue(manifest.approval_required)
             self.assertFalse(manifest.external_action_allowed)
             self.assertFalse(manifest.notification_allowed)
             self.assertEqual(manifest.runner_type, "no_op_approved_runner")
+            self.assertTrue(manifest.enabled)
+            self.assertTrue(manifest.current_runner_connected)
             self.assertIn("no_op_verified", manifest.verification_requirements)
             self.assertIn("completed", manifest.allowed_outputs)
             self.assertIn("not_resumed", manifest.allowed_outputs)
@@ -157,6 +168,9 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
             external_action_allowed=True,
             notification_allowed=False,
             runner_type="no_op_approved_runner",
+            implementation_status="connected",
+            enabled=True,
+            current_runner_connected=True,
             preconditions=("approved_pending_approval",),
             verification_requirements=("no_op_verified",),
             allowed_outputs=("not_resumed",),
