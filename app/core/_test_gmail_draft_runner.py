@@ -563,6 +563,191 @@ class GmailDraftRunnerTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, combined_keys)
 
+    def test_disabled_persistence_adapter_returns_safe_insert_parameters(self):
+        persistence = (
+            gmail_draft_runner.prepare_disabled_gmail_create_draft_pending_approval_insert(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                }
+            )
+        )
+
+        self.assertEqual(persistence.capability_key, "gmail.create_draft")
+        self.assertEqual(persistence.action_type, "gmail_create_draft")
+        self.assertEqual(persistence.task_type, "approved_gmail_draft_creation")
+        self.assertIn("Review Gmail draft", persistence.step_summary)
+        self.assertIn("Reviewable draft subject", persistence.step_summary)
+        self.assertEqual(persistence.ttl_minutes, 10)
+        self.assertEqual(persistence.request_preview_status, "request_preview_only")
+        self.assertEqual(persistence.persistence_status, "disabled_preview_only")
+        self.assertEqual(
+            set(persistence.insert_parameters),
+            {"capability_key", "action_type", "step_summary", "ttl_minutes"},
+        )
+        self.assertEqual(
+            persistence.insert_parameters["capability_key"],
+            "gmail.create_draft",
+        )
+        self.assertEqual(
+            persistence.insert_parameters["action_type"],
+            "gmail_create_draft",
+        )
+        self.assertEqual(persistence.insert_parameters["ttl_minutes"], 10)
+        self.assertFalse(persistence.would_insert)
+        self.assertFalse(persistence.approval_created)
+        self.assertFalse(persistence.approval_inserted_into_database)
+        self.assertFalse(persistence.notification_sent)
+        self.assertFalse(persistence.external_action_performed)
+        self.assertFalse(persistence.draft_created)
+        self.assertFalse(persistence.approval_grant_consumed)
+
+    def test_disabled_persistence_adapter_accepts_request_preview_and_ttl(self):
+        request_preview = (
+            gmail_draft_runner.prepare_gmail_create_draft_approval_request_preview(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                },
+                ttl_minutes=15,
+            )
+        )
+
+        persistence = (
+            gmail_draft_runner.prepare_disabled_gmail_create_draft_pending_approval_insert(
+                request_preview,
+                ttl_minutes=30,
+            )
+        )
+
+        self.assertEqual(persistence.ttl_minutes, 15)
+        self.assertEqual(persistence.insert_parameters["ttl_minutes"], 15)
+        self.assertIn("request_preview_only", persistence.warnings)
+        self.assertIn("persistence_disabled_preview_only", persistence.warnings)
+
+    def test_disabled_persistence_adapter_rejects_unsafe_or_private_inputs(self):
+        for body in (
+            "send this message",
+            "delete the email",
+            "archive the thread",
+            "forward the message",
+            "perform broad inbox read",
+            "add an attachment",
+            "modify existing draft",
+            "bypass approval",
+            "contains access_token material",
+        ):
+            with self.assertRaises(ValueError):
+                gmail_draft_runner.prepare_disabled_gmail_create_draft_pending_approval_insert(
+                    {
+                        "to": "matthew@example.test",
+                        "subject": "Reviewable draft subject",
+                        "body": body,
+                    }
+                )
+
+        with self.assertRaisesRegex(ValueError, "proposal_contains_unsupported_fields"):
+            gmail_draft_runner.prepare_disabled_gmail_create_draft_pending_approval_insert(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                    "gmail_payload": "redacted",
+                }
+            )
+
+    def test_disabled_persistence_adapter_does_not_create_or_execute_anything(self):
+        with (
+            patch(
+                "app.core.gmail_draft_runner.run_disabled_gmail_create_draft",
+                MagicMock(),
+            ) as runner,
+            patch(
+                "app.core.approval_lock.create_pending_approval_once",
+                MagicMock(return_value=True),
+            ) as create_approval,
+            patch(
+                "app.core.approval_lock.consume_test_approval_resume_grant",
+                MagicMock(return_value=True),
+            ) as resume_consume,
+            patch(
+                "app.core.approval_lock.consume_test_approved_noop_grant",
+                MagicMock(return_value=True),
+            ) as noop_consume,
+            patch(
+                "app.core.user_notifications.send_user_notification",
+                MagicMock(return_value=False),
+            ) as notify,
+        ):
+            persistence = (
+                gmail_draft_runner.prepare_disabled_gmail_create_draft_pending_approval_insert(
+                    {
+                        "to": "matthew@example.test",
+                        "subject": "Reviewable draft subject",
+                        "body": "Reviewable draft body.",
+                    }
+                )
+            )
+
+        self.assertEqual(persistence.persistence_status, "disabled_preview_only")
+        runner.assert_not_called()
+        create_approval.assert_not_called()
+        resume_consume.assert_not_called()
+        noop_consume.assert_not_called()
+        notify.assert_not_called()
+
+    def test_disabled_persistence_adapter_exposes_no_private_fields(self):
+        persistence = (
+            gmail_draft_runner.prepare_disabled_gmail_create_draft_pending_approval_insert(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                }
+            )
+        )
+        combined_keys = set(persistence.__dict__) | set(persistence.insert_parameters)
+
+        self.assertEqual(
+            combined_keys,
+            {
+                "capability_key",
+                "action_type",
+                "task_type",
+                "step_summary",
+                "ttl_minutes",
+                "request_preview_status",
+                "persistence_status",
+                "insert_parameters",
+                "warnings",
+                "would_insert",
+                "approval_created",
+                "approval_inserted_into_database",
+                "notification_sent",
+                "external_action_performed",
+                "draft_created",
+                "approval_grant_consumed",
+            },
+        )
+        for forbidden in (
+            "pending_id",
+            "approval_challenge",
+            "action_hash",
+            "grant_id",
+            "token",
+            "secret",
+            "oauth",
+            "gmail_payload",
+            "request_body",
+            "raw_db_rows",
+            "DATABASE_URL",
+            "railway_variables",
+            "authorization",
+        ):
+            self.assertNotIn(forbidden, combined_keys)
+
     def test_disabled_runner_does_not_consume_grant_or_send_notifications(self):
         with (
             patch(

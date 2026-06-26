@@ -142,6 +142,28 @@ class GmailDraftApprovalRequestPreview:
     approval_grant_consumed: bool = False
 
 
+@dataclass(frozen=True)
+class GmailDraftApprovalPersistencePreview:
+    """Disabled persistence package; validates insert shape without writing."""
+
+    capability_key: str
+    action_type: str
+    task_type: str
+    step_summary: str
+    ttl_minutes: int
+    request_preview_status: str
+    persistence_status: str
+    insert_parameters: dict
+    warnings: tuple[str, ...]
+    would_insert: bool = False
+    approval_created: bool = False
+    approval_inserted_into_database: bool = False
+    notification_sent: bool = False
+    external_action_performed: bool = False
+    draft_created: bool = False
+    approval_grant_consumed: bool = False
+
+
 def _as_nonempty_string(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -425,6 +447,52 @@ def prepare_gmail_create_draft_approval_request_preview(
         approval_required=manifest.approval_required,
         status="request_preview_only",
         warnings=warnings,
+    )
+
+
+def prepare_disabled_gmail_create_draft_pending_approval_insert(
+    proposal_or_snapshot_or_preview: (
+        GmailDraftProposalInput
+        | dict[str, Any]
+        | GmailDraftApprovalPreview
+        | GmailDraftApprovalRequestPreview
+    ),
+    ttl_minutes: int = 10,
+) -> GmailDraftApprovalPersistencePreview:
+    """Return safe future insert parameters only; never insert or notify."""
+    if isinstance(proposal_or_snapshot_or_preview, GmailDraftApprovalRequestPreview):
+        request_preview = proposal_or_snapshot_or_preview
+    else:
+        request_preview = prepare_gmail_create_draft_approval_request_preview(
+            proposal_or_snapshot_or_preview,
+            ttl_minutes=ttl_minutes,
+        )
+
+    if request_preview.capability_key != GMAIL_CREATE_DRAFT_CAPABILITY_KEY:
+        raise ValueError("request_preview_capability_mismatch")
+    if request_preview.action_type != GMAIL_CREATE_DRAFT_ACTION_TYPE:
+        raise ValueError("request_preview_action_type_mismatch")
+    if request_preview.status != "request_preview_only":
+        raise ValueError("request_preview_status_not_preview_only")
+    if not request_preview.approval_required:
+        raise ValueError("request_preview_missing_approval_requirement")
+
+    insert_parameters = {
+        "capability_key": request_preview.capability_key,
+        "action_type": request_preview.action_type,
+        "step_summary": request_preview.step_summary,
+        "ttl_minutes": request_preview.ttl_minutes,
+    }
+    return GmailDraftApprovalPersistencePreview(
+        capability_key=request_preview.capability_key,
+        action_type=request_preview.action_type,
+        task_type=request_preview.task_type,
+        step_summary=request_preview.step_summary,
+        ttl_minutes=request_preview.ttl_minutes,
+        request_preview_status=request_preview.status,
+        persistence_status="disabled_preview_only",
+        insert_parameters=insert_parameters,
+        warnings=request_preview.warnings + ("persistence_disabled_preview_only",),
     )
 
 
