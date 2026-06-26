@@ -18,6 +18,7 @@ import httpx
 from app.api.v1.endpoints.approvals import router as approvals_router  # noqa: E402
 from app.core.security import verify_token  # noqa: E402
 from app.core import approval_lock  # noqa: E402
+from app.core.approved_task_runner import ApprovedTaskRunnerResult  # noqa: E402
 from app.core.user_notifications import NotificationType  # noqa: E402
 
 
@@ -328,7 +329,7 @@ class ApprovalInboxTests(unittest.TestCase):
                 approve,
             ),
             patch(
-                "app.api.v1.endpoints.approvals.consume_test_approval_resume_grant",
+                "app.api.v1.endpoints.approvals.run_harmless_test_approval_resume",
                 resume,
             ),
         ):
@@ -437,12 +438,27 @@ class ApprovalInboxTests(unittest.TestCase):
 
     def test_test_resume_run_consumes_only_harmless_test_grant(self):
         self.app.dependency_overrides[verify_token] = lambda: True
-        consume = MagicMock(side_effect=[True, False])
+        runner = MagicMock(
+            side_effect=[
+                ApprovedTaskRunnerResult(
+                    task_type="harmless_approval_resume_test",
+                    resumed=True,
+                    safe_status="completed",
+                    safe_message="Harmless resume test task completed.",
+                ),
+                ApprovedTaskRunnerResult(
+                    task_type="harmless_approval_resume_test",
+                    resumed=False,
+                    safe_status="not_resumed",
+                    safe_message="No approved unconsumed resume test grant was available.",
+                ),
+            ]
+        )
         notify = AsyncMock(return_value=True)
         with (
             patch(
-                "app.api.v1.endpoints.approvals.consume_test_approval_resume_grant",
-                consume,
+                "app.api.v1.endpoints.approvals.run_harmless_test_approval_resume",
+                runner,
             ),
             patch(
                 "app.api.v1.endpoints.approvals.send_user_notification",
@@ -457,7 +473,7 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 200)
         self.assertTrue(resumed.json()["resumed"])
         self.assertFalse(missing.json()["resumed"])
-        consume.assert_called()
+        self.assertEqual(runner.call_count, 2)
         notify.assert_not_awaited()
         allowed_keys = {"ok", "resumed", "status", "message"}
         self.assertEqual(set(resumed.json()), allowed_keys)

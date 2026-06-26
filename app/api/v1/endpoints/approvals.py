@@ -7,11 +7,11 @@ from app.core.approval_lock import (
     TEST_APPROVAL_RESUME_CAPABILITY_KEY,
     TEST_APPROVAL_RESUME_STEP_SUMMARY,
     approve_pending_approval,
-    consume_test_approval_resume_grant,
     create_pending_approval_once,
     list_active_pending_approvals,
     reject_pending_approval,
 )
+from app.core.approved_task_runner import run_harmless_test_approval_resume
 from app.core.security import verify_token
 from app.core.user_notifications import NotificationType, send_user_notification
 
@@ -120,19 +120,15 @@ async def run_test_resume_harness(
 
     Approval Resume Contract v1 keeps this separate from approval: the normal
     approve endpoint only marks and mints. This endpoint is the sole explicit
-    resume caller for ``test.approval_resume`` and does not notify, dispatch,
+    resume endpoint for ``test.approval_resume`` and does not notify, dispatch,
     or execute real work.
     """
-    resumed = consume_test_approval_resume_grant()
+    result = run_harmless_test_approval_resume()
     return {
         "ok": True,
-        "resumed": resumed,
-        "status": "completed" if resumed else "not_resumed",
-        "message": (
-            "Harmless resume test task completed."
-            if resumed
-            else "No approved unconsumed resume test grant was available."
-        ),
+        "resumed": result.resumed,
+        "status": result.safe_status,
+        "message": result.safe_message,
     }
 
 
