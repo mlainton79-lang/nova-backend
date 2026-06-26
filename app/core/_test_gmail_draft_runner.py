@@ -214,6 +214,170 @@ class GmailDraftRunnerTests(unittest.TestCase):
         noop_consume.assert_not_called()
         notify.assert_not_called()
 
+    def test_approval_preview_adapter_returns_sanitized_review_fields(self):
+        preview = gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+        )
+
+        self.assertEqual(preview.capability_key, "gmail.create_draft")
+        self.assertEqual(preview.action_type, "gmail_create_draft")
+        self.assertEqual(preview.task_type, "approved_gmail_draft_creation")
+        self.assertEqual(preview.risk_level, "low_external_write")
+        self.assertEqual(preview.human_name, "Create Gmail draft")
+        self.assertEqual(preview.status, "preview_only")
+        self.assertIn("Matthew to review", preview.user_visible_summary)
+        self.assertEqual(
+            set(preview.preview_fields),
+            {"to", "cc", "bcc", "subject", "body", "reply_to_message_id"},
+        )
+        self.assertEqual(preview.preview_fields["to"], ("matthew@example.test",))
+        self.assertEqual(preview.preview_fields["subject"], "Reviewable draft subject")
+        self.assertEqual(preview.preview_fields["body"], "Reviewable draft body.")
+        self.assertIsNone(preview.preview_fields["reply_to_message_id"])
+        self.assertFalse(preview.approval_created)
+        self.assertFalse(preview.notification_sent)
+        self.assertFalse(preview.external_action_performed)
+        self.assertFalse(preview.draft_created)
+        self.assertFalse(preview.approval_grant_consumed)
+
+    def test_approval_preview_adapter_includes_required_warnings(self):
+        preview = gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+        )
+
+        for warning in (
+            "draft_only",
+            "not_sent",
+            "no_attachments",
+            "no_delete_archive_forward",
+            "gmail_not_connected_yet",
+            "approval_not_created_yet",
+        ):
+            self.assertIn(warning, preview.warnings)
+
+    def test_approval_preview_adapter_accepts_validated_snapshot(self):
+        snapshot = gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+            gmail_draft_runner.GmailDraftProposalInput(
+                to="matthew@example.test",
+                cc="cc@example.test",
+                bcc="bcc@example.test",
+                subject="Reviewable draft subject",
+                body="Reviewable draft body.",
+                reply_to_message_id="message-id-from-safe-prior-flow",
+            )
+        )
+
+        preview = gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+            snapshot
+        )
+
+        self.assertEqual(preview.preview_fields["cc"], ("cc@example.test",))
+        self.assertEqual(preview.preview_fields["bcc"], ("bcc@example.test",))
+        self.assertEqual(
+            preview.preview_fields["reply_to_message_id"],
+            "message-id-from-safe-prior-flow",
+        )
+
+    def test_approval_preview_adapter_rejects_unsafe_or_private_inputs(self):
+        for body in (
+            "send this message",
+            "delete the email",
+            "archive the thread",
+            "forward the message",
+            "perform broad inbox read",
+            "add an attachment",
+            "modify existing draft",
+            "bypass approval",
+            "contains access_token material",
+        ):
+            with self.assertRaises(ValueError):
+                gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+                    {
+                        "to": "matthew@example.test",
+                        "subject": "Reviewable draft subject",
+                        "body": body,
+                    }
+                )
+
+        with self.assertRaisesRegex(ValueError, "proposal_contains_unsupported_fields"):
+            gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                    "gmail_payload": "redacted",
+                }
+            )
+
+    def test_approval_preview_adapter_does_not_create_or_execute_anything(self):
+        with (
+            patch(
+                "app.core.gmail_draft_runner.run_disabled_gmail_create_draft",
+                MagicMock(),
+            ) as runner,
+            patch(
+                "app.core.approval_lock.create_pending_approval_once",
+                MagicMock(return_value=True),
+            ) as create_approval,
+            patch(
+                "app.core.approval_lock.consume_test_approval_resume_grant",
+                MagicMock(return_value=True),
+            ) as resume_consume,
+            patch(
+                "app.core.approval_lock.consume_test_approved_noop_grant",
+                MagicMock(return_value=True),
+            ) as noop_consume,
+            patch(
+                "app.core.user_notifications.send_user_notification",
+                MagicMock(return_value=False),
+            ) as notify,
+        ):
+            preview = gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                }
+            )
+
+        self.assertEqual(preview.status, "preview_only")
+        runner.assert_not_called()
+        create_approval.assert_not_called()
+        resume_consume.assert_not_called()
+        noop_consume.assert_not_called()
+        notify.assert_not_called()
+
+    def test_approval_preview_adapter_exposes_no_private_identifier_fields(self):
+        preview = gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+        )
+        combined_keys = set(preview.preview_fields) | set(preview.__dict__)
+
+        for forbidden in (
+            "token",
+            "secret",
+            "gmail_payload",
+            "oauth",
+            "pending_id",
+            "grant_id",
+            "action_hash",
+            "approval_challenge",
+            "request_body",
+        ):
+            self.assertNotIn(forbidden, combined_keys)
+
     def test_disabled_runner_does_not_consume_grant_or_send_notifications(self):
         with (
             patch(

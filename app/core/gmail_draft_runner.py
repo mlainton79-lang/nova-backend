@@ -100,6 +100,26 @@ class GmailDraftRunnerResult:
     verification_status: str = "not_run"
 
 
+@dataclass(frozen=True)
+class GmailDraftApprovalPreview:
+    """Sanitized, non-persistent preview for future Matthew approval review."""
+
+    capability_key: str
+    action_type: str
+    task_type: str
+    risk_level: str
+    human_name: str
+    user_visible_summary: str
+    preview_fields: dict
+    status: str
+    warnings: tuple[str, ...]
+    approval_created: bool = False
+    notification_sent: bool = False
+    external_action_performed: bool = False
+    draft_created: bool = False
+    approval_grant_consumed: bool = False
+
+
 def _as_nonempty_string(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -288,6 +308,55 @@ def build_gmail_create_draft_approval_snapshot(
     }
     validate_gmail_draft_snapshot(snapshot)
     return snapshot
+
+
+def _is_approval_snapshot_shape(candidate: dict[str, Any]) -> bool:
+    return set(candidate) == set(_ALLOWED_SNAPSHOT_FIELDS)
+
+
+def prepare_gmail_create_draft_approval_preview(
+    proposal_or_snapshot: GmailDraftProposalInput | dict[str, Any],
+) -> GmailDraftApprovalPreview:
+    """Prepare a sanitized preview only; do not create approval or execute."""
+    if isinstance(proposal_or_snapshot, dict) and _is_approval_snapshot_shape(
+        proposal_or_snapshot
+    ):
+        snapshot = dict(proposal_or_snapshot)
+        validate_gmail_draft_snapshot(snapshot)
+    else:
+        snapshot = build_gmail_create_draft_approval_snapshot(proposal_or_snapshot)
+
+    manifest = get_capability_manifest(GMAIL_CREATE_DRAFT_CAPABILITY_KEY)
+    if manifest is None:
+        raise ValueError("gmail_create_draft_manifest_missing")
+
+    preview_fields = {
+        "to": snapshot["to"],
+        "cc": snapshot["cc"],
+        "bcc": snapshot["bcc"],
+        "subject": snapshot["subject"],
+        "body": snapshot["body"],
+        "reply_to_message_id": snapshot["reply_to_message_id"],
+    }
+    warnings = (
+        "draft_only",
+        "not_sent",
+        "no_attachments",
+        "no_delete_archive_forward",
+        "gmail_not_connected_yet",
+        "approval_not_created_yet",
+    )
+    return GmailDraftApprovalPreview(
+        capability_key=manifest.capability_key,
+        action_type=manifest.action_type,
+        task_type=manifest.task_type,
+        risk_level=snapshot["risk_level"],
+        human_name=manifest.human_name,
+        user_visible_summary=snapshot["user_visible_summary"],
+        preview_fields=preview_fields,
+        status="preview_only",
+        warnings=warnings,
+    )
 
 
 def run_disabled_gmail_create_draft(
