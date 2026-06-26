@@ -67,6 +67,11 @@ TEST_APPROVAL_RESUME_ACTION_TYPE = "test_resume_task"
 TEST_APPROVAL_RESUME_STEP_SUMMARY = (
     "Harmless test approval for backend-only resume verification"
 )
+TEST_APPROVED_NOOP_CAPABILITY_KEY = "test.approved_noop"
+TEST_APPROVED_NOOP_ACTION_TYPE = "test_approved_noop"
+TEST_APPROVED_NOOP_STEP_SUMMARY = (
+    "Harmless test approval for backend-only approved no-op verification"
+)
 
 # Approval Resume Contract v1 names. Keep the test runner capability explicit:
 # this module provides the atomic grant transition, while the API layer decides
@@ -889,4 +894,11 @@ def consume_test_approval_resume_grant() -> bool:
     """
     return _consume_approved_grant_once(
         capability_key=TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+    )
+
+
+def consume_test_approved_noop_grant() -> bool:
+    """Consume only the second harmless no-op capability through v1."""
+    return _consume_approved_grant_once(
+        capability_key=TEST_APPROVED_NOOP_CAPABILITY_KEY,
     )

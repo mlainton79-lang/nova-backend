@@ -104,6 +104,12 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertEqual(pending.status_code, 422)
         self.assertEqual(run.status_code, 422)
 
+    def test_noop_test_endpoints_are_protected(self):
+        pending = self._request("POST", "/api/v1/approvals/test-noop-pending")
+        run = self._request("POST", "/api/v1/approvals/test-noop-run")
+        self.assertEqual(pending.status_code, 422)
+        self.assertEqual(run.status_code, 422)
+
     def test_awaiting_approval_can_be_denied(self):
         pending_id = str(uuid.uuid4())
         connection = _Connection(rows=[(pending_id,)])
@@ -283,6 +289,16 @@ class ApprovalInboxTests(unittest.TestCase):
             capability_key=approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
         )
 
+    def test_test_noop_wrapper_cannot_consume_non_noop_capability(self):
+        consume = MagicMock(return_value=True)
+        with patch.object(approval_lock, "_consume_approved_grant_once", consume):
+            consumed = approval_lock.consume_test_approved_noop_grant()
+
+        self.assertTrue(consumed)
+        consume.assert_called_once_with(
+            capability_key=approval_lock.TEST_APPROVED_NOOP_CAPABILITY_KEY,
+        )
+
     def test_non_existent_approval_returns_false_when_marking_approved(self):
         pending_id = str(uuid.uuid4())
         connection = _Connection(rows=[])
@@ -441,16 +457,20 @@ class ApprovalInboxTests(unittest.TestCase):
         runner = MagicMock(
             side_effect=[
                 ApprovedTaskRunnerResult(
+                    capability_key="test.approval_resume",
                     task_type="harmless_approval_resume_test",
                     resumed=True,
                     safe_status="completed",
                     safe_message="Harmless resume test task completed.",
+                    verification_status="no_op_verified",
                 ),
                 ApprovedTaskRunnerResult(
+                    capability_key="test.approval_resume",
                     task_type="harmless_approval_resume_test",
                     resumed=False,
                     safe_status="not_resumed",
                     safe_message="No approved unconsumed resume test grant was available.",
+                    verification_status="not_run",
                 ),
             ]
         )
@@ -485,6 +505,83 @@ class ApprovalInboxTests(unittest.TestCase):
             self.assertNotIn("grant_id", payload)
             self.assertNotIn("token", payload)
             self.assertNotIn("secret", payload)
+
+    def test_test_noop_pending_creates_only_noop_capability_and_notifies_once(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        create = MagicMock(side_effect=[True, False])
+        notify = AsyncMock(return_value=True)
+        with (
+            patch(
+                "app.api.v1.endpoints.approvals.create_pending_approval_once",
+                create,
+            ),
+            patch(
+                "app.api.v1.endpoints.approvals.send_user_notification",
+                notify,
+            ),
+        ):
+            first = self._request("POST", "/api/v1/approvals/test-noop-pending")
+            duplicate = self._request("POST", "/api/v1/approvals/test-noop-pending")
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(first.json()["created"])
+        self.assertFalse(duplicate.json()["created"])
+        notify.assert_awaited_once_with(NotificationType.APPROVAL_REQUIRED)
+        create.assert_called_with(
+            capability_key=approval_lock.TEST_APPROVED_NOOP_CAPABILITY_KEY,
+            action_type=approval_lock.TEST_APPROVED_NOOP_ACTION_TYPE,
+            step_summary=approval_lock.TEST_APPROVED_NOOP_STEP_SUMMARY,
+            ttl_minutes=10,
+        )
+        allowed_keys = {"ok", "created", "notification_sent", "status", "message"}
+        self.assertEqual(set(first.json()), allowed_keys)
+        self.assertEqual(set(duplicate.json()), allowed_keys)
+
+    def test_test_noop_run_is_safe_and_sends_no_notification(self):
+        self.app.dependency_overrides[verify_token] = lambda: True
+        runner = MagicMock(
+            return_value=ApprovedTaskRunnerResult(
+                capability_key="test.approved_noop",
+                task_type="harmless_approved_noop_test",
+                resumed=True,
+                safe_status="completed",
+                safe_message="Harmless approved no-op task completed.",
+                verification_status="no_op_verified",
+            )
+        )
+        notify = AsyncMock(return_value=True)
+        with (
+            patch(
+                "app.api.v1.endpoints.approvals.run_harmless_test_approved_noop",
+                runner,
+            ),
+            patch(
+                "app.api.v1.endpoints.approvals.send_user_notification",
+                notify,
+            ),
+        ):
+            response = self._request("POST", "/api/v1/approvals/test-noop-run")
+        self.app.dependency_overrides.clear()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["resumed"])
+        runner.assert_called_once_with()
+        notify.assert_not_awaited()
+        self.assertEqual(
+            set(response.json()),
+            {"ok", "resumed", "status", "message"},
+        )
+        for forbidden_key in (
+            "approval_challenge",
+            "action_hash",
+            "pending_id",
+            "grant_id",
+            "token",
+            "secret",
+        ):
+            self.assertNotIn(forbidden_key, response.json())
 
     def test_helper_sanitizes_and_binds_limit(self):
         now = datetime.now(timezone.utc)

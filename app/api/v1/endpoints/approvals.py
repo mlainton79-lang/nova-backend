@@ -3,6 +3,9 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.core.approval_lock import (
+    TEST_APPROVED_NOOP_ACTION_TYPE,
+    TEST_APPROVED_NOOP_CAPABILITY_KEY,
+    TEST_APPROVED_NOOP_STEP_SUMMARY,
     TEST_APPROVAL_RESUME_ACTION_TYPE,
     TEST_APPROVAL_RESUME_CAPABILITY_KEY,
     TEST_APPROVAL_RESUME_STEP_SUMMARY,
@@ -11,7 +14,10 @@ from app.core.approval_lock import (
     list_active_pending_approvals,
     reject_pending_approval,
 )
-from app.core.approved_task_runner import run_harmless_test_approval_resume
+from app.core.approved_task_runner import (
+    run_harmless_test_approved_noop,
+    run_harmless_test_approval_resume,
+)
 from app.core.security import verify_token
 from app.core.user_notifications import NotificationType, send_user_notification
 
@@ -124,6 +130,61 @@ async def run_test_resume_harness(
     or execute real work.
     """
     result = run_harmless_test_approval_resume()
+    return {
+        "ok": True,
+        "resumed": result.resumed,
+        "status": result.safe_status,
+        "message": result.safe_message,
+    }
+
+
+@router.post("/approvals/test-noop-pending")
+async def create_test_noop_pending_approval(
+    _=Depends(verify_token),
+):
+    """Create one harmless, deduplicated approval for the second no-op test."""
+    created = create_pending_approval_once(
+        capability_key=TEST_APPROVED_NOOP_CAPABILITY_KEY,
+        action_type=TEST_APPROVED_NOOP_ACTION_TYPE,
+        step_summary=TEST_APPROVED_NOOP_STEP_SUMMARY,
+        ttl_minutes=10,
+    )
+    notification_sent = False
+    if created:
+        try:
+            notification_sent = await send_user_notification(
+                NotificationType.APPROVAL_REQUIRED
+            )
+        except Exception:
+            notification_sent = False
+
+    return {
+        "ok": True,
+        "created": created,
+        "notification_sent": notification_sent,
+        "status": (
+            "created"
+            if created and notification_sent
+            else "created_notification_unavailable"
+            if created
+            else "not_created"
+        ),
+        "message": (
+            "Approved no-op test approval created and notification sent."
+            if created and notification_sent
+            else "Approved no-op test approval created; notification was unavailable."
+            if created
+            else "An equivalent active approved no-op test already exists."
+        ),
+    }
+
+
+@router.post("/approvals/test-noop-run")
+async def run_test_noop_harness(
+    _=Depends(verify_token),
+):
+    """Explicitly run one harmless approved no-op with no external action."""
+    result = run_harmless_test_approved_noop()
     return {
         "ok": True,
         "resumed": result.resumed,

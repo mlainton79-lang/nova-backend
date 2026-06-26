@@ -15,7 +15,7 @@ from app.core import approval_lock  # noqa: E402
 
 
 class ApprovedTaskRunnerTests(unittest.TestCase):
-    def test_runner_is_fixed_to_harmless_test_contract(self):
+    def test_resume_runner_is_fixed_to_harmless_test_contract(self):
         consume = MagicMock(return_value=True)
         with patch.object(
             approved_task_runner,
@@ -30,6 +30,10 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
             "test.approval_resume",
         )
         self.assertEqual(
+            result.capability_key,
+            approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+        )
+        self.assertEqual(
             result.task_type,
             approved_task_runner.HARMLESS_RESUME_TASK_TYPE,
         )
@@ -41,6 +45,7 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
         )
         self.assertFalse(result.external_action_performed)
         self.assertFalse(result.notification_sent)
+        self.assertEqual(result.verification_status, "no_op_verified")
 
     def test_runner_returns_not_resumed_without_eligible_grant(self):
         consume = MagicMock(return_value=False)
@@ -60,6 +65,7 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
         )
         self.assertFalse(result.external_action_performed)
         self.assertFalse(result.notification_sent)
+        self.assertEqual(result.verification_status, "not_run")
 
     def test_second_consume_cannot_produce_second_completed_result(self):
         consume = MagicMock(side_effect=[True, False])
@@ -75,6 +81,46 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
         self.assertFalse(second.resumed)
         self.assertEqual(second.safe_status, "not_resumed")
         self.assertEqual(consume.call_count, 2)
+
+    def test_noop_runner_is_fixed_to_second_test_capability(self):
+        consume = MagicMock(return_value=True)
+        with patch.object(
+            approved_task_runner,
+            "consume_test_approved_noop_grant",
+            consume,
+        ):
+            result = approved_task_runner.run_harmless_test_approved_noop()
+
+        consume.assert_called_once_with()
+        self.assertEqual(
+            result.capability_key,
+            approval_lock.TEST_APPROVED_NOOP_CAPABILITY_KEY,
+        )
+        self.assertEqual(result.task_type, approved_task_runner.HARMLESS_NOOP_TASK_TYPE)
+        self.assertTrue(result.resumed)
+        self.assertEqual(result.safe_status, "completed")
+        self.assertEqual(
+            result.safe_message,
+            approved_task_runner.HARMLESS_NOOP_COMPLETED_MESSAGE,
+        )
+        self.assertFalse(result.external_action_performed)
+        self.assertFalse(result.notification_sent)
+
+    def test_noop_runner_returns_not_resumed_after_consumption(self):
+        consume = MagicMock(side_effect=[True, False])
+        with patch.object(
+            approved_task_runner,
+            "consume_test_approved_noop_grant",
+            consume,
+        ):
+            first = approved_task_runner.run_harmless_test_approved_noop()
+            second = approved_task_runner.run_harmless_test_approved_noop()
+
+        self.assertTrue(first.resumed)
+        self.assertFalse(second.resumed)
+        self.assertEqual(second.safe_status, "not_resumed")
+        self.assertFalse(second.external_action_performed)
+        self.assertFalse(second.notification_sent)
 
     def test_runner_module_has_no_external_or_notification_dependencies(self):
         with open(approved_task_runner.__file__, encoding="utf-8") as source_file:
