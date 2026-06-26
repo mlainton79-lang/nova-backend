@@ -12,6 +12,7 @@ sys.modules.setdefault("psycopg2", MagicMock())
 
 from app.core import approved_task_runner  # noqa: E402
 from app.core import approval_lock  # noqa: E402
+from app.core import approved_capability_manifest  # noqa: E402
 
 
 class ApprovedTaskRunnerTests(unittest.TestCase):
@@ -35,7 +36,7 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             result.task_type,
-            approved_task_runner.HARMLESS_RESUME_TASK_TYPE,
+            approved_capability_manifest.TEST_APPROVAL_RESUME_MANIFEST.task_type,
         )
         self.assertTrue(result.resumed)
         self.assertEqual(result.safe_status, "completed")
@@ -96,7 +97,10 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
             result.capability_key,
             approval_lock.TEST_APPROVED_NOOP_CAPABILITY_KEY,
         )
-        self.assertEqual(result.task_type, approved_task_runner.HARMLESS_NOOP_TASK_TYPE)
+        self.assertEqual(
+            result.task_type,
+            approved_capability_manifest.TEST_APPROVED_NOOP_MANIFEST.task_type,
+        )
         self.assertTrue(result.resumed)
         self.assertEqual(result.safe_status, "completed")
         self.assertEqual(
@@ -121,6 +125,56 @@ class ApprovedTaskRunnerTests(unittest.TestCase):
         self.assertEqual(second.safe_status, "not_resumed")
         self.assertFalse(second.external_action_performed)
         self.assertFalse(second.notification_sent)
+
+    def test_manifest_allowlists_only_the_two_harmless_capabilities(self):
+        manifests = approved_capability_manifest.APPROVED_CAPABILITY_MANIFESTS
+        self.assertEqual(
+            set(manifests),
+            {
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.TEST_APPROVED_NOOP_CAPABILITY_KEY,
+            },
+        )
+        for manifest in manifests.values():
+            self.assertEqual(manifest.risk_level, "test_only")
+            self.assertTrue(manifest.approval_required)
+            self.assertFalse(manifest.external_action_allowed)
+            self.assertFalse(manifest.notification_allowed)
+            self.assertEqual(manifest.runner_type, "no_op_approved_runner")
+            self.assertIn("no_op_verified", manifest.verification_requirements)
+            self.assertIn("completed", manifest.allowed_outputs)
+            self.assertIn("not_resumed", manifest.allowed_outputs)
+
+    def test_runner_fails_closed_when_manifest_is_not_safe_noop(self):
+        unsafe_manifest = approved_capability_manifest.ApprovedCapabilityManifest(
+            capability_key="test.unsafe",
+            action_type="test_unsafe",
+            task_type="unsafe_test",
+            human_name="Unsafe test",
+            description="Synthetic unsafe manifest.",
+            risk_level="test_only",
+            approval_required=True,
+            external_action_allowed=True,
+            notification_allowed=False,
+            runner_type="no_op_approved_runner",
+            preconditions=("approved_pending_approval",),
+            verification_requirements=("no_op_verified",),
+            allowed_outputs=("not_resumed",),
+        )
+        consume = MagicMock(return_value=True)
+        runner = approved_task_runner._NoOpApprovedCapabilityRunner(
+            manifest=unsafe_manifest,
+            completed_message="must not be returned",
+            not_resumed_message="blocked by manifest",
+            consume_once=consume,
+        )
+
+        result = runner.run()
+
+        consume.assert_not_called()
+        self.assertFalse(result.resumed)
+        self.assertEqual(result.safe_status, "not_resumed")
+        self.assertEqual(result.verification_status, "manifest_not_eligible")
 
     def test_runner_module_has_no_external_or_notification_dependencies(self):
         with open(approved_task_runner.__file__, encoding="utf-8") as source_file:
