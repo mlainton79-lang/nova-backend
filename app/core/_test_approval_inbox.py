@@ -209,13 +209,13 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertIn("JOIN tony_pending_approvals pending_approval", normalized_statement)
         self.assertIn("action_grant.capability_key = %s", normalized_statement)
         self.assertIn("pending_approval.capability_key = %s", normalized_statement)
-        self.assertIn("pending_approval.status = 'approved'", normalized_statement)
-        self.assertIn("action_grant.status = 'active'", normalized_statement)
+        self.assertIn("pending_approval.status = %s", normalized_statement)
+        self.assertIn("action_grant.status = %s", normalized_statement)
         self.assertIn("action_grant.consumed_at IS NULL", normalized_statement)
         self.assertIn("action_grant.expires_at > NOW()", normalized_statement)
         self.assertIn("pending_approval.expires_at > NOW()", normalized_statement)
         self.assertIn("FOR UPDATE OF action_grant", normalized_statement)
-        self.assertIn("SET status = 'consumed'", normalized_statement)
+        self.assertIn("SET status = %s", normalized_statement)
         self.assertIn("consumed_at = NOW()", normalized_statement)
         self.assertNotIn("DELETE", normalized_statement.upper())
         self.assertNotIn(" tony_action_grants grant ", normalized_statement)
@@ -224,7 +224,11 @@ class ApprovalInboxTests(unittest.TestCase):
             (
                 approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
                 approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.PENDING_APPROVAL_STATUS_APPROVED,
+                approval_lock.ACTION_GRANT_STATUS_ACTIVE,
+                approval_lock.ACTION_GRANT_STATUS_CONSUMED,
                 approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.ACTION_GRANT_STATUS_ACTIVE,
             ),
         )
 
@@ -237,8 +241,46 @@ class ApprovalInboxTests(unittest.TestCase):
         self.assertFalse(consumed)
         statement, _ = connection.cursor_instance.statements[0]
         normalized_statement = " ".join(statement.split())
-        self.assertIn("action_grant.status = 'active'", normalized_statement)
+        self.assertIn("action_grant.status = %s", normalized_statement)
         self.assertIn("action_grant.consumed_at IS NULL", normalized_statement)
+
+    def test_resume_contract_requires_approved_unexpired_active_grant(self):
+        connection = _Connection(rows=[])
+
+        with patch.object(approval_lock, "_connect", return_value=connection):
+            consumed = approval_lock.consume_test_approval_resume_grant()
+
+        self.assertFalse(consumed)
+        statement, params = connection.cursor_instance.statements[0]
+        normalized_statement = " ".join(statement.split())
+        self.assertIn("pending_approval.status = %s", normalized_statement)
+        self.assertIn("pending_approval.expires_at > NOW()", normalized_statement)
+        self.assertIn("action_grant.status = %s", normalized_statement)
+        self.assertIn("action_grant.expires_at > NOW()", normalized_statement)
+        self.assertIn("action_grant.consumed_at IS NULL", normalized_statement)
+        self.assertIn("SET status = %s", normalized_statement)
+        self.assertEqual(
+            params,
+            (
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.PENDING_APPROVAL_STATUS_APPROVED,
+                approval_lock.ACTION_GRANT_STATUS_ACTIVE,
+                approval_lock.ACTION_GRANT_STATUS_CONSUMED,
+                approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                approval_lock.ACTION_GRANT_STATUS_ACTIVE,
+            ),
+        )
+
+    def test_test_resume_wrapper_cannot_consume_non_test_capability(self):
+        consume = MagicMock(return_value=True)
+        with patch.object(approval_lock, "_consume_approved_grant_once", consume):
+            consumed = approval_lock.consume_test_approval_resume_grant()
+
+        self.assertTrue(consumed)
+        consume.assert_called_once_with(
+            capability_key=approval_lock.TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+        )
 
     def test_non_existent_approval_returns_false_when_marking_approved(self):
         pending_id = str(uuid.uuid4())

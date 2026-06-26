@@ -32,6 +32,24 @@ Foundational contract per AGENTS.md:
     closed (a destructive action DENIES with no grant available). That is
     the correct fail-closed posture; nothing else in the request path is
     broken.
+
+Approval Resume Contract v1:
+  1. A pending approval records the requested capability and expires at a
+     fixed time.
+  2. The normal approve path is mark-only: it approves that pending row and
+     mints or reuses exactly one linked approved grant. It never dispatches
+     work.
+  3. An explicitly-called safe resume endpoint may ask this module to consume
+     a matching grant once. A grant is resume-eligible only when its pending
+     approval is approved, both records are unexpired, the grant is active,
+     and it has not already been consumed.
+  4. Atomic consumption marks the grant consumed before the caller reports a
+     safe result. This module never executes the approved action itself.
+
+Expiry is a usability condition as well as a status concern: a grant can be
+stored with status ``active`` yet be unusable after ``expires_at``. Resume
+queries must always check both expiry timestamps rather than treating the
+stored status alone as authority.
 """
 import hashlib
 import json
@@ -49,6 +67,13 @@ TEST_APPROVAL_RESUME_ACTION_TYPE = "test_resume_task"
 TEST_APPROVAL_RESUME_STEP_SUMMARY = (
     "Harmless test approval for backend-only resume verification"
 )
+
+# Approval Resume Contract v1 names. Keep the test runner capability explicit:
+# this module provides the atomic grant transition, while the API layer decides
+# which deliberately-safe endpoint is allowed to invoke it.
+PENDING_APPROVAL_STATUS_APPROVED = "approved"
+ACTION_GRANT_STATUS_ACTIVE = "active"
+ACTION_GRANT_STATUS_CONSUMED = "consumed"
 
 
 def _connect():
@@ -777,8 +802,18 @@ def approve_pending_approval(pending_id: str) -> bool:
                 pass
 
 
-def consume_test_approval_resume_grant() -> bool:
-    """Consume one approved grant for the harmless resume-test capability only."""
+def _consume_approved_grant_once(*, capability_key: str) -> bool:
+    """Atomically consume one eligible grant without executing any action.
+
+    This is the internal consume-once half of Approval Resume Contract v1.
+    Callers must be deliberately safe resume endpoints; this primitive only
+    transitions an eligible grant from active to consumed and reports whether
+    that transition happened. It does not dispatch, notify, or otherwise run
+    the approved work.
+    """
+    if not capability_key:
+        return False
+
     conn = None
     try:
         conn = _connect()
@@ -793,8 +828,8 @@ def consume_test_approval_resume_grant() -> bool:
                       ON pending_approval.pending_id = action_grant.pending_action_ref
                     WHERE action_grant.capability_key = %s
                       AND pending_approval.capability_key = %s
-                      AND pending_approval.status = 'approved'
-                      AND action_grant.status = 'active'
+                      AND pending_approval.status = %s
+                      AND action_grant.status = %s
                       AND action_grant.consumed_at IS NULL
                       AND action_grant.expires_at > NOW()
                       AND pending_approval.expires_at > NOW()
@@ -804,19 +839,23 @@ def consume_test_approval_resume_grant() -> bool:
                     FOR UPDATE OF action_grant
                 )
                 UPDATE tony_action_grants action_grant
-                SET status = 'consumed',
+                SET status = %s,
                     consumed_at = NOW()
                 FROM selected_grant
                 WHERE action_grant.grant_id = selected_grant.grant_id
                   AND action_grant.capability_key = %s
-                  AND action_grant.status = 'active'
+                  AND action_grant.status = %s
                   AND action_grant.consumed_at IS NULL
                 RETURNING action_grant.grant_id
                 """,
                 (
-                    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
-                    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
-                    TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+                    capability_key,
+                    capability_key,
+                    PENDING_APPROVAL_STATUS_APPROVED,
+                    ACTION_GRANT_STATUS_ACTIVE,
+                    ACTION_GRANT_STATUS_CONSUMED,
+                    capability_key,
+                    ACTION_GRANT_STATUS_ACTIVE,
                 ),
             )
             consumed = cur.fetchone() is not None
@@ -829,7 +868,7 @@ def consume_test_approval_resume_grant() -> bool:
             except Exception:
                 pass
         print(
-            "[APPROVAL_LOCK] Test approval resume consume failed: "
+            "[APPROVAL_LOCK] Approved grant consume failed: "
             f"{type(error).__name__}"
         )
         return False
@@ -839,3 +878,15 @@ def consume_test_approval_resume_grant() -> bool:
                 conn.close()
             except Exception:
                 pass
+
+
+def consume_test_approval_resume_grant() -> bool:
+    """Consume only the harmless test grant through the v1 contract.
+
+    This wrapper is the capability boundary for the current public harness.
+    It preserves the rule that the test resume endpoint cannot consume a
+    non-test capability and still does not execute any real action.
+    """
+    return _consume_approved_grant_once(
+        capability_key=TEST_APPROVAL_RESUME_CAPABILITY_KEY,
+    )

@@ -116,7 +116,13 @@ async def create_test_resume_pending_approval(
 async def run_test_resume_harness(
     _=Depends(verify_token),
 ):
-    """Consume one approved harmless test grant without executing real work."""
+    """Explicitly consume one harmless test grant and report a safe result.
+
+    Approval Resume Contract v1 keeps this separate from approval: the normal
+    approve endpoint only marks and mints. This endpoint is the sole explicit
+    resume caller for ``test.approval_resume`` and does not notify, dispatch,
+    or execute real work.
+    """
     resumed = consume_test_approval_resume_grant()
     return {
         "ok": True,
