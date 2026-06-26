@@ -53,6 +53,167 @@ class GmailDraftRunnerTests(unittest.TestCase):
         self.assertFalse(result.draft_created)
         self.assertFalse(result.approval_grant_consumed)
 
+    def test_snapshot_builder_returns_exact_approved_snapshot_fields(self):
+        snapshot = gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+        )
+
+        self.assertEqual(
+            set(snapshot),
+            {
+                "to",
+                "cc",
+                "bcc",
+                "subject",
+                "body",
+                "reply_to_message_id",
+                "user_visible_summary",
+                "risk_level",
+                "capability_key",
+                "action_type",
+            },
+        )
+        self.assertEqual(snapshot["to"], ("matthew@example.test",))
+        self.assertEqual(snapshot["cc"], ())
+        self.assertEqual(snapshot["bcc"], ())
+        self.assertIsNone(snapshot["reply_to_message_id"])
+        self.assertEqual(snapshot["capability_key"], "gmail.create_draft")
+        self.assertEqual(snapshot["action_type"], "gmail_create_draft")
+        self.assertEqual(snapshot["risk_level"], "low_external_write")
+        self.assertIn("Matthew to review", snapshot["user_visible_summary"])
+        self.assertNotIn("send", snapshot["user_visible_summary"].lower())
+
+    def test_snapshot_builder_accepts_typed_input_and_optional_fields(self):
+        proposal = gmail_draft_runner.GmailDraftProposalInput(
+            to=("matthew@example.test", "second@example.test"),
+            cc="cc@example.test",
+            bcc=["bcc@example.test"],
+            subject="Reviewable draft subject",
+            body="Reviewable draft body.",
+            reply_to_message_id="message-id-from-safe-prior-flow",
+        )
+
+        snapshot = gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+            proposal
+        )
+
+        self.assertEqual(
+            snapshot["to"],
+            ("matthew@example.test", "second@example.test"),
+        )
+        self.assertEqual(snapshot["cc"], ("cc@example.test",))
+        self.assertEqual(snapshot["bcc"], ("bcc@example.test",))
+        self.assertEqual(
+            snapshot["reply_to_message_id"],
+            "message-id-from-safe-prior-flow",
+        )
+        validated = gmail_draft_runner.validate_gmail_draft_snapshot(snapshot)
+        self.assertEqual(validated.capability_key, "gmail.create_draft")
+
+    def test_snapshot_builder_requires_recipient_subject_and_body(self):
+        for field_name in ("to", "subject", "body"):
+            proposal = {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+            proposal[field_name] = "" if field_name != "to" else []
+            with self.assertRaises(ValueError):
+                gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+                    proposal
+                )
+
+    def test_snapshot_builder_rejects_unsafe_operations_and_bypass_approval(self):
+        unsafe_terms = (
+            "send this message",
+            "delete the email",
+            "archive the thread",
+            "forward the message",
+            "perform broad inbox read",
+            "add an attachment",
+            "modify existing draft",
+            "bypass approval",
+        )
+        for term in unsafe_terms:
+            with self.assertRaisesRegex(
+                ValueError,
+                "snapshot_contains_prohibited_behavior_or_private_data",
+            ):
+                gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+                    {
+                        "to": "matthew@example.test",
+                        "subject": "Reviewable draft subject",
+                        "body": term,
+                    }
+                )
+
+    def test_snapshot_builder_rejects_private_or_raw_payload_fields(self):
+        for field_name in ("token", "secret", "authorization", "gmail_payload"):
+            proposal = {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+                field_name: "redacted",
+            }
+            with self.assertRaisesRegex(ValueError, "proposal_contains_unsupported_fields"):
+                gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+                    proposal
+                )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "snapshot_contains_prohibited_behavior_or_private_data",
+        ):
+            gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "contains refresh_token material",
+                }
+            )
+
+    def test_snapshot_builder_does_not_create_approval_or_call_runner(self):
+        with (
+            patch(
+                "app.core.gmail_draft_runner.run_disabled_gmail_create_draft",
+                MagicMock(),
+            ) as runner,
+            patch(
+                "app.core.approval_lock.create_pending_approval_once",
+                MagicMock(return_value=True),
+            ) as create_approval,
+            patch(
+                "app.core.approval_lock.consume_test_approval_resume_grant",
+                MagicMock(return_value=True),
+            ) as resume_consume,
+            patch(
+                "app.core.approval_lock.consume_test_approved_noop_grant",
+                MagicMock(return_value=True),
+            ) as noop_consume,
+            patch(
+                "app.core.user_notifications.send_user_notification",
+                MagicMock(return_value=False),
+            ) as notify,
+        ):
+            snapshot = gmail_draft_runner.build_gmail_create_draft_approval_snapshot(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                }
+            )
+
+        self.assertEqual(snapshot["capability_key"], "gmail.create_draft")
+        runner.assert_not_called()
+        create_approval.assert_not_called()
+        resume_consume.assert_not_called()
+        noop_consume.assert_not_called()
+        notify.assert_not_called()
+
     def test_disabled_runner_does_not_consume_grant_or_send_notifications(self):
         with (
             patch(
