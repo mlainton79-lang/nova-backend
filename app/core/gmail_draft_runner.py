@@ -164,6 +164,29 @@ class GmailDraftApprovalPersistencePreview:
     approval_grant_consumed: bool = False
 
 
+@dataclass(frozen=True)
+class GmailDraftApprovalCreationPreview:
+    """Disabled approval creation boundary; refuses before insert creation."""
+
+    capability_key: str
+    action_type: str
+    task_type: str
+    step_summary: str
+    ttl_minutes: int
+    creation_status: str
+    refusal_reason: str
+    verified_insert_parameters: dict
+    warnings: tuple[str, ...]
+    would_call_create_pending_approval_once: bool = False
+    would_insert: bool = False
+    approval_created: bool = False
+    approval_inserted_into_database: bool = False
+    notification_sent: bool = False
+    external_action_performed: bool = False
+    draft_created: bool = False
+    approval_grant_consumed: bool = False
+
+
 def _as_nonempty_string(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -493,6 +516,88 @@ def prepare_disabled_gmail_create_draft_pending_approval_insert(
         persistence_status="disabled_preview_only",
         insert_parameters=insert_parameters,
         warnings=request_preview.warnings + ("persistence_disabled_preview_only",),
+    )
+
+
+def _verify_disabled_gmail_insert_parameters(insert_parameters: dict) -> dict:
+    expected_fields = {
+        "capability_key",
+        "action_type",
+        "step_summary",
+        "ttl_minutes",
+    }
+    if not isinstance(insert_parameters, dict):
+        raise ValueError("insert_parameters_must_be_mapping")
+    if set(insert_parameters) != expected_fields:
+        raise ValueError("insert_parameters_shape_mismatch")
+    if insert_parameters["capability_key"] != GMAIL_CREATE_DRAFT_CAPABILITY_KEY:
+        raise ValueError("insert_parameters_capability_mismatch")
+    if insert_parameters["action_type"] != GMAIL_CREATE_DRAFT_ACTION_TYPE:
+        raise ValueError("insert_parameters_action_type_mismatch")
+
+    step_summary = _as_nonempty_string(insert_parameters.get("step_summary"))
+    if step_summary is None or _contains_prohibited_text(step_summary):
+        raise ValueError("insert_parameters_step_summary_unsafe")
+
+    ttl_minutes = insert_parameters.get("ttl_minutes")
+    if not isinstance(ttl_minutes, int) or ttl_minutes < 1 or ttl_minutes > 60:
+        raise ValueError("insert_parameters_ttl_unsafe")
+
+    return {
+        "capability_key": GMAIL_CREATE_DRAFT_CAPABILITY_KEY,
+        "action_type": GMAIL_CREATE_DRAFT_ACTION_TYPE,
+        "step_summary": step_summary,
+        "ttl_minutes": ttl_minutes,
+    }
+
+
+def prepare_disabled_gmail_create_draft_approval_creation(
+    proposal_or_snapshot_or_preview: (
+        GmailDraftProposalInput
+        | dict[str, Any]
+        | GmailDraftApprovalPreview
+        | GmailDraftApprovalRequestPreview
+        | GmailDraftApprovalPersistencePreview
+    ),
+    ttl_minutes: int = 10,
+) -> GmailDraftApprovalCreationPreview:
+    """Validate creation inputs and refuse before pending approval creation."""
+    if isinstance(proposal_or_snapshot_or_preview, GmailDraftApprovalPersistencePreview):
+        persistence_preview = proposal_or_snapshot_or_preview
+    else:
+        persistence_preview = (
+            prepare_disabled_gmail_create_draft_pending_approval_insert(
+                proposal_or_snapshot_or_preview,
+                ttl_minutes=ttl_minutes,
+            )
+        )
+
+    if persistence_preview.capability_key != GMAIL_CREATE_DRAFT_CAPABILITY_KEY:
+        raise ValueError("persistence_preview_capability_mismatch")
+    if persistence_preview.action_type != GMAIL_CREATE_DRAFT_ACTION_TYPE:
+        raise ValueError("persistence_preview_action_type_mismatch")
+    if persistence_preview.persistence_status != "disabled_preview_only":
+        raise ValueError("persistence_preview_status_not_disabled")
+    if persistence_preview.would_insert:
+        raise ValueError("persistence_preview_would_insert")
+    if persistence_preview.approval_created:
+        raise ValueError("persistence_preview_approval_created")
+    if persistence_preview.approval_inserted_into_database:
+        raise ValueError("persistence_preview_inserted")
+
+    verified_insert_parameters = _verify_disabled_gmail_insert_parameters(
+        persistence_preview.insert_parameters
+    )
+    return GmailDraftApprovalCreationPreview(
+        capability_key=GMAIL_CREATE_DRAFT_CAPABILITY_KEY,
+        action_type=GMAIL_CREATE_DRAFT_ACTION_TYPE,
+        task_type=persistence_preview.task_type,
+        step_summary=verified_insert_parameters["step_summary"],
+        ttl_minutes=verified_insert_parameters["ttl_minutes"],
+        creation_status="disabled_before_insert",
+        refusal_reason="gmail_create_draft_approval_creation_disabled",
+        verified_insert_parameters=verified_insert_parameters,
+        warnings=persistence_preview.warnings + ("creation_disabled_before_insert",),
     )
 
 
