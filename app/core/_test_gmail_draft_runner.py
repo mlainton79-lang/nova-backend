@@ -997,6 +997,257 @@ class GmailDraftRunnerTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, combined_keys)
 
+    def test_disabled_live_approval_gate_review_returns_disabled_refusal(self):
+        gate = gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+        )
+
+        self.assertEqual(gate.capability_key, "gmail.create_draft")
+        self.assertEqual(gate.action_type, "gmail_create_draft")
+        self.assertEqual(gate.task_type, "approved_gmail_draft_creation")
+        self.assertEqual(gate.gate_status, "disabled_refused")
+        self.assertEqual(gate.refusal_reason, "gmail_live_approval_creation_disabled")
+        self.assertFalse(gate.live_creation_enabled)
+        self.assertTrue(gate.manifest_safe)
+        self.assertTrue(gate.preparation_chain_valid)
+        self.assertEqual(
+            set(gate.verified_insert_parameters),
+            {"capability_key", "action_type", "step_summary", "ttl_minutes"},
+        )
+        self.assertEqual(
+            gate.verified_insert_parameters["capability_key"],
+            "gmail.create_draft",
+        )
+        self.assertEqual(
+            gate.verified_insert_parameters["action_type"],
+            "gmail_create_draft",
+        )
+        self.assertEqual(gate.verified_insert_parameters["ttl_minutes"], 10)
+        self.assertIn("Review Gmail draft", gate.verified_insert_parameters["step_summary"])
+        self.assertIn("live_approval_gate_disabled", gate.warnings)
+        self.assertFalse(gate.would_call_create_pending_approval_once)
+        self.assertFalse(gate.would_insert)
+        self.assertFalse(gate.approval_created)
+        self.assertFalse(gate.approval_inserted_into_database)
+        self.assertFalse(gate.notification_sent)
+        self.assertFalse(gate.external_action_performed)
+        self.assertFalse(gate.draft_created)
+        self.assertFalse(gate.approval_grant_consumed)
+
+    def test_disabled_live_approval_gate_confirms_manifest_is_not_connected(self):
+        manifest = manifest_module.get_capability_manifest("gmail.create_draft")
+        gate = gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            },
+            ttl_minutes=15,
+        )
+
+        self.assertEqual(manifest.implementation_status, "design_only")
+        self.assertFalse(manifest.enabled)
+        self.assertFalse(manifest.external_action_allowed)
+        self.assertFalse(manifest.current_runner_connected)
+        self.assertTrue(gate.manifest_safe)
+        self.assertEqual(gate.verified_insert_parameters["ttl_minutes"], 15)
+        self.assertFalse(gmail_draft_runner.is_gmail_create_draft_live_approval_enabled())
+
+    def test_disabled_live_approval_gate_review_accepts_creation_preview(self):
+        creation = (
+            gmail_draft_runner.prepare_disabled_gmail_create_draft_approval_creation(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                },
+                ttl_minutes=15,
+            )
+        )
+
+        gate = gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+            creation,
+            ttl_minutes=30,
+        )
+
+        self.assertEqual(gate.verified_insert_parameters["ttl_minutes"], 15)
+        self.assertIn("creation_disabled_before_insert", gate.warnings)
+        self.assertIn("live_approval_gate_disabled", gate.warnings)
+
+    def test_disabled_live_approval_gate_review_rejects_mutated_creation_preview(self):
+        creation = (
+            gmail_draft_runner.prepare_disabled_gmail_create_draft_approval_creation(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                }
+            )
+        )
+
+        invalid_creation_previews = (
+            replace(creation, creation_status="enabled"),
+            replace(creation, would_call_create_pending_approval_once=True),
+            replace(creation, would_insert=True),
+            replace(creation, approval_created=True),
+            replace(creation, approval_inserted_into_database=True),
+            replace(creation, notification_sent=True),
+            replace(creation, external_action_performed=True),
+            replace(creation, draft_created=True),
+            replace(creation, approval_grant_consumed=True),
+            replace(
+                creation,
+                verified_insert_parameters={
+                    "capability_key": "gmail.create_draft",
+                    "action_type": "gmail_create_draft",
+                    "step_summary": "Review Gmail draft",
+                    "ttl_minutes": 10,
+                    "approval_challenge": "not allowed",
+                },
+            ),
+            replace(
+                creation,
+                verified_insert_parameters={
+                    "capability_key": "gmail.create_draft",
+                    "action_type": "gmail_create_draft",
+                    "step_summary": "Review Gmail draft",
+                    "ttl_minutes": 0,
+                },
+            ),
+        )
+        for invalid_creation_preview in invalid_creation_previews:
+            with self.assertRaises(ValueError):
+                gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+                    invalid_creation_preview
+                )
+
+    def test_disabled_live_approval_gate_review_rejects_unsafe_or_private_inputs(self):
+        for body in (
+            "send this message",
+            "delete the email",
+            "archive the thread",
+            "forward the message",
+            "perform broad inbox read",
+            "add an attachment",
+            "modify existing draft",
+            "bypass approval",
+            "contains access_token material",
+        ):
+            with self.assertRaises(ValueError):
+                gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+                    {
+                        "to": "matthew@example.test",
+                        "subject": "Reviewable draft subject",
+                        "body": body,
+                    }
+                )
+
+        with self.assertRaisesRegex(ValueError, "proposal_contains_unsupported_fields"):
+            gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                    "gmail_payload": "redacted",
+                }
+            )
+
+    def test_disabled_live_approval_gate_does_not_create_or_execute_anything(self):
+        with (
+            patch(
+                "app.core.gmail_draft_runner.run_disabled_gmail_create_draft",
+                MagicMock(),
+            ) as runner,
+            patch(
+                "app.core.approval_lock.create_pending_approval_once",
+                MagicMock(return_value=True),
+            ) as create_approval,
+            patch(
+                "app.core.approval_lock.consume_test_approval_resume_grant",
+                MagicMock(return_value=True),
+            ) as resume_consume,
+            patch(
+                "app.core.approval_lock.consume_test_approved_noop_grant",
+                MagicMock(return_value=True),
+            ) as noop_consume,
+            patch(
+                "app.core.user_notifications.send_user_notification",
+                MagicMock(return_value=False),
+            ) as notify,
+        ):
+            gate = gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+                {
+                    "to": "matthew@example.test",
+                    "subject": "Reviewable draft subject",
+                    "body": "Reviewable draft body.",
+                }
+            )
+
+        self.assertEqual(gate.gate_status, "disabled_refused")
+        runner.assert_not_called()
+        create_approval.assert_not_called()
+        resume_consume.assert_not_called()
+        noop_consume.assert_not_called()
+        notify.assert_not_called()
+
+    def test_disabled_live_approval_gate_exposes_no_private_fields(self):
+        gate = gmail_draft_runner.review_disabled_gmail_create_draft_live_approval_gate(
+            {
+                "to": "matthew@example.test",
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+            }
+        )
+        combined_keys = set(gate.__dict__) | set(gate.verified_insert_parameters)
+
+        self.assertEqual(
+            combined_keys,
+            {
+                "capability_key",
+                "action_type",
+                "task_type",
+                "gate_status",
+                "refusal_reason",
+                "live_creation_enabled",
+                "manifest_safe",
+                "preparation_chain_valid",
+                "verified_insert_parameters",
+                "warnings",
+                "would_call_create_pending_approval_once",
+                "would_insert",
+                "approval_created",
+                "approval_inserted_into_database",
+                "notification_sent",
+                "external_action_performed",
+                "draft_created",
+                "approval_grant_consumed",
+                "step_summary",
+                "ttl_minutes",
+            },
+        )
+        for forbidden in (
+            "pending_id",
+            "approval_challenge",
+            "action_hash",
+            "grant_id",
+            "token",
+            "secret",
+            "oauth",
+            "gmail_payload",
+            "request_body",
+            "raw_db_rows",
+            "DATABASE_URL",
+            "railway_variables",
+            "authorization",
+            "generated_challenge_material",
+            "generated_hash_material",
+        ):
+            self.assertNotIn(forbidden, combined_keys)
+
     def test_disabled_runner_does_not_consume_grant_or_send_notifications(self):
         with (
             patch(

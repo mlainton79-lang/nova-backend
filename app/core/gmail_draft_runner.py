@@ -187,6 +187,30 @@ class GmailDraftApprovalCreationPreview:
     approval_grant_consumed: bool = False
 
 
+@dataclass(frozen=True)
+class GmailDraftLiveApprovalGateReview:
+    """End-to-end disabled gate review before future live approval creation."""
+
+    capability_key: str
+    action_type: str
+    task_type: str
+    gate_status: str
+    refusal_reason: str
+    live_creation_enabled: bool
+    manifest_safe: bool
+    preparation_chain_valid: bool
+    verified_insert_parameters: dict
+    warnings: tuple[str, ...]
+    would_call_create_pending_approval_once: bool = False
+    would_insert: bool = False
+    approval_created: bool = False
+    approval_inserted_into_database: bool = False
+    notification_sent: bool = False
+    external_action_performed: bool = False
+    draft_created: bool = False
+    approval_grant_consumed: bool = False
+
+
 def _as_nonempty_string(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -598,6 +622,88 @@ def prepare_disabled_gmail_create_draft_approval_creation(
         refusal_reason="gmail_create_draft_approval_creation_disabled",
         verified_insert_parameters=verified_insert_parameters,
         warnings=persistence_preview.warnings + ("creation_disabled_before_insert",),
+    )
+
+
+def is_gmail_create_draft_live_approval_enabled() -> bool:
+    """Feature gate placeholder; disabled by default and fail-closed."""
+    return False
+
+
+def review_disabled_gmail_create_draft_live_approval_gate(
+    proposal_or_snapshot_or_preview: (
+        GmailDraftProposalInput
+        | dict[str, Any]
+        | GmailDraftApprovalPreview
+        | GmailDraftApprovalRequestPreview
+        | GmailDraftApprovalPersistencePreview
+        | GmailDraftApprovalCreationPreview
+    ),
+    ttl_minutes: int = 10,
+) -> GmailDraftLiveApprovalGateReview:
+    """Review every disabled Gmail draft approval boundary and refuse live insert."""
+    manifest = get_capability_manifest(GMAIL_CREATE_DRAFT_CAPABILITY_KEY)
+    if manifest is None:
+        raise ValueError("gmail_create_draft_manifest_missing")
+
+    manifest_safe = (
+        manifest.capability_key == GMAIL_CREATE_DRAFT_CAPABILITY_KEY
+        and manifest.action_type == GMAIL_CREATE_DRAFT_ACTION_TYPE
+        and manifest.implementation_status == "design_only"
+        and not manifest.enabled
+        and not manifest.external_action_allowed
+        and not manifest.current_runner_connected
+    )
+    if not manifest_safe:
+        raise ValueError("gmail_create_draft_manifest_not_disabled_safe")
+
+    if isinstance(proposal_or_snapshot_or_preview, GmailDraftApprovalCreationPreview):
+        creation_preview = proposal_or_snapshot_or_preview
+    else:
+        creation_preview = prepare_disabled_gmail_create_draft_approval_creation(
+            proposal_or_snapshot_or_preview,
+            ttl_minutes=ttl_minutes,
+        )
+
+    if creation_preview.capability_key != GMAIL_CREATE_DRAFT_CAPABILITY_KEY:
+        raise ValueError("creation_preview_capability_mismatch")
+    if creation_preview.action_type != GMAIL_CREATE_DRAFT_ACTION_TYPE:
+        raise ValueError("creation_preview_action_type_mismatch")
+    if creation_preview.creation_status != "disabled_before_insert":
+        raise ValueError("creation_preview_status_not_disabled")
+    if creation_preview.would_call_create_pending_approval_once:
+        raise ValueError("creation_preview_would_call_create_pending_approval_once")
+    if creation_preview.would_insert:
+        raise ValueError("creation_preview_would_insert")
+    if creation_preview.approval_created:
+        raise ValueError("creation_preview_approval_created")
+    if creation_preview.approval_inserted_into_database:
+        raise ValueError("creation_preview_inserted")
+    if creation_preview.notification_sent:
+        raise ValueError("creation_preview_notification_sent")
+    if creation_preview.external_action_performed or creation_preview.draft_created:
+        raise ValueError("creation_preview_external_action")
+    if creation_preview.approval_grant_consumed:
+        raise ValueError("creation_preview_grant_consumed")
+
+    verified_insert_parameters = _verify_disabled_gmail_insert_parameters(
+        creation_preview.verified_insert_parameters
+    )
+    live_creation_enabled = is_gmail_create_draft_live_approval_enabled()
+    if live_creation_enabled:
+        raise ValueError("gmail_live_approval_creation_not_available")
+
+    return GmailDraftLiveApprovalGateReview(
+        capability_key=manifest.capability_key,
+        action_type=manifest.action_type,
+        task_type=manifest.task_type,
+        gate_status="disabled_refused",
+        refusal_reason="gmail_live_approval_creation_disabled",
+        live_creation_enabled=False,
+        manifest_safe=manifest_safe,
+        preparation_chain_valid=True,
+        verified_insert_parameters=verified_insert_parameters,
+        warnings=creation_preview.warnings + ("live_approval_gate_disabled",),
     )
 
 
