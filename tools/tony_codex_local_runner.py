@@ -104,6 +104,41 @@ _TTY_ERROR_PATTERNS = (
     "requires a tty",
 )
 
+_ENVIRONMENT_BLOCK_PATTERNS = (
+    "blocked by the execution environment",
+    "bwrap: creating new namespace failed",
+    "apply_patch cannot write",
+    "no repo files were changed",
+    "shell commands fail before execution",
+    "cannot write inside",
+)
+
+_SAFE_CHILD_ENV_KEYS = (
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "CODEX_HOME",
+)
+
+_SECRET_ENV_KEY_PARTS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "COOKIE",
+    "SESSION",
+    "DATABASE_URL",
+    "AUTHORIZATION",
+    "API_KEY",
+    "ACCESS_KEY",
+    "REFRESH",
+)
+
 
 def _tuple(value: Any) -> tuple[str, ...]:
     if value is None:
@@ -266,6 +301,47 @@ def changed_files_summary() -> tuple[str, ...]:
     return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
+def build_codex_child_env() -> dict[str, str]:
+    """Return a minimal environment for the child Codex process."""
+    child_env: dict[str, str] = {}
+    for key in _SAFE_CHILD_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            child_env[key] = value
+    return {
+        key: value
+        for key, value in child_env.items()
+        if not any(part in key.upper() for part in _SECRET_ENV_KEY_PARTS)
+    }
+
+
+def _changed_file_allowed(path: str, allowed_scopes: tuple[str, ...]) -> bool:
+    normalized_path = path.strip().lstrip("./").lower()
+    scope_text = " ".join(allowed_scopes).lower()
+    if normalized_path.startswith("app/core/"):
+        return "app/core" in scope_text or "backend" in scope_text or "nova-backend" in scope_text
+    if normalized_path.startswith("tools/"):
+        return "tools" in scope_text or "local tooling" in scope_text
+    return any(
+        normalized_path.startswith(scope.strip().rstrip("/").lower() + "/")
+        or normalized_path == scope.strip().lower()
+        for scope in allowed_scopes
+        if "/" in scope
+    )
+
+
+def unsafe_changed_files(
+    changed_files: tuple[str, ...],
+    allowed_scopes: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return changed files outside the task's allowed file areas."""
+    return tuple(
+        path
+        for path in changed_files
+        if not _changed_file_allowed(path, allowed_scopes)
+    )
+
+
 def _safe_text(value: str, max_chars: int = 500) -> str:
     text = " ".join(str(value).split())
     lowered = text.lower()
@@ -301,8 +377,12 @@ def build_report(
     tests_summary: tuple[str, ...] = (),
     prompt_path: str | None = None,
     codex_process_started: bool = False,
+    codex_process_exit_success: bool = False,
     codex_completed_successfully: bool = False,
+    codex_task_completed_successfully: bool = False,
+    codex_environment_blocked: bool = False,
     codex_requires_tty: bool = False,
+    unsafe_changed_files_detected: bool = False,
 ) -> dict[str, Any]:
     return {
         "task_id": plan.task_id,
@@ -316,8 +396,12 @@ def build_report(
         "secrets_exposed": False,
         "prompt_path": prompt_path,
         "codex_process_started": codex_process_started,
+        "codex_process_exit_success": codex_process_exit_success,
         "codex_completed_successfully": codex_completed_successfully,
+        "codex_task_completed_successfully": codex_task_completed_successfully,
+        "codex_environment_blocked": codex_environment_blocked,
         "codex_requires_tty": codex_requires_tty,
+        "unsafe_changed_files_detected": unsafe_changed_files_detected,
         "final_report": _safe_text(final_report),
     }
 
@@ -434,6 +518,7 @@ def run_local_codex_cli(
         command,
         input=prompt,
         cwd=REPO_ROOT,
+        env=build_codex_child_env(),
         text=True,
         capture_output=True,
         check=False,
@@ -442,12 +527,37 @@ def run_local_codex_cli(
     stderr_summary = _safe_text(result.stderr)
     combined_output = f"{result.stdout}\n{result.stderr}".lower()
     codex_requires_tty = any(pattern in combined_output for pattern in _TTY_ERROR_PATTERNS)
-    codex_completed_successfully = result.returncode == 0 and not codex_requires_tty
+    codex_environment_blocked = any(
+        pattern in combined_output for pattern in _ENVIRONMENT_BLOCK_PATTERNS
+    )
+    changed_files = changed_files_summary()
+    unsafe_files = unsafe_changed_files(changed_files, plan.allowed_files_or_areas)
+    unsafe_files_detected = bool(unsafe_files)
+    no_edit_changes = plan.can_edit_code and not changed_files
+    codex_process_exit_success = result.returncode == 0
+    codex_completed_successfully = (
+        codex_process_exit_success
+        and not codex_requires_tty
+        and not codex_environment_blocked
+    )
+    codex_task_completed_successfully = (
+        codex_completed_successfully
+        and not no_edit_changes
+        and not unsafe_files_detected
+    )
     status_summary = (
         "codex_cli_requires_tty"
         if codex_requires_tty
+        else "codex_environment_blocked"
+        if codex_environment_blocked
+        else "codex_failed"
+        if not codex_process_exit_success
+        else "unsafe_changed_files_detected"
+        if unsafe_files_detected
+        else "codex_no_files_changed"
+        if no_edit_changes
         else "codex_completed_successfully"
-        if codex_completed_successfully
+        if codex_task_completed_successfully
         else "codex_failed"
     )
     return build_report(
@@ -460,11 +570,15 @@ def run_local_codex_cli(
             f"Local Codex CLI status={status_summary} return_code={result.returncode}. "
             f"stdout_summary={stdout_summary} stderr_summary={stderr_summary}"
         ),
-        changed_files=changed_files_summary(),
+        changed_files=changed_files,
         tests_summary=("local_codex_cli_invoked",),
         codex_process_started=True,
+        codex_process_exit_success=codex_process_exit_success,
         codex_completed_successfully=codex_completed_successfully,
+        codex_task_completed_successfully=codex_task_completed_successfully,
+        codex_environment_blocked=codex_environment_blocked,
         codex_requires_tty=codex_requires_tty,
+        unsafe_changed_files_detected=unsafe_files_detected,
     )
 
 

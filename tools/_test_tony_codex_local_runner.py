@@ -399,12 +399,13 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         plan = self._plan()
         calls = []
 
-        def fake_codex_run(args, input, cwd, text, capture_output, check):
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
             calls.append(
                 {
                     "args": args,
                     "input_present": bool(input),
                     "cwd": str(cwd),
+                    "env_keys": tuple(sorted(env)),
                     "text": text,
                     "capture_output": capture_output,
                     "check": check,
@@ -428,7 +429,7 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         ), patch.object(
             tony_codex_local_runner,
             "changed_files_summary",
-            return_value=("tools/example.py",),
+            return_value=("app/core/example.py",),
         ), patch.object(
             tony_codex_local_runner.subprocess,
             "run",
@@ -454,22 +455,28 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
             ],
         )
         self.assertTrue(calls[0]["input_present"])
+        self.assertNotIn("DEV_TOKEN", calls[0]["env_keys"])
+        self.assertNotIn("DATABASE_URL", calls[0]["env_keys"])
         self.assertTrue(calls[0]["capture_output"])
         self.assertFalse(calls[0]["check"])
         self.assertTrue(report["execution_attempted"])
         self.assertTrue(report["execution_allowed"])
         self.assertTrue(report["codex_process_started"])
+        self.assertTrue(report["codex_process_exit_success"])
         self.assertTrue(report["codex_completed_successfully"])
+        self.assertTrue(report["codex_task_completed_successfully"])
+        self.assertFalse(report["codex_environment_blocked"])
         self.assertFalse(report["codex_requires_tty"])
+        self.assertFalse(report["unsafe_changed_files_detected"])
         self.assertEqual(report["return_code"], 0)
         self.assertEqual(report["deployment_summary"], "not_attempted")
         self.assertFalse(report["secrets_exposed"])
-        self.assertEqual(report["changed_files_summary"], ("tools/example.py",))
+        self.assertEqual(report["changed_files_summary"], ("app/core/example.py",))
 
     def test_local_codex_cli_tty_failure_is_classified(self):
         plan = self._plan()
 
-        def fake_codex_run(args, input, cwd, text, capture_output, check):
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
             return tony_codex_local_runner.subprocess.CompletedProcess(
                 args=args,
                 returncode=1,
@@ -504,7 +511,9 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
 
         self.assertTrue(report["execution_attempted"])
         self.assertTrue(report["codex_process_started"])
+        self.assertFalse(report["codex_process_exit_success"])
         self.assertFalse(report["codex_completed_successfully"])
+        self.assertFalse(report["codex_task_completed_successfully"])
         self.assertTrue(report["codex_requires_tty"])
         self.assertEqual(report["return_code"], 1)
         self.assertIn("codex_cli_requires_tty", report["final_report"])
@@ -512,7 +521,7 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
     def test_local_codex_cli_nonzero_exit_is_failure_not_success(self):
         plan = self._plan()
 
-        def fake_codex_run(args, input, cwd, text, capture_output, check):
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
             return tony_codex_local_runner.subprocess.CompletedProcess(
                 args=args,
                 returncode=2,
@@ -547,7 +556,9 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
 
         self.assertTrue(report["execution_attempted"])
         self.assertTrue(report["codex_process_started"])
+        self.assertFalse(report["codex_process_exit_success"])
         self.assertFalse(report["codex_completed_successfully"])
+        self.assertFalse(report["codex_task_completed_successfully"])
         self.assertFalse(report["codex_requires_tty"])
         self.assertEqual(report["return_code"], 2)
         self.assertIn("codex_failed", report["final_report"])
@@ -555,7 +566,7 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
     def test_local_codex_cli_unexpected_argument_failure_is_failure(self):
         plan = self._plan()
 
-        def fake_codex_run(args, input, cwd, text, capture_output, check):
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
             return tony_codex_local_runner.subprocess.CompletedProcess(
                 args=args,
                 returncode=2,
@@ -590,10 +601,205 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
 
         self.assertTrue(report["execution_attempted"])
         self.assertTrue(report["codex_process_started"])
+        self.assertFalse(report["codex_process_exit_success"])
         self.assertFalse(report["codex_completed_successfully"])
+        self.assertFalse(report["codex_task_completed_successfully"])
         self.assertFalse(report["codex_requires_tty"])
         self.assertEqual(report["return_code"], 2)
         self.assertIn("codex_failed", report["final_report"])
+
+    def test_local_codex_cli_environment_block_return_zero_is_not_task_success(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Blocked by the execution environment. No repo files were changed.",
+                stderr="bwrap: Creating new namespace failed",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=(),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertTrue(report["codex_process_exit_success"])
+        self.assertTrue(report["codex_environment_blocked"])
+        self.assertFalse(report["codex_completed_successfully"])
+        self.assertFalse(report["codex_task_completed_successfully"])
+        self.assertIn("codex_environment_blocked", report["final_report"])
+
+    def test_local_codex_cli_apply_patch_write_failure_is_environment_block(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="apply_patch cannot write inside the repository",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=(),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertTrue(report["codex_environment_blocked"])
+        self.assertFalse(report["codex_task_completed_successfully"])
+
+    def test_local_codex_cli_no_files_changed_for_edit_task_is_not_success(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Done.",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=(),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertTrue(report["codex_process_exit_success"])
+        self.assertTrue(report["codex_completed_successfully"])
+        self.assertFalse(report["codex_task_completed_successfully"])
+        self.assertIn("codex_no_files_changed", report["final_report"])
+
+    def test_local_codex_cli_unsafe_changed_file_is_not_task_success(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Done.",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=("app/api/v1/router.py",),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertTrue(report["unsafe_changed_files_detected"])
+        self.assertFalse(report["codex_task_completed_successfully"])
+        self.assertIn("unsafe_changed_files_detected", report["final_report"])
+
+    def test_child_codex_environment_strips_secret_like_variables(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/home/test",
+                "DEV_TOKEN": "test-token-value",
+                "DATABASE_URL": "postgres://example",
+                "RAILWAY_TOKEN": "railway-token",
+                "GITHUB_TOKEN": "github-token",
+                "OPENAI_API_KEY": "openai-key",
+                "SAFE_CUSTOM": "ignored",
+                "XDG_CONFIG_HOME": "/tmp/config",
+            },
+            clear=True,
+        ):
+            child_env = tony_codex_local_runner.build_codex_child_env()
+
+        self.assertEqual(child_env["PATH"], "/usr/bin")
+        self.assertEqual(child_env["HOME"], "/home/test")
+        self.assertEqual(child_env["XDG_CONFIG_HOME"], "/tmp/config")
+        for key in (
+            "DEV_TOKEN",
+            "DATABASE_URL",
+            "RAILWAY_TOKEN",
+            "GITHUB_TOKEN",
+            "OPENAI_API_KEY",
+            "SAFE_CUSTOM",
+        ):
+            self.assertNotIn(key, child_env)
 
     def test_report_json_is_sanitized(self):
         plan = self._plan()
