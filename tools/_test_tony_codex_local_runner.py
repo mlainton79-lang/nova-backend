@@ -450,8 +450,6 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
                 "exec",
                 "--sandbox",
                 "workspace-write",
-                "--ask-for-approval",
-                "never",
                 "-",
             ],
         )
@@ -520,6 +518,49 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
                 returncode=2,
                 stdout="",
                 stderr="safe failure",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=(),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertTrue(report["execution_attempted"])
+        self.assertTrue(report["codex_process_started"])
+        self.assertFalse(report["codex_completed_successfully"])
+        self.assertFalse(report["codex_requires_tty"])
+        self.assertEqual(report["return_code"], 2)
+        self.assertIn("codex_failed", report["final_report"])
+
+    def test_local_codex_cli_unexpected_argument_failure_is_failure(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=2,
+                stdout="",
+                stderr="error: unexpected argument '--ask-for-approval' found",
             )
 
         with patch.dict(

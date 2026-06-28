@@ -428,8 +428,6 @@ def run_local_codex_cli(
         "exec",
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
         "-",
     ]
     result = subprocess.run(
