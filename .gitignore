@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 venv/
 .venv/
+.tony_codex/
 
 # N1.vinted-3A: Railway volume mount + Vinted session state — never commit
 /data/
