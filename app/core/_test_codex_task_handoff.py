@@ -2,6 +2,7 @@
 """Tests for Tony direct Codex handoff metadata store."""
 
 import ast
+import importlib.util
 import os
 import sys
 import unittest
@@ -10,6 +11,20 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from app.core import codex_runner, codex_task_handoff  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_RUNNER_PATH = REPO_ROOT / "tools" / "tony_codex_local_runner.py"
+
+
+def _load_local_runner_parser():
+    spec = importlib.util.spec_from_file_location(
+        "tony_codex_local_runner_contract_test",
+        LOCAL_RUNNER_PATH,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class CodexTaskHandoffTests(unittest.TestCase):
@@ -25,6 +40,7 @@ class CodexTaskHandoffTests(unittest.TestCase):
         )
 
         self.assertTrue(task["task_id"].startswith("codex-"))
+        self.assertEqual(task["requested_by"], "tony")
         self.assertEqual(task["handoff_status"], "pending")
         self.assertEqual(task["status"], "planned")
         self.assertEqual(task["tool_or_area"], "nova-backend local helpers")
@@ -44,6 +60,7 @@ class CodexTaskHandoffTests(unittest.TestCase):
 
         self.assertIsNotNone(fetched)
         self.assertEqual(fetched["task_id"], created["task_id"])
+        self.assertEqual(fetched["requested_by"], "tony")
         self.assertEqual(fetched["handoff_status"], "fetched")
         self.assertEqual(fetched["status"], "ready_for_codex")
         for forbidden in (
@@ -56,6 +73,20 @@ class CodexTaskHandoffTests(unittest.TestCase):
             "raw_output",
         ):
             self.assertNotIn(forbidden, fetched)
+
+    def test_backend_next_task_payload_parses_in_local_runner(self):
+        created = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add a harmless backend-only local helper with tests",
+            tool_or_area="nova-backend local helpers",
+        )
+        fetched = codex_task_handoff.get_next_pending_codex_task()
+        local_runner = _load_local_runner_parser()
+
+        parsed = local_runner.codex_task_plan_from_dict(fetched)
+
+        self.assertEqual(parsed.task_id, created["task_id"])
+        self.assertEqual(parsed.requested_by, "tony")
+        self.assertEqual(parsed.status.value, "ready_for_codex")
 
     def test_backend_report_ingestion_accepts_sanitized_report(self):
         created = codex_task_handoff.create_pending_codex_task(

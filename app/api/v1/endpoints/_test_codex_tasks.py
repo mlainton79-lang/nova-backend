@@ -2,6 +2,7 @@
 """Tests for protected Codex task handoff endpoint handlers."""
 
 import asyncio
+import importlib.util
 import os
 import sys
 import unittest
@@ -13,6 +14,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 
 from app.api.v1.endpoints import codex_tasks  # noqa: E402
 from app.core import codex_task_handoff  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+LOCAL_RUNNER_PATH = REPO_ROOT / "tools" / "tony_codex_local_runner.py"
+
+
+def _load_local_runner_parser():
+    spec = importlib.util.spec_from_file_location(
+        "tony_codex_local_runner_endpoint_contract_test",
+        LOCAL_RUNNER_PATH,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class CodexTaskEndpointTests(unittest.TestCase):
@@ -32,6 +47,7 @@ class CodexTaskEndpointTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertTrue(response["created"])
         self.assertTrue(response["task"]["task_id"].startswith("codex-"))
+        self.assertEqual(response["task"]["requested_by"], "tony")
         self.assertEqual(response["task"]["handoff_status"], "pending")
         self.assertFalse(response["task"]["can_deploy"])
         self.assertFalse(response["task"]["can_push_branch"])
@@ -46,7 +62,12 @@ class CodexTaskEndpointTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertTrue(response["found"])
         self.assertEqual(response["task"]["task_id"], created["task_id"])
+        self.assertEqual(response["task"]["requested_by"], "tony")
         self.assertEqual(response["task"]["handoff_status"], "fetched")
+
+        parsed = _load_local_runner_parser().codex_task_plan_from_dict(response["task"])
+        self.assertEqual(parsed.task_id, created["task_id"])
+        self.assertEqual(parsed.requested_by, "tony")
 
     def test_endpoint_accepts_sanitized_report(self):
         created = codex_task_handoff.create_pending_codex_task(

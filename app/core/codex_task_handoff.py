@@ -107,6 +107,7 @@ def plan_to_safe_dict(plan: CodexTaskPlan) -> dict[str, Any]:
     """Return the safe JSON shape a local runner may fetch."""
     return {
         "task_id": plan.task_id,
+        "requested_by": plan.requested_by,
         "status": plan.status.value,
         "user_goal": plan.user_goal,
         "tool_or_area": plan.tool_or_area,
