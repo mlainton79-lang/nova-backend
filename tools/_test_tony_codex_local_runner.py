@@ -86,6 +86,7 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         args = parser.parse_args([])
 
         self.assertEqual(args.mode, "prompt-only")
+        self.assertFalse(args.i_understand_unsandboxed_local_codex)
 
     def test_local_bridge_can_load_codex_task_plan(self):
         plan = self._plan()
@@ -364,6 +365,168 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertFalse(report["execution_attempted"])
         self.assertIn("not_backend_local_scope", report["final_report"])
 
+    def test_unsandboxed_fallback_refuses_without_env_var(self):
+        plan = self._plan()
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=AssertionError("Unsandboxed Codex must not run without env"),
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                confirm_unsandboxed=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertTrue(report["codex_unsandboxed_requested"])
+        self.assertFalse(report["codex_unsandboxed_allowed"])
+        self.assertFalse(report["codex_unsandboxed_used"])
+        self.assertIn("unsandboxed_env_not_enabled", report["final_report"])
+
+    def test_unsandboxed_fallback_refuses_without_explicit_flag(self):
+        plan = self._plan()
+        with patch.dict(
+            os.environ,
+            {
+                tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1",
+                tony_codex_local_runner.ALLOW_UNSANDBOXED_ENV: "1",
+            },
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=AssertionError("Unsandboxed Codex must not run without flag"),
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                confirm_unsandboxed=False,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertTrue(report["codex_unsandboxed_requested"])
+        self.assertFalse(report["codex_unsandboxed_allowed"])
+        self.assertFalse(report["codex_unsandboxed_used"])
+        self.assertIn("missing_explicit_unsandboxed_flag", report["final_report"])
+
+    def test_unsandboxed_fallback_still_refuses_main_master_and_dirty_tree(self):
+        plan = self._plan()
+        scenarios = (
+            ("main", True, "main_branch_refused"),
+            ("master", True, "master_branch_refused"),
+            ("feature/codex-task", False, "dirty_tree_refused"),
+        )
+        for branch, clean, reason in scenarios:
+            with self.subTest(reason=reason), patch.dict(
+                os.environ,
+                {
+                    tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1",
+                    tony_codex_local_runner.ALLOW_UNSANDBOXED_ENV: "1",
+                },
+                clear=True,
+            ), patch.object(tony_codex_local_runner, "current_branch", return_value=branch), patch.object(
+                tony_codex_local_runner,
+                "working_tree_is_clean",
+                return_value=clean,
+            ), patch.object(
+                tony_codex_local_runner.subprocess,
+                "run",
+                side_effect=AssertionError("Unsafe unsandboxed Codex must not run"),
+            ):
+                report = tony_codex_local_runner.run_local_codex_cli(
+                    plan,
+                    confirm_execution=True,
+                    confirm_unsandboxed=True,
+                    allow_dirty=False,
+                    allow_main_branch=False,
+                    codex_bin="codex",
+                )
+
+            self.assertFalse(report["execution_attempted"])
+            self.assertTrue(report["codex_unsandboxed_requested"])
+            self.assertIn(reason, report["final_report"])
+
+    def test_unsandboxed_fallback_refuses_commit_push_and_deploy_scopes(self):
+        scenarios = (
+            (replace(self._plan(), can_commit=True), "task_can_commit_blocked"),
+            (replace(self._plan(), can_push_branch=True), "task_can_push_branch_blocked"),
+            (replace(self._plan(), can_deploy=True), "task_can_deploy_blocked"),
+        )
+        for plan, reason in scenarios:
+            with self.subTest(reason=reason), patch.dict(
+                os.environ,
+                {
+                    tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1",
+                    tony_codex_local_runner.ALLOW_UNSANDBOXED_ENV: "1",
+                },
+                clear=True,
+            ), patch.object(
+                tony_codex_local_runner.subprocess,
+                "run",
+                side_effect=AssertionError("Unsafe unsandboxed Codex must not run"),
+            ):
+                report = tony_codex_local_runner.run_local_codex_cli(
+                    plan,
+                    confirm_execution=True,
+                    confirm_unsandboxed=True,
+                    allow_dirty=True,
+                    allow_main_branch=True,
+                    codex_bin="codex",
+                )
+
+            self.assertFalse(report["execution_attempted"])
+            self.assertTrue(report["codex_unsandboxed_requested"])
+            self.assertIn(reason, report["final_report"])
+
+    def test_unsandboxed_fallback_refuses_unsafe_scope_terms(self):
+        plan = replace(
+            self._plan(),
+            allowed_files_or_areas=("backend local helper and Railway variables",),
+        )
+        with patch.dict(
+            os.environ,
+            {
+                tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1",
+                tony_codex_local_runner.ALLOW_UNSANDBOXED_ENV: "1",
+            },
+            clear=True,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=AssertionError("Unsafe unsandboxed Codex must not run"),
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                confirm_unsandboxed=True,
+                allow_dirty=True,
+                allow_main_branch=True,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertTrue(report["codex_unsandboxed_requested"])
+        self.assertIn("dangerous_scope:railway variable", report["final_report"])
+
     def test_refusal_report_is_written_by_cli_main(self):
         plan = self._plan()
         plan_path = self._write_plan_json(plan)
@@ -467,11 +630,136 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertTrue(report["codex_task_completed_successfully"])
         self.assertFalse(report["codex_environment_blocked"])
         self.assertFalse(report["codex_requires_tty"])
+        self.assertFalse(report["codex_unsandboxed_requested"])
+        self.assertFalse(report["codex_unsandboxed_allowed"])
+        self.assertFalse(report["codex_unsandboxed_used"])
         self.assertFalse(report["unsafe_changed_files_detected"])
         self.assertEqual(report["return_code"], 0)
         self.assertEqual(report["deployment_summary"], "not_attempted")
         self.assertFalse(report["secrets_exposed"])
         self.assertEqual(report["changed_files_summary"], ("app/core/example.py",))
+
+    def test_unsandboxed_fallback_allowed_path_uses_supported_command_shape(self):
+        plan = self._plan()
+        calls = []
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            calls.append(
+                {
+                    "args": args,
+                    "input_present": bool(input),
+                    "env_keys": tuple(sorted(env)),
+                    "capture_output": capture_output,
+                    "check": check,
+                }
+            )
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="safe mocked codex output",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {
+                tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1",
+                tony_codex_local_runner.ALLOW_UNSANDBOXED_ENV: "1",
+                "PATH": "/usr/bin",
+                "DEV_TOKEN": "test-token-value",
+                "GITHUB_TOKEN": "github-token",
+                "DATABASE_URL": "postgres://example",
+            },
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=("app/core/example.py",),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                confirm_unsandboxed=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0]["args"],
+            [
+                "codex",
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-",
+            ],
+        )
+        self.assertTrue(calls[0]["input_present"])
+        self.assertNotIn("DEV_TOKEN", calls[0]["env_keys"])
+        self.assertNotIn("GITHUB_TOKEN", calls[0]["env_keys"])
+        self.assertNotIn("DATABASE_URL", calls[0]["env_keys"])
+        self.assertTrue(report["execution_attempted"])
+        self.assertTrue(report["execution_allowed"])
+        self.assertTrue(report["codex_process_started"])
+        self.assertTrue(report["codex_unsandboxed_requested"])
+        self.assertTrue(report["codex_unsandboxed_allowed"])
+        self.assertTrue(report["codex_unsandboxed_used"])
+        self.assertTrue(report["codex_task_completed_successfully"])
+        self.assertFalse(report["unsafe_changed_files_detected"])
+
+    def test_unsandboxed_fallback_keeps_changed_file_validation_active(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Done.",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {
+                tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1",
+                tony_codex_local_runner.ALLOW_UNSANDBOXED_ENV: "1",
+            },
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=("app/api/v1/router.py",),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                confirm_unsandboxed=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertTrue(report["codex_unsandboxed_used"])
+        self.assertTrue(report["unsafe_changed_files_detected"])
+        self.assertFalse(report["codex_task_completed_successfully"])
+        self.assertIn("unsafe_changed_files_detected", report["final_report"])
 
     def test_local_codex_cli_tty_failure_is_classified(self):
         plan = self._plan()

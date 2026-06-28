@@ -34,6 +34,7 @@ from app.core.codex_tasks import (  # noqa: E402
 DEFAULT_MODE = "prompt-only"
 SAFE_OUTPUT_DIR = REPO_ROOT / ".tony_codex"
 ALLOW_EXECUTION_ENV = "TONY_CODEX_LOCAL_RUNNER_ALLOW_EXECUTION"
+ALLOW_UNSANDBOXED_ENV = "TONY_CODEX_LOCAL_RUNNER_ALLOW_UNSANDBOXED_CODEX"
 
 _DANGEROUS_TERMS = (
     "secret",
@@ -382,6 +383,9 @@ def build_report(
     codex_task_completed_successfully: bool = False,
     codex_environment_blocked: bool = False,
     codex_requires_tty: bool = False,
+    codex_unsandboxed_requested: bool = False,
+    codex_unsandboxed_allowed: bool = False,
+    codex_unsandboxed_used: bool = False,
     unsafe_changed_files_detected: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -401,6 +405,9 @@ def build_report(
         "codex_task_completed_successfully": codex_task_completed_successfully,
         "codex_environment_blocked": codex_environment_blocked,
         "codex_requires_tty": codex_requires_tty,
+        "codex_unsandboxed_requested": codex_unsandboxed_requested,
+        "codex_unsandboxed_allowed": codex_unsandboxed_allowed,
+        "codex_unsandboxed_used": codex_unsandboxed_used,
         "unsafe_changed_files_detected": unsafe_changed_files_detected,
         "final_report": _safe_text(final_report),
     }
@@ -448,6 +455,41 @@ def validate_local_execution_guards(
     return None
 
 
+def validate_unsandboxed_codex_guards(
+    plan: CodexTaskPlan,
+    confirm_unsandboxed: bool,
+) -> str | None:
+    """Validate the extra guards for unsandboxed phone/proot Codex execution."""
+    if os.environ.get(ALLOW_UNSANDBOXED_ENV) != "1":
+        return "unsandboxed_env_not_enabled"
+    if not confirm_unsandboxed:
+        return "missing_explicit_unsandboxed_flag"
+    if not plan.requires_matthew_approval_before_deploy:
+        return "deploy_approval_requirement_missing"
+    return None
+
+
+def build_codex_exec_command(
+    codex_bin: str,
+    use_unsandboxed: bool,
+) -> list[str]:
+    """Return the supported non-interactive Codex exec command shape."""
+    if use_unsandboxed:
+        return [
+            codex_bin,
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-",
+        ]
+    return [
+        codex_bin,
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "-",
+    ]
+
+
 def run_prompt_only(plan: CodexTaskPlan, write_prompt: bool) -> dict[str, Any]:
     decision = can_runner_execute_task(plan, CodexRunnerMode.PROMPT_ONLY)
     prompt = build_codex_prompt_from_task(plan)
@@ -489,7 +531,11 @@ def run_local_codex_cli(
     allow_dirty: bool,
     allow_main_branch: bool,
     codex_bin: str,
+    confirm_unsandboxed: bool = False,
 ) -> dict[str, Any]:
+    unsandboxed_requested = (
+        confirm_unsandboxed or os.environ.get(ALLOW_UNSANDBOXED_ENV) == "1"
+    )
     refusal = validate_local_execution_guards(
         plan=plan,
         confirm_execution=confirm_execution,
@@ -504,16 +550,32 @@ def run_local_codex_cli(
             execution_allowed=False,
             final_report=f"Local Codex CLI refused before execution: {refusal}.",
             tests_summary=("local_codex_cli_refused",),
+            codex_unsandboxed_requested=unsandboxed_requested,
         )
+    if unsandboxed_requested:
+        unsandboxed_refusal = validate_unsandboxed_codex_guards(
+            plan=plan,
+            confirm_unsandboxed=confirm_unsandboxed,
+        )
+        if unsandboxed_refusal:
+            return build_report(
+                plan=plan,
+                mode="local-codex-cli",
+                execution_attempted=False,
+                execution_allowed=False,
+                final_report=(
+                    "Local Codex CLI refused unsandboxed fallback before execution: "
+                    f"{unsandboxed_refusal}."
+                ),
+                tests_summary=("local_codex_cli_refused",),
+                codex_unsandboxed_requested=True,
+            )
 
     prompt = build_codex_prompt_from_task(plan)
-    command = [
-        codex_bin,
-        "exec",
-        "--sandbox",
-        "workspace-write",
-        "-",
-    ]
+    command = build_codex_exec_command(
+        codex_bin=codex_bin,
+        use_unsandboxed=unsandboxed_requested,
+    )
     result = subprocess.run(
         command,
         input=prompt,
@@ -578,6 +640,9 @@ def run_local_codex_cli(
         codex_task_completed_successfully=codex_task_completed_successfully,
         codex_environment_blocked=codex_environment_blocked,
         codex_requires_tty=codex_requires_tty,
+        codex_unsandboxed_requested=unsandboxed_requested,
+        codex_unsandboxed_allowed=unsandboxed_requested,
+        codex_unsandboxed_used=unsandboxed_requested,
         unsafe_changed_files_detected=unsafe_files_detected,
     )
 
@@ -595,6 +660,7 @@ def run_bridge(args: argparse.Namespace) -> dict[str, Any]:
         report = run_local_codex_cli(
             plan=plan,
             confirm_execution=args.i_understand_local_code_execution,
+            confirm_unsandboxed=args.i_understand_unsandboxed_local_codex,
             allow_dirty=args.allow_dirty,
             allow_main_branch=args.allow_main_branch,
             codex_bin=args.codex_bin,
@@ -636,6 +702,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--allow-main-branch", action="store_true")
     parser.add_argument("--i-understand-local-code-execution", action="store_true")
+    parser.add_argument("--i-understand-unsandboxed-local-codex", action="store_true")
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--fetch-from-nova", action="store_true")
     parser.add_argument("--report-to-nova", action="store_true")
