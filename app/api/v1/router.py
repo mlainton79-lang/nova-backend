@@ -92,6 +92,8 @@ from app.api.v1.endpoints import evals
 router.include_router(evals.router, tags=["evals"])
 from app.api.v1.endpoints import tasks
 router.include_router(tasks.router, tags=["tasks"])
+from app.api.v1.endpoints import codex_tasks
+router.include_router(codex_tasks.router, tags=["codex_tasks"])
 from app.api.v1.endpoints import skills
 router.include_router(skills.router, tags=["skills"])
 from app.api.v1.endpoints import video

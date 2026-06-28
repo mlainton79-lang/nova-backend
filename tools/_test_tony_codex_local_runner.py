@@ -65,6 +65,22 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.addCleanup(lambda: os.path.exists(handle.name) and os.unlink(handle.name))
         return handle.name
 
+    def _plan_json_dict(self, plan):
+        return json.loads(Path(self._write_plan_json(plan)).read_text(encoding="utf-8"))
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
     def test_prompt_only_is_default_mode(self):
         parser = tony_codex_local_runner.build_parser()
         args = parser.parse_args([])
@@ -272,6 +288,104 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertIn("[redacted unsafe output]", encoded)
         self.assertNotIn("database_url material", encoded)
         self.assertFalse(report["secrets_exposed"])
+
+    def test_local_runner_can_fetch_mocked_plan_without_printing_token(self):
+        plan = self._plan()
+        payload = {"ok": True, "found": True, "task": self._plan_json_dict(plan)}
+        captured_requests = []
+
+        def fake_urlopen(request, timeout):
+            captured_requests.append(request)
+            return self._FakeResponse(payload)
+
+        with patch.dict(os.environ, {"DEV_TOKEN": "test-token-value"}, clear=True), patch.object(
+            tony_codex_local_runner.urllib.request,
+            "urlopen",
+            side_effect=fake_urlopen,
+        ), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            fetched = tony_codex_local_runner.fetch_task_from_nova(
+                "https://nova.example",
+                "DEV_TOKEN",
+            )
+
+        self.assertEqual(fetched.task_id, plan.task_id)
+        self.assertEqual(captured_requests[0].full_url, "https://nova.example/api/v1/codex-tasks/next")
+        self.assertEqual(stdout.getvalue(), "")
+
+    def test_local_runner_can_post_mocked_sanitized_report(self):
+        plan = self._plan()
+        captured_bodies = []
+
+        def fake_urlopen(request, timeout):
+            captured_bodies.append(json.loads(request.data.decode("utf-8")))
+            return self._FakeResponse({"ok": True, "accepted": True})
+
+        report = tony_codex_local_runner.build_report(
+            plan=plan,
+            mode="prompt-only",
+            execution_attempted=False,
+            execution_allowed=False,
+            final_report="Prompt-only report prepared.",
+            tests_summary=("prompt_generated",),
+        )
+        with patch.dict(os.environ, {"DEV_TOKEN": "test-token-value"}, clear=True), patch.object(
+            tony_codex_local_runner.urllib.request,
+            "urlopen",
+            side_effect=fake_urlopen,
+        ), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            response = tony_codex_local_runner.post_report_to_nova(
+                "https://nova.example",
+                "DEV_TOKEN",
+                plan.task_id,
+                report,
+            )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(captured_bodies[0]["status"], "ready_to_report")
+        self.assertFalse(captured_bodies[0]["codex_execution_invoked"])
+        self.assertFalse(captured_bodies[0]["external_apis_called"])
+        self.assertFalse(captured_bodies[0]["github_mutation_performed"])
+        self.assertFalse(captured_bodies[0]["railway_mutation_performed"])
+        self.assertEqual(stdout.getvalue(), "")
+
+    def test_fetch_prompt_only_report_to_nova_uses_mocked_network_and_no_codex(self):
+        plan = self._plan()
+        calls = []
+
+        def fake_urlopen(request, timeout):
+            calls.append(request)
+            if request.get_method() == "GET":
+                return self._FakeResponse(
+                    {"ok": True, "found": True, "task": self._plan_json_dict(plan)}
+                )
+            return self._FakeResponse({"ok": True, "accepted": True})
+
+        args = tony_codex_local_runner.build_parser().parse_args(
+            [
+                "--fetch-from-nova",
+                "--report-to-nova",
+                "--nova-base-url",
+                "https://nova.example",
+                "--mode",
+                "prompt-only",
+                "--write-prompt",
+            ]
+        )
+        with patch.dict(os.environ, {"DEV_TOKEN": "test-token-value"}, clear=True), patch.object(
+            tony_codex_local_runner.urllib.request,
+            "urlopen",
+            side_effect=fake_urlopen,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=AssertionError("Codex must not run in prompt-only"),
+        ):
+            report = tony_codex_local_runner.run_bridge(args)
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(report["nova_report_posted"])
+        self.assertFalse(report["execution_attempted"])
+        self.assertEqual(report["mode"], "prompt-only")
 
     def test_backend_runner_remains_disabled_by_default(self):
         self.assertEqual(

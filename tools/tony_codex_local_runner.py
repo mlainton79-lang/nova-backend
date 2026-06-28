@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -91,9 +92,8 @@ def _load_json(path: str | None) -> dict[str, Any]:
     return json.load(sys.stdin)
 
 
-def load_codex_task_plan(path: str | None = None) -> CodexTaskPlan:
-    """Load a CodexTaskPlan from JSON file or stdin."""
-    data = _load_json(path)
+def codex_task_plan_from_dict(data: dict[str, Any]) -> CodexTaskPlan:
+    """Build a CodexTaskPlan from a safe JSON object."""
     try:
         status = CodexTaskStatus(data.get("status", CodexTaskStatus.PLANNED.value))
         return CodexTaskPlan(
@@ -119,6 +119,67 @@ def load_codex_task_plan(path: str | None = None) -> CodexTaskPlan:
         )
     except KeyError as error:
         raise ValueError(f"missing_plan_field:{error.args[0]}") from error
+
+
+def load_codex_task_plan(path: str | None = None) -> CodexTaskPlan:
+    """Load a CodexTaskPlan from JSON file or stdin."""
+    return codex_task_plan_from_dict(_load_json(path))
+
+
+def _auth_header_from_env(auth_token_env: str) -> str:
+    token = os.environ.get(auth_token_env, "").strip()
+    if not token:
+        raise ValueError("auth_token_env_not_set")
+    return f"Bearer {token}"
+
+
+def fetch_task_from_nova(base_url: str, auth_token_env: str) -> CodexTaskPlan:
+    """Fetch one safe CodexTaskPlan from Nova without printing credentials."""
+    url = base_url.rstrip("/") + "/api/v1/codex-tasks/next"
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": _auth_header_from_env(auth_token_env)},
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not payload.get("ok") or not payload.get("found") or not payload.get("task"):
+        raise ValueError("no_codex_task_available")
+    return codex_task_plan_from_dict(payload["task"])
+
+
+def post_report_to_nova(
+    base_url: str,
+    auth_token_env: str,
+    task_id: str,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Post sanitized local-runner report metadata back to Nova."""
+    safe_report = {
+        "status": "ready_to_report",
+        "changed_files_summary": report.get("changed_files_summary", ()),
+        "tests_summary": report.get("tests_summary", ()),
+        "deployment_summary": report.get("deployment_summary", "not_attempted"),
+        "final_report": report.get("final_report", "Local prompt-only report prepared."),
+        "codex_execution_invoked": bool(report.get("execution_attempted", False)),
+        "external_apis_called": False,
+        "github_mutation_performed": False,
+        "railway_mutation_performed": False,
+        "secrets_exposed": bool(report.get("secrets_exposed", False)),
+    }
+    body = json.dumps(safe_report).encode("utf-8")
+    url = base_url.rstrip("/") + f"/api/v1/codex-tasks/{task_id}/report"
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": _auth_header_from_env(auth_token_env),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def _plan_runtime_text(plan: CodexTaskPlan) -> str:
@@ -340,27 +401,41 @@ def run_local_codex_cli(
 
 
 def run_bridge(args: argparse.Namespace) -> dict[str, Any]:
-    plan = load_codex_task_plan(args.plan)
+    if args.fetch_from_nova:
+        plan = fetch_task_from_nova(args.nova_base_url, args.auth_token_env)
+    else:
+        plan = load_codex_task_plan(args.plan)
     if args.mode == "prompt-only":
-        return run_prompt_only(plan, write_prompt=args.write_prompt)
-    if args.mode == "dry-run":
-        return run_dry_run(plan)
-    if args.mode == "local-codex-cli":
-        return run_local_codex_cli(
+        report = run_prompt_only(plan, write_prompt=args.write_prompt)
+    elif args.mode == "dry-run":
+        report = run_dry_run(plan)
+    elif args.mode == "local-codex-cli":
+        report = run_local_codex_cli(
             plan=plan,
             confirm_execution=args.i_understand_local_code_execution,
             allow_dirty=args.allow_dirty,
             allow_main_branch=args.allow_main_branch,
             codex_bin=args.codex_bin,
         )
-    return build_report(
-        plan=plan,
-        mode=args.mode,
-        execution_attempted=False,
-        execution_allowed=False,
-        final_report="Unknown mode refused before execution.",
-        tests_summary=("unknown_mode_refused",),
-    )
+    else:
+        report = build_report(
+            plan=plan,
+            mode=args.mode,
+            execution_attempted=False,
+            execution_allowed=False,
+            final_report="Unknown mode refused before execution.",
+            tests_summary=("unknown_mode_refused",),
+        )
+
+    if args.report_to_nova:
+        post_response = post_report_to_nova(
+            args.nova_base_url,
+            args.auth_token_env,
+            plan.task_id,
+            report,
+        )
+        report["nova_report_posted"] = bool(post_response.get("ok"))
+    return report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -380,6 +455,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-main-branch", action="store_true")
     parser.add_argument("--i-understand-local-code-execution", action="store_true")
     parser.add_argument("--codex-bin", default="codex")
+    parser.add_argument("--fetch-from-nova", action="store_true")
+    parser.add_argument("--report-to-nova", action="store_true")
+    parser.add_argument(
+        "--nova-base-url",
+        default="https://web-production-be42b.up.railway.app",
+    )
+    parser.add_argument("--auth-token-env", default="DEV_TOKEN")
     parser.add_argument(
         "--report",
         help="Optional report output path. Defaults to .tony_codex/<task_id>-report.json.",
