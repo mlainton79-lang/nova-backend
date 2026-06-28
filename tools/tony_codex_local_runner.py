@@ -296,10 +296,43 @@ def working_tree_is_clean() -> bool:
 
 
 def changed_files_summary() -> tuple[str, ...]:
-    result = _run_git(["diff", "--name-only"])
+    result = _run_git(["status", "--short", "--untracked-files=all"])
     if result.returncode != 0:
         return ()
-    return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
+    changed: list[str] = []
+    seen: set[str] = set()
+    for raw_line in result.stdout.splitlines():
+        path = _changed_path_from_git_status_line(raw_line)
+        if not path or _ignored_changed_path(path) or path in seen:
+            continue
+        changed.append(path)
+        seen.add(path)
+    return tuple(changed)
+
+
+def _changed_path_from_git_status_line(line: str) -> str | None:
+    if len(line) < 4:
+        return None
+    path = line[3:].strip()
+    if " -> " in path:
+        path = path.rsplit(" -> ", 1)[1].strip()
+    return path.strip('"') or None
+
+
+def _ignored_changed_path(path: str) -> bool:
+    raw = path.strip()
+    normalized = raw.lstrip("./")
+    lowered = normalized.lower()
+    parts = lowered.split("/")
+    return (
+        raw.lower().startswith(".git/")
+        or raw.lower().startswith(".tony_codex/")
+        or lowered.startswith("git/")
+        or lowered.startswith("tony_codex/")
+        or "__pycache__" in parts
+        or "pycache" in parts
+        or lowered.endswith(".pyc")
+    )
 
 
 def build_codex_child_env() -> dict[str, str]:

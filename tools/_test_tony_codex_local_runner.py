@@ -130,6 +130,58 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertFalse(report["codex_process_started"])
         self.assertFalse(report["codex_completed_successfully"])
 
+    def test_changed_files_summary_includes_untracked_files(self):
+        def fake_git(args):
+            self.assertEqual(args, ["status", "--short", "--untracked-files=all"])
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout=(
+                    "?? app/core/tony_self_build_report.py\n"
+                    "?? .tony_codex/example-report.json\n"
+                    "?? app/core/__pycache__/ignored.pyc\n"
+                ),
+                stderr="",
+            )
+
+        with patch.object(tony_codex_local_runner, "_run_git", side_effect=fake_git):
+            changed = tony_codex_local_runner.changed_files_summary()
+
+        self.assertEqual(changed, ("app/core/tony_self_build_report.py",))
+
+    def test_changed_files_summary_includes_modified_tracked_files(self):
+        def fake_git(args):
+            self.assertEqual(args, ["status", "--short", "--untracked-files=all"])
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout=" M tools/tony_codex_local_runner.py\nM  app/core/codex_tasks.py\n",
+                stderr="",
+            )
+
+        with patch.object(tony_codex_local_runner, "_run_git", side_effect=fake_git):
+            changed = tony_codex_local_runner.changed_files_summary()
+
+        self.assertEqual(
+            changed,
+            ("tools/tony_codex_local_runner.py", "app/core/codex_tasks.py"),
+        )
+
+    def test_changed_files_summary_uses_new_path_for_renames(self):
+        def fake_git(args):
+            self.assertEqual(args, ["status", "--short", "--untracked-files=all"])
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="R  app/core/old_name.py -> app/core/new_name.py\n",
+                stderr="",
+            )
+
+        with patch.object(tony_codex_local_runner, "_run_git", side_effect=fake_git):
+            changed = tony_codex_local_runner.changed_files_summary()
+
+        self.assertEqual(changed, ("app/core/new_name.py",))
+
     def test_local_codex_cli_refuses_without_env_var(self):
         plan = self._plan()
         with patch.dict(os.environ, {}, clear=True), patch.object(
@@ -760,6 +812,107 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertTrue(report["unsafe_changed_files_detected"])
         self.assertFalse(report["codex_task_completed_successfully"])
         self.assertIn("unsafe_changed_files_detected", report["final_report"])
+
+    def test_local_codex_cli_treats_allowed_untracked_app_core_files_as_changes(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Done.",
+                stderr="",
+            )
+
+        def fake_git(args):
+            self.assertEqual(args, ["status", "--short", "--untracked-files=all"])
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="?? app/core/tony_self_build_report.py\n",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "_run_git",
+            side_effect=fake_git,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertEqual(
+            report["changed_files_summary"],
+            ("app/core/tony_self_build_report.py",),
+        )
+        self.assertFalse(report["unsafe_changed_files_detected"])
+        self.assertTrue(report["codex_task_completed_successfully"])
+
+    def test_local_codex_cli_flags_untracked_files_outside_allowed_scope(self):
+        plan = self._plan()
+
+        def fake_codex_run(args, input, cwd, env, text, capture_output, check):
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Done.",
+                stderr="",
+            )
+
+        def fake_git(args):
+            self.assertEqual(args, ["status", "--short", "--untracked-files=all"])
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="?? app/api/v1/router.py\n",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "_run_git",
+            side_effect=fake_git,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertEqual(report["changed_files_summary"], ("app/api/v1/router.py",))
+        self.assertTrue(report["unsafe_changed_files_detected"])
+        self.assertFalse(report["codex_task_completed_successfully"])
 
     def test_local_codex_cli_tty_failure_is_classified(self):
         plan = self._plan()
