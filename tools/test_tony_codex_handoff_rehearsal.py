@@ -141,7 +141,7 @@ class TonyCodexHandoffRehearsalTests(unittest.TestCase):
             self.assertNotIn("import requests", source)
             self.assertNotIn("import httpx", source)
             self.assertNotIn("railway up", source)
-            self.assertNotIn("git push", source)
+            self.assertNotIn('["git", "push"', source)
             self.assertNotIn("create_pending_approval_once", source)
             self.assertNotIn("send_user_notification", source)
 

@@ -201,6 +201,42 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertFalse(report["execution_attempted"])
         self.assertIn("task_can_push_branch_blocked", report["final_report"])
 
+    def test_local_codex_cli_refuses_when_can_commit_true(self):
+        plan = replace(self._plan(), can_commit=True)
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=True,
+                allow_main_branch=True,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertIn("task_can_commit_blocked", report["final_report"])
+
+    def test_local_codex_cli_refuses_when_can_run_tests_false(self):
+        plan = replace(self._plan(), can_run_tests=False)
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=True,
+                allow_main_branch=True,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertIn("task_cannot_run_tests", report["final_report"])
+
     def test_local_codex_cli_refuses_dangerous_scope(self):
         plan = replace(
             self._plan(),
@@ -248,6 +284,32 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
         self.assertFalse(report["execution_attempted"])
         self.assertIn("main_branch_refused", report["final_report"])
 
+    def test_local_codex_cli_refuses_master_branch_by_default(self):
+        plan = self._plan()
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="master"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=AssertionError("Codex must not run on master by default"),
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=True,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertIn("master_branch_refused", report["final_report"])
+
     def test_local_codex_cli_refuses_dirty_tree_by_default(self):
         plan = self._plan()
         with patch.dict(
@@ -273,6 +335,119 @@ class TonyCodexLocalRunnerTests(unittest.TestCase):
 
         self.assertFalse(report["execution_attempted"])
         self.assertIn("dirty_tree_refused", report["final_report"])
+
+    def test_local_codex_cli_refuses_non_backend_local_scope(self):
+        plan = replace(
+            self._plan(),
+            user_goal="Add a harmless note helper",
+            tool_or_area="general desktop helper",
+            intended_change_summary="Prepare a local note helper",
+            allowed_files_or_areas=("notes only",),
+        )
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=True,
+                allow_main_branch=True,
+                codex_bin="codex",
+            )
+
+        self.assertFalse(report["execution_attempted"])
+        self.assertIn("not_backend_local_scope", report["final_report"])
+
+    def test_refusal_report_is_written_by_cli_main(self):
+        plan = self._plan()
+        plan_path = self._write_plan_json(plan)
+        report_file = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
+        report_file.close()
+        self.addCleanup(lambda: os.path.exists(report_file.name) and os.unlink(report_file.name))
+
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=AssertionError("Codex must not run for refused task"),
+        ), patch("sys.stdout", new_callable=io.StringIO):
+            exit_code = tony_codex_local_runner.main(
+                [
+                    "--plan",
+                    plan_path,
+                    "--mode",
+                    "local-codex-cli",
+                    "--report",
+                    report_file.name,
+                ]
+            )
+
+        report = json.loads(Path(report_file.name).read_text(encoding="utf-8"))
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["mode"], "local-codex-cli")
+        self.assertFalse(report["execution_attempted"])
+        self.assertFalse(report["execution_allowed"])
+        self.assertIn("execution_env_not_enabled", report["final_report"])
+
+    def test_local_codex_cli_allowed_path_is_mocked_only(self):
+        plan = self._plan()
+        calls = []
+
+        def fake_codex_run(args, input, cwd, text, capture_output, check):
+            calls.append(
+                {
+                    "args": args,
+                    "input_present": bool(input),
+                    "cwd": str(cwd),
+                    "text": text,
+                    "capture_output": capture_output,
+                    "check": check,
+                }
+            )
+            return tony_codex_local_runner.subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="safe mocked codex output",
+                stderr="",
+            )
+
+        with patch.dict(
+            os.environ,
+            {tony_codex_local_runner.ALLOW_EXECUTION_ENV: "1"},
+            clear=True,
+        ), patch.object(tony_codex_local_runner, "current_branch", return_value="feature/codex-task"), patch.object(
+            tony_codex_local_runner,
+            "working_tree_is_clean",
+            return_value=True,
+        ), patch.object(
+            tony_codex_local_runner,
+            "changed_files_summary",
+            return_value=("tools/example.py",),
+        ), patch.object(
+            tony_codex_local_runner.subprocess,
+            "run",
+            side_effect=fake_codex_run,
+        ):
+            report = tony_codex_local_runner.run_local_codex_cli(
+                plan,
+                confirm_execution=True,
+                allow_dirty=False,
+                allow_main_branch=False,
+                codex_bin="codex",
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["args"], ["codex"])
+        self.assertTrue(calls[0]["input_present"])
+        self.assertTrue(calls[0]["capture_output"])
+        self.assertFalse(calls[0]["check"])
+        self.assertTrue(report["execution_attempted"])
+        self.assertTrue(report["execution_allowed"])
+        self.assertEqual(report["return_code"], 0)
+        self.assertEqual(report["deployment_summary"], "not_attempted")
+        self.assertFalse(report["secrets_exposed"])
+        self.assertEqual(report["changed_files_summary"], ("tools/example.py",))
 
     def test_report_json_is_sanitized(self):
         plan = self._plan()

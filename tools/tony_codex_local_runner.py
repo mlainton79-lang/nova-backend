@@ -38,24 +38,48 @@ ALLOW_EXECUTION_ENV = "TONY_CODEX_LOCAL_RUNNER_ALLOW_EXECUTION"
 _DANGEROUS_TERMS = (
     "secret",
     "credential",
+    "github push",
+    "git push",
+    "github mutation",
+    "deployment",
+    "deploy",
+    "railway mutation",
     "railway variable",
     "environment variable",
     "production database",
+    "production db",
     "approval bypass",
     "bypass approval",
     "disable safety",
+    "safety gate",
     "disable urgent gate",
+    "notification sending",
+    "send notification",
     "gmail oauth",
+    "oauth material",
     "gmail session",
+    "gmail",
+    "vinted",
     "vinted session",
     "oauth session",
     "browser session",
+    "browser automation",
     "browser automation against real accounts",
     "payment",
+    "order handling",
     "bank transfer",
     "buyer message",
     "post listing",
     "buy postage",
+)
+
+_BACKEND_LOCAL_MARKERS = (
+    "backend",
+    "nova-backend",
+    "app/core",
+    "tools",
+    "local helper",
+    "local tooling",
 )
 
 _PRIVATE_OUTPUT_PATTERNS = (
@@ -190,8 +214,6 @@ def _plan_runtime_text(plan: CodexTaskPlan) -> str:
             plan.intended_change_summary,
             plan.autonomy_scope,
             " ".join(plan.allowed_files_or_areas),
-            " ".join(plan.validation_requirements),
-            " ".join(plan.reporting_requirements),
         )
     ).lower()
 
@@ -201,6 +223,13 @@ def _dangerous_scope_reason(plan: CodexTaskPlan) -> str | None:
     for term in _DANGEROUS_TERMS:
         if term in text:
             return f"dangerous_scope:{term}"
+    return None
+
+
+def _backend_local_scope_reason(plan: CodexTaskPlan) -> str | None:
+    text = _plan_runtime_text(plan)
+    if not any(marker in text for marker in _BACKEND_LOCAL_MARKERS):
+        return "not_backend_local_scope"
     return None
 
 
@@ -301,6 +330,10 @@ def validate_local_execution_guards(
         return "missing_explicit_local_execution_flag"
     if not plan.can_edit_code:
         return "task_cannot_edit_code"
+    if not plan.can_run_tests:
+        return "task_cannot_run_tests"
+    if plan.can_commit:
+        return "task_can_commit_blocked"
     if plan.can_deploy:
         return "task_can_deploy_blocked"
     if plan.can_push_branch:
@@ -308,9 +341,12 @@ def validate_local_execution_guards(
     dangerous_reason = _dangerous_scope_reason(plan)
     if dangerous_reason:
         return dangerous_reason
+    backend_scope_reason = _backend_local_scope_reason(plan)
+    if backend_scope_reason:
+        return backend_scope_reason
     branch = current_branch()
-    if branch == "main" and not allow_main_branch:
-        return "main_branch_refused"
+    if branch in ("main", "master") and not allow_main_branch:
+        return f"{branch}_branch_refused"
     if not working_tree_is_clean() and not allow_dirty:
         return "dirty_tree_refused"
     return None
