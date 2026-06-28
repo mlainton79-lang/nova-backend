@@ -98,6 +98,12 @@ _PRIVATE_OUTPUT_PATTERNS = (
     "grant_id",
 )
 
+_TTY_ERROR_PATTERNS = (
+    "stdin is not a terminal",
+    "not a terminal",
+    "requires a tty",
+)
+
 
 def _tuple(value: Any) -> tuple[str, ...]:
     if value is None:
@@ -294,6 +300,9 @@ def build_report(
     changed_files: tuple[str, ...] = (),
     tests_summary: tuple[str, ...] = (),
     prompt_path: str | None = None,
+    codex_process_started: bool = False,
+    codex_completed_successfully: bool = False,
+    codex_requires_tty: bool = False,
 ) -> dict[str, Any]:
     return {
         "task_id": plan.task_id,
@@ -306,6 +315,9 @@ def build_report(
         "deployment_summary": "not_attempted",
         "secrets_exposed": False,
         "prompt_path": prompt_path,
+        "codex_process_started": codex_process_started,
+        "codex_completed_successfully": codex_completed_successfully,
+        "codex_requires_tty": codex_requires_tty,
         "final_report": _safe_text(final_report),
     }
 
@@ -411,8 +423,17 @@ def run_local_codex_cli(
         )
 
     prompt = build_codex_prompt_from_task(plan)
+    command = [
+        codex_bin,
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "-",
+    ]
     result = subprocess.run(
-        [codex_bin],
+        command,
         input=prompt,
         cwd=REPO_ROOT,
         text=True,
@@ -421,6 +442,16 @@ def run_local_codex_cli(
     )
     stdout_summary = _safe_text(result.stdout)
     stderr_summary = _safe_text(result.stderr)
+    combined_output = f"{result.stdout}\n{result.stderr}".lower()
+    codex_requires_tty = any(pattern in combined_output for pattern in _TTY_ERROR_PATTERNS)
+    codex_completed_successfully = result.returncode == 0 and not codex_requires_tty
+    status_summary = (
+        "codex_cli_requires_tty"
+        if codex_requires_tty
+        else "codex_completed_successfully"
+        if codex_completed_successfully
+        else "codex_failed"
+    )
     return build_report(
         plan=plan,
         mode="local-codex-cli",
@@ -428,11 +459,14 @@ def run_local_codex_cli(
         execution_allowed=True,
         return_code=result.returncode,
         final_report=(
-            f"Local Codex CLI completed with return_code={result.returncode}. "
+            f"Local Codex CLI status={status_summary} return_code={result.returncode}. "
             f"stdout_summary={stdout_summary} stderr_summary={stderr_summary}"
         ),
         changed_files=changed_files_summary(),
         tests_summary=("local_codex_cli_invoked",),
+        codex_process_started=True,
+        codex_completed_successfully=codex_completed_successfully,
+        codex_requires_tty=codex_requires_tty,
     )
 
 
