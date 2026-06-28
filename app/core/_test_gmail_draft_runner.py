@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.modules.setdefault("psycopg2", MagicMock())
 
 from app.core import approved_capability_manifest as manifest_module  # noqa: E402
+from app.core import gmail_draft_approval_plan  # noqa: E402
 from app.core import gmail_draft_runner  # noqa: E402
+from app.core import gmail_draft_snapshot  # noqa: E402
 
 
 def _valid_snapshot():
@@ -244,6 +246,48 @@ class GmailDraftRunnerTests(unittest.TestCase):
         self.assertFalse(preview.external_action_performed)
         self.assertFalse(preview.draft_created)
         self.assertFalse(preview.approval_grant_consumed)
+
+    def test_approval_request_plan_preserves_reviewed_fields_and_insert_shape(self):
+        plan = gmail_draft_runner.build_gmail_create_draft_approval_request_plan(
+            {
+                "to": ["matthew@example.test"],
+                "cc": "cc@example.test",
+                "bcc": ["bcc@example.test"],
+                "subject": "Reviewable draft subject",
+                "body": "Reviewable draft body.",
+                "reply_to_message_id": "message-id-from-safe-prior-flow",
+            },
+            ttl_minutes=15,
+        )
+
+        self.assertIsInstance(plan, gmail_draft_runner.GmailDraftApprovalRequestPlan)
+        self.assertEqual(plan.capability_key, "gmail.create_draft")
+        self.assertEqual(plan.action_type, "gmail_create_draft")
+        self.assertEqual(plan.preview_fields["to"], ("matthew@example.test",))
+        self.assertEqual(plan.preview_fields["cc"], ("cc@example.test",))
+        self.assertEqual(plan.preview_fields["bcc"], ("bcc@example.test",))
+        self.assertEqual(plan.preview_fields["subject"], "Reviewable draft subject")
+        self.assertEqual(plan.preview_fields["body"], "Reviewable draft body.")
+        self.assertEqual(
+            plan.preview_fields["reply_to_message_id"],
+            "message-id-from-safe-prior-flow",
+        )
+        self.assertEqual(plan.validated_snapshot["body"], "Reviewable draft body.")
+        self.assertEqual(
+            set(plan.verified_insert_parameters),
+            {"capability_key", "action_type", "step_summary", "ttl_minutes"},
+        )
+        self.assertEqual(plan.verified_insert_parameters["ttl_minutes"], 15)
+        self.assertTrue(plan.approval_required)
+        self.assertFalse(plan.live_creation_enabled)
+        self.assertFalse(plan.would_call_create_pending_approval_once)
+        self.assertFalse(plan.would_insert)
+        self.assertFalse(plan.approval_created)
+        self.assertFalse(plan.approval_inserted_into_database)
+        self.assertFalse(plan.notification_sent)
+        self.assertFalse(plan.external_action_performed)
+        self.assertFalse(plan.draft_created)
+        self.assertFalse(plan.approval_grant_consumed)
 
     def test_approval_preview_adapter_includes_required_warnings(self):
         preview = gmail_draft_runner.prepare_gmail_create_draft_approval_preview(
@@ -1364,18 +1408,7 @@ class GmailDraftRunnerTests(unittest.TestCase):
         self.assertFalse(result.draft_created)
         self.assertFalse(result.approval_grant_consumed)
 
-    def test_runner_module_has_no_external_or_execution_imports(self):
-        with open(gmail_draft_runner.__file__, encoding="utf-8") as source_file:
-            source = source_file.read()
-
-        tree = ast.parse(source)
-        imports = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.append(node.module)
-
+    def test_gmail_draft_modules_have_no_external_or_execution_imports(self):
         prohibited = {
             "google",
             "googleapiclient",
@@ -1391,7 +1424,23 @@ class GmailDraftRunnerTests(unittest.TestCase):
             "app.core.push_notifications",
             "app.core.approval_lock",
         }
-        self.assertTrue(prohibited.isdisjoint(imports))
+        for module in (
+            gmail_draft_snapshot,
+            gmail_draft_approval_plan,
+            gmail_draft_runner,
+        ):
+            with open(module.__file__, encoding="utf-8") as source_file:
+                source = source_file.read()
+
+            tree = ast.parse(source)
+            imports = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imports.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imports.append(node.module)
+
+            self.assertTrue(prohibited.isdisjoint(imports))
 
 
 if __name__ == "__main__":
