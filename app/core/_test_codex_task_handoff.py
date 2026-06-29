@@ -217,6 +217,76 @@ class CodexTaskHandoffTests(unittest.TestCase):
             },
         )
 
+    def test_recent_display_reports_return_safe_metadata_only(self):
+        first = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add first harmless backend-only local helper",
+            tool_or_area="nova-backend local tooling",
+        )
+        second = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add second harmless backend-only local helper",
+            tool_or_area="nova-backend local tooling",
+        )
+        codex_task_handoff.get_next_pending_codex_task()
+        codex_task_handoff.ingest_codex_task_report(
+            first["task_id"],
+            {
+                "status": "ready_to_report",
+                "changed_files_summary": ["app/core/example.py"],
+                "tests_summary": ["targeted unittest passed"],
+                "deployment_summary": "not_attempted",
+                "final_report": "First local handoff report completed.",
+            },
+        )
+
+        reports = codex_task_handoff.list_recent_codex_handoff_display_reports(
+            limit=2
+        )
+
+        self.assertEqual(len(reports), 2)
+        self.assertEqual(
+            {report["task_id"] for report in reports},
+            {first["task_id"], second["task_id"]},
+        )
+        for report in reports:
+            self.assertEqual(
+                set(report),
+                {
+                    "task_id",
+                    "requester",
+                    "area",
+                    "current_state",
+                    "handoff_status",
+                    "changed_files",
+                    "validation_notes",
+                    "final_summary",
+                    "matthew_review_needed_before_later_action",
+                },
+            )
+            for forbidden in (
+                "user_goal",
+                "allowed_files_or_areas",
+                "blocked_files_or_areas",
+                "deployment_summary",
+                "codex_execution_invoked",
+                "external_apis_called",
+                "github_mutation_performed",
+                "railway_mutation_performed",
+                "secrets_exposed",
+            ):
+                self.assertNotIn(forbidden, report)
+
+    def test_recent_display_reports_clamp_limit(self):
+        for index in range(30):
+            codex_task_handoff.create_pending_codex_task(
+                user_goal=f"Add harmless backend-only local helper {index}",
+            )
+
+        reports = codex_task_handoff.list_recent_codex_handoff_display_reports(
+            limit=100
+        )
+
+        self.assertEqual(len(reports), 25)
+
     def test_backend_rejects_unsafe_task_goals_and_scopes(self):
         unsafe_inputs = (
             {"user_goal": "Modify Railway variables for deployment"},

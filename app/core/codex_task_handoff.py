@@ -318,6 +318,30 @@ def build_codex_handoff_display_report(task_id: str) -> dict[str, Any]:
     }
 
 
+def list_recent_codex_handoff_display_reports(
+    limit: int = 10,
+) -> tuple[dict[str, Any], ...]:
+    """Return recent safe handoff display reports, newest updated first."""
+    if not isinstance(limit, int):
+        raise ValueError("limit_must_be_int")
+    safe_limit = max(1, min(limit, 25))
+
+    with _HANDOFF_LOCK:
+        recent_task_ids = tuple(
+            task_id
+            for task_id, _record in sorted(
+                _TASKS.items(),
+                key=lambda item: (item[1].get("updated_at", 0), item[0]),
+                reverse=True,
+            )
+        )[:safe_limit]
+
+    return tuple(
+        build_codex_handoff_display_report(task_id)
+        for task_id in recent_task_ids
+    )
+
+
 def reset_codex_handoff_store_for_tests() -> None:
     """Clear in-memory handoff state for tests only."""
     with _HANDOFF_LOCK:
