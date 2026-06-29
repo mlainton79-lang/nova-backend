@@ -272,6 +272,52 @@ def ingest_codex_task_report(task_id: str, report: dict[str, Any]) -> dict[str, 
     return safe_report
 
 
+def build_codex_handoff_display_report(task_id: str) -> dict[str, Any]:
+    """Summarise one handoff record for Matthew using safe metadata only."""
+    safe_task_id = _clean_text(task_id, "task_id", max_chars=120)
+
+    with _HANDOFF_LOCK:
+        record = _TASKS.get(safe_task_id)
+        if not record:
+            raise ValueError("codex_task_not_found")
+        plan = record["plan"]
+        handoff_status = record["status"]
+        report = record.get("report") or {}
+
+    report_status = str(report.get("status", ""))
+    current_state = report_status or plan.status.value
+    changed_files = _clean_tuple(
+        report.get("changed_files_summary"),
+        "changed_files_summary",
+    )
+    validation_notes = _clean_tuple(report.get("tests_summary"), "tests_summary")
+    final_summary = str(
+        report.get("final_report")
+        or plan.intended_change_summary
+        or "No final Codex handoff summary has been reported yet."
+    )
+    matthew_review_needed = (
+        handoff_status != "reported"
+        or current_state != CodexTaskStatus.READY_TO_REPORT.value
+        or not plan.can_commit
+        or not plan.can_push_branch
+        or not plan.can_deploy
+        or plan.requires_matthew_approval_before_deploy
+    )
+
+    return {
+        "task_id": plan.task_id,
+        "requester": plan.requested_by,
+        "area": plan.tool_or_area,
+        "current_state": current_state,
+        "handoff_status": handoff_status,
+        "changed_files": changed_files,
+        "validation_notes": validation_notes,
+        "final_summary": _clean_text(final_summary, "final_summary", max_chars=500),
+        "matthew_review_needed_before_later_action": matthew_review_needed,
+    }
+
+
 def reset_codex_handoff_store_for_tests() -> None:
     """Clear in-memory handoff state for tests only."""
     with _HANDOFF_LOCK:

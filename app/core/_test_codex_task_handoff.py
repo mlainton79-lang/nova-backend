@@ -118,6 +118,105 @@ class CodexTaskHandoffTests(unittest.TestCase):
         self.assertFalse(report["railway_mutation_performed"])
         self.assertFalse(report["secrets_exposed"])
 
+    def test_display_report_summarises_pending_metadata_for_matthew(self):
+        created = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add a harmless backend-only local helper with tests",
+            tool_or_area="nova-backend local tooling",
+        )
+
+        display = codex_task_handoff.build_codex_handoff_display_report(
+            created["task_id"]
+        )
+
+        self.assertEqual(display["task_id"], created["task_id"])
+        self.assertEqual(display["requester"], "tony")
+        self.assertEqual(display["area"], "nova-backend local tooling")
+        self.assertEqual(display["current_state"], "planned")
+        self.assertEqual(display["handoff_status"], "pending")
+        self.assertEqual(display["changed_files"], ())
+        self.assertEqual(display["validation_notes"], ())
+        self.assertIn("Prepare a safe Codex", display["final_summary"])
+        self.assertTrue(display["matthew_review_needed_before_later_action"])
+
+    def test_display_report_summarises_reported_metadata_for_matthew(self):
+        created = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add Tony Codex handoff display reporting",
+            tool_or_area="nova-backend local tooling",
+        )
+        codex_task_handoff.get_next_pending_codex_task()
+        codex_task_handoff.ingest_codex_task_report(
+            created["task_id"],
+            {
+                "status": "ready_to_report",
+                "changed_files_summary": [
+                    "app/core/codex_task_handoff.py",
+                    "app/core/_test_codex_task_handoff.py",
+                ],
+                "tests_summary": [
+                    "git diff --check passed",
+                    "targeted unittest passed",
+                ],
+                "deployment_summary": "not_attempted",
+                "final_report": "Display helper completed with focused tests.",
+                "codex_execution_invoked": False,
+                "external_apis_called": False,
+                "github_mutation_performed": False,
+                "railway_mutation_performed": False,
+                "secrets_exposed": False,
+            },
+        )
+
+        display = codex_task_handoff.build_codex_handoff_display_report(
+            created["task_id"]
+        )
+
+        self.assertEqual(display["current_state"], "ready_to_report")
+        self.assertEqual(display["handoff_status"], "reported")
+        self.assertEqual(
+            display["changed_files"],
+            (
+                "app/core/codex_task_handoff.py",
+                "app/core/_test_codex_task_handoff.py",
+            ),
+        )
+        self.assertEqual(
+            display["validation_notes"],
+            ("git diff --check passed", "targeted unittest passed"),
+        )
+        self.assertEqual(
+            display["final_summary"],
+            "Display helper completed with focused tests.",
+        )
+        self.assertTrue(display["matthew_review_needed_before_later_action"])
+
+    def test_display_report_rejects_unknown_task_id(self):
+        with self.assertRaisesRegex(ValueError, "codex_task_not_found"):
+            codex_task_handoff.build_codex_handoff_display_report("codex-missing")
+
+    def test_display_report_exposes_safe_display_fields_only(self):
+        created = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add a harmless backend-only local helper with tests",
+        )
+
+        display = codex_task_handoff.build_codex_handoff_display_report(
+            created["task_id"]
+        )
+
+        self.assertEqual(
+            set(display),
+            {
+                "task_id",
+                "requester",
+                "area",
+                "current_state",
+                "handoff_status",
+                "changed_files",
+                "validation_notes",
+                "final_summary",
+                "matthew_review_needed_before_later_action",
+            },
+        )
+
     def test_backend_rejects_unsafe_task_goals_and_scopes(self):
         unsafe_inputs = (
             {"user_goal": "Modify Railway variables for deployment"},
