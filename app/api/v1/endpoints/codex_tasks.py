@@ -1,13 +1,14 @@
 """Protected Tony Codex handoff endpoints."""
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.codex_task_handoff import (
     create_pending_codex_task,
     get_next_pending_codex_task,
     ingest_codex_task_report,
+    list_recent_codex_handoff_display_reports,
 )
 from app.core.security import verify_token
 
@@ -74,6 +75,16 @@ async def get_next_codex_task_endpoint(_=Depends(verify_token)):
     if not task:
         return {"ok": True, "found": False, "task": None}
     return {"ok": True, "found": True, "task": task}
+
+
+@router.get("/codex-tasks/status")
+async def get_codex_task_status_endpoint(
+    limit: Annotated[int, Query(ge=1, le=25)] = 10,
+    _=Depends(verify_token),
+):
+    """Return recent Tony Codex work status metadata."""
+    reports = list_recent_codex_handoff_display_reports(limit=limit)
+    return {"ok": True, "count": len(reports), "reports": reports}
 
 
 @router.post("/codex-tasks/{task_id}/report")

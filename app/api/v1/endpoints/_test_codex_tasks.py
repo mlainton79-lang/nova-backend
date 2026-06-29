@@ -69,6 +69,55 @@ class CodexTaskEndpointTests(unittest.TestCase):
         self.assertEqual(parsed.task_id, created["task_id"])
         self.assertEqual(parsed.requested_by, "tony")
 
+    def test_endpoint_status_returns_recent_safe_metadata(self):
+        first = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add first harmless backend-only local helper",
+            tool_or_area="nova-backend local tooling",
+        )
+        second = codex_task_handoff.create_pending_codex_task(
+            user_goal="Add second harmless backend-only local helper",
+            tool_or_area="nova-backend local tooling",
+        )
+        codex_task_handoff.get_next_pending_codex_task()
+        codex_task_handoff.ingest_codex_task_report(
+            first["task_id"],
+            {
+                "status": "ready_to_report",
+                "changed_files_summary": ["app/api/v1/endpoints/codex_tasks.py"],
+                "tests_summary": ["targeted endpoint unittest passed"],
+                "deployment_summary": "not_attempted",
+                "final_report": "Status endpoint report completed.",
+            },
+        )
+
+        response = asyncio.run(
+            codex_tasks.get_codex_task_status_endpoint(limit=2)
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["count"], 2)
+        self.assertEqual(
+            {report["task_id"] for report in response["reports"]},
+            {first["task_id"], second["task_id"]},
+        )
+        for report in response["reports"]:
+            self.assertEqual(
+                set(report),
+                {
+                    "task_id",
+                    "requester",
+                    "area",
+                    "current_state",
+                    "handoff_status",
+                    "changed_files",
+                    "validation_notes",
+                    "final_summary",
+                    "matthew_review_needed_before_later_action",
+                },
+            )
+            self.assertNotIn("user_goal", report)
+            self.assertNotIn("codex_execution_invoked", report)
+
     def test_endpoint_accepts_sanitized_report(self):
         created = codex_task_handoff.create_pending_codex_task(
             user_goal="Add a harmless backend-only local helper with tests",
