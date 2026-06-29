@@ -124,6 +124,8 @@ from app.api.v1.endpoints import agent_runner
 router.include_router(agent_runner.router, tags=["agent_runner"])
 from app.api.v1.endpoints import admin_worker_log
 router.include_router(admin_worker_log.router, tags=["admin"])
+from app.api.v1.endpoints import tony_capabilities
+router.include_router(tony_capabilities.router, tags=["tony_capabilities"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
