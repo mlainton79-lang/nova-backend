@@ -523,13 +523,13 @@ async def _gather_context(request: ChatRequest) -> dict:
         if not any(k in msg_lower for k in cal_kw):
             return ""
         try:
-            from app.core.calendar_service import get_todays_schedule
-            from app.core.gmail_service import get_all_accounts
-            accounts = get_all_accounts()
-            if accounts:
-                cal = await asyncio.wait_for(get_todays_schedule(accounts[0]), timeout=3.0)
-                if cal and "Nothing" not in cal:
-                    return f"[CALENDAR]\n{cal}"
+            from app.core.calendar_service import get_grounded_samsung_todays_schedule
+            cal = await asyncio.wait_for(
+                asyncio.to_thread(get_grounded_samsung_todays_schedule),
+                timeout=3.0,
+            )
+            if cal.get("schedule"):
+                return f"[CALENDAR]\n{cal['schedule']}"
         except Exception as e:
             print(f"[CHAT_STREAM] Calendar: {e}")
         return ""
