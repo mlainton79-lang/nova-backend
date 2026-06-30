@@ -3,8 +3,9 @@ from fastapi import APIRouter, Depends
 from app.core.security import verify_token
 from app.core.calendar_service import (
     get_upcoming_events, create_event, get_todays_schedule,
-    get_calendar_auth_url
+    get_calendar_auth_url, get_grounded_samsung_todays_schedule
 )
+from app.core.samsung_calendar import get_read_status as get_samsung_calendar_read_status
 from app.core.gmail_service import get_all_accounts
 
 router = APIRouter()
@@ -18,8 +19,11 @@ async def calendar_auth(email: str, _=Depends(verify_token)):
 @router.get("/calendar/today")
 async def calendar_today(_=Depends(verify_token)):
     """Tony gets today's schedule across all accounts."""
+    samsung = get_grounded_samsung_todays_schedule()
     accounts = get_all_accounts()
     schedules = []
+    if samsung.get("ok") and "Nothing" not in samsung.get("schedule", ""):
+        schedules.append(samsung["schedule"])
     for account in accounts:
         try:
             schedule = await get_todays_schedule(account)
@@ -28,6 +32,11 @@ async def calendar_today(_=Depends(verify_token)):
         except Exception as e:
             schedules.append(f"[{account}] Calendar error: {e}")
     return {"schedule": "\n\n".join(schedules) if schedules else "Nothing in the calendar today."}
+
+@router.get("/calendar/samsung/status")
+async def calendar_samsung_status(_=Depends(verify_token)):
+    """Read-only Samsung calendar sync status."""
+    return get_samsung_calendar_read_status()
 
 @router.get("/calendar/upcoming")
 async def calendar_upcoming(days: int = 7, _=Depends(verify_token)):

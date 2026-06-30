@@ -7,6 +7,7 @@ import os
 import httpx
 import psycopg2
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Optional
 
 GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID", "")
@@ -200,6 +201,76 @@ async def get_event(email: str, event_id: str) -> Dict:
             return {"ok": False, "status_code": r.status_code, "error": r.text[:300]}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _samsung_today_range(now: Optional[datetime] = None):
+    london = ZoneInfo("Europe/London")
+    current = now or datetime.now(london)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=london)
+    current = current.astimezone(london)
+    start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+def _format_samsung_time(event: Dict) -> str:
+    start = event.get("start") or ""
+    if event.get("all_day"):
+        return "All day"
+    try:
+        parsed = datetime.fromisoformat(start)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(ZoneInfo("Europe/London"))
+        return parsed.strftime("%H:%M")
+    except Exception:
+        return start[:16].replace("T", " ")
+
+
+def get_grounded_samsung_todays_schedule(now: Optional[datetime] = None) -> Dict:
+    """
+    Return today's Samsung calendar schedule after grounding against fetched rows.
+
+    This is read-only. It never creates, updates, or deletes calendar items.
+    """
+    from app.core import calendar_grounding_contract as grounding
+    from app.core.samsung_calendar import get_events_between
+
+    start, end = _samsung_today_range(now)
+    events = get_events_between(start, end)
+    decision = grounding.evaluate_calendar_grounding(start, end, events)
+
+    if not decision.allowed:
+        return {
+            "ok": False,
+            "status": decision.status,
+            "reason": decision.reason,
+            "events": events,
+            "schedule": "Calendar is unavailable right now.",
+        }
+
+    if not events:
+        return {
+            "ok": True,
+            "status": decision.status,
+            "reason": decision.reason,
+            "events": [],
+            "schedule": "Nothing in the Samsung calendar today.",
+        }
+
+    lines = ["Today's Samsung calendar:"]
+    for event in events:
+        line = f"- {_format_samsung_time(event)} - {event.get('title') or '(no title)'}"
+        if event.get("location"):
+            line += f" ({event['location']})"
+        lines.append(line)
+    return {
+        "ok": True,
+        "status": decision.status,
+        "reason": decision.reason,
+        "events": events,
+        "schedule": "\n".join(lines),
+    }
 
 
 async def get_todays_schedule(email: str) -> str:
