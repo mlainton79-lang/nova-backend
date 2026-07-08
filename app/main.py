@@ -271,6 +271,12 @@ async def autonomous_loop():
                 print(f"[AUTONOMOUS] Budget check failed (continuing): {e}")
 
             print(f"[AUTONOMOUS] Fast loop starting at {datetime.utcnow().isoformat()}")
+            record_run_event(
+                event_type=EVENT_TYPES["WORKER_STARTED"],
+                severity=EventSeverity.INFO,
+                subsystem="worker.autonomous_loop",
+                message="Autonomous fast loop iteration started",
+            )
 
             # Fast proactive work only — no heavy jobs
             tasks = [
@@ -293,10 +299,33 @@ async def autonomous_loop():
                     await fn()
                 except Exception as e:
                     print(f"[AUTONOMOUS] {name} failed: {e}")
+                    record_run_event(
+                        event_type=EVENT_TYPES["WORKER_FAILED"],
+                        severity=EventSeverity.WARNING,
+                        subsystem="worker.autonomous_loop",
+                        message=f"Autonomous task failed: {name}",
+                        error_class=type(e).__name__,
+                        error_message=str(e),
+                        metadata={"task": name},
+                    )
 
             print("[AUTONOMOUS] Fast loop complete. Sleeping 6h.")
+            record_run_event(
+                event_type=EVENT_TYPES["WORKER_COMPLETED"],
+                severity=EventSeverity.INFO,
+                subsystem="worker.autonomous_loop",
+                message="Autonomous fast loop iteration completed",
+            )
         except Exception as e:
             print(f"[AUTONOMOUS] Loop error: {e}")
+            record_run_event(
+                event_type=EVENT_TYPES["WORKER_FAILED"],
+                severity=EventSeverity.ERROR,
+                subsystem="worker.autonomous_loop",
+                message="Autonomous fast loop iteration failed",
+                error_class=type(e).__name__,
+                error_message=str(e),
+            )
         await asyncio.sleep(6 * 3600)  # Every 6 hours
 
 
