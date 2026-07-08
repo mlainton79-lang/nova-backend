@@ -74,7 +74,7 @@ async def gemini(
     leave this False even on cheap tasks.
     """
     if is_provider_skipped("gemini"):
-        log.warning("[MODEL_ROUTER] Gemini disabled by provider skip list for task=%s", task)
+        log.info("[MODEL_ROUTER] Gemini disabled by provider skip list for task=%s", task)
         return None
 
     if disable_thinking:

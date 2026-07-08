@@ -146,6 +146,12 @@ async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
     """
     if not text or not text.strip():
         return []
+    try:
+        from app.core.model_router_smart import is_provider_skipped
+        if is_provider_skipped("gemini"):
+            return []
+    except Exception:
+        pass
 
     prompt = (
         "Extract atomic facts from the text below. A fact is a triple: "
@@ -226,6 +232,13 @@ async def extract_facts_from_text(text: str, max_facts: int = 10) -> List[Dict]:
 
 async def extract_facts(user_message: str, assistant_reply: str) -> List[Dict]:
     """Run Gemini extraction on a conversation turn. Returns list of facts."""
+    try:
+        from app.core.model_router_smart import is_provider_skipped
+        if is_provider_skipped("gemini"):
+            return []
+    except Exception:
+        pass
+
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         return []
