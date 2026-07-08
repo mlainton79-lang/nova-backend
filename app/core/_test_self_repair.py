@@ -28,7 +28,7 @@ class SelfRepairTests(unittest.TestCase):
                 elif "FROM run_events" in sql:
                     self._next_fetchone = (datetime.now(),)
                 elif "FROM gmail_accounts" in sql:
-                    self._next_fetchone = (1,)
+                    self._next_fetchone = (1, 1, 0)
                 else:
                     self._next_fetchone = (None,)
 

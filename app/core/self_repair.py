@@ -111,13 +111,23 @@ async def check_system_health() -> Dict:
         # Check Gmail tokens freshness
         try:
             cur.execute("""
-                SELECT COUNT(*) FROM gmail_accounts
-                WHERE token_expiry > NOW() + INTERVAL '5 minutes'
+                SELECT
+                    COUNT(*) AS account_count,
+                    COUNT(*) FILTER (
+                        WHERE refresh_token IS NOT NULL
+                          AND LENGTH(BTRIM(refresh_token)) > 0
+                    ) AS refreshable_count,
+                    COUNT(*) FILTER (
+                        WHERE token_expiry > NOW() + INTERVAL '5 minutes'
+                    ) AS valid_access_token_count
+                FROM gmail_accounts
             """)
-            valid_tokens = cur.fetchone()[0]
+            account_count, refreshable_count, valid_access_token_count = cur.fetchone()
             health["checks"]["gmail_tokens"] = {
-                "status": "ok" if valid_tokens > 0 else "expired",
-                "valid_count": valid_tokens
+                "status": "ok" if refreshable_count > 0 else "expired",
+                "account_count": account_count,
+                "refreshable_count": refreshable_count,
+                "valid_access_token_count": valid_access_token_count,
             }
         except Exception:
             health["checks"]["gmail_tokens"] = {"status": "unknown"}
