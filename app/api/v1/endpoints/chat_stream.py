@@ -518,18 +518,12 @@ async def _gather_context(request: ChatRequest) -> dict:
         return ""
 
     async def _calendar():
-        cal_kw = ["calendar", "schedule", "today", "appointment", "meeting",
-                  "what have i got", "what's on", "diary", "shift"]
-        if not any(k in msg_lower for k in cal_kw):
-            return ""
         try:
-            from app.core.calendar_service import get_grounded_samsung_todays_schedule
-            cal = await asyncio.wait_for(
-                asyncio.to_thread(get_grounded_samsung_todays_schedule),
+            from app.core.samsung_calendar import get_calendar_context_for_message
+            return await asyncio.wait_for(
+                get_calendar_context_for_message(request.message),
                 timeout=3.0,
             )
-            if cal.get("schedule"):
-                return f"[CALENDAR]\n{cal['schedule']}"
         except Exception as e:
             print(f"[CHAT_STREAM] Calendar: {e}")
         return ""

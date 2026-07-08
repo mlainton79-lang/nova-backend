@@ -123,6 +123,17 @@ async def _gather_council_context(req: ChatRequest) -> dict:
                 pass
         return ""
 
+    async def _calendar():
+        try:
+            from app.core.samsung_calendar import get_calendar_context_for_message
+            return await asyncio.wait_for(
+                get_calendar_context_for_message(req.message),
+                timeout=3.0,
+            )
+        except Exception as e:
+            print(f"[COUNCIL] Calendar: {e}")
+        return ""
+
     async def _reasoning():
         if req.image_base64:
             return ""
@@ -144,7 +155,7 @@ async def _gather_council_context(req: ChatRequest) -> dict:
         return ""
 
     results = await asyncio.gather(
-        _web(), _case(), _gmail(), _reasoning(),
+        _web(), _case(), _gmail(), _calendar(), _reasoning(),
         return_exceptions=True
     )
 
@@ -155,7 +166,8 @@ async def _gather_council_context(req: ChatRequest) -> dict:
         "web": safe(results[0]),
         "case": safe(results[1]),
         "gmail": safe(results[2]),
-        "reasoning": safe(results[3]),
+        "calendar": safe(results[3]),
+        "reasoning": safe(results[4]),
     }
 
 
@@ -358,7 +370,8 @@ async def council(req: ChatRequest, _=Depends(verify_token)):
             )
 
     # Append gathered context
-    for key, label in [("web", "WEB SEARCH"), ("case", "CASE DOCUMENTS"), ("gmail", "GMAIL")]:
+    for key, label in [("web", "WEB SEARCH"), ("case", "CASE DOCUMENTS"),
+                       ("gmail", "GMAIL"), ("calendar", "CALENDAR")]:
         if ctx.get(key):
             system_prompt += f"\n\n[{label}]\n{ctx[key]}"
 

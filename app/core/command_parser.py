@@ -141,7 +141,7 @@ async def execute_command(command: Dict) -> str:
         return await _complete_goal(args[0])
     
     elif cmd == "read_calendar":
-        return await _read_calendar()
+        return await _read_calendar(command.get("original", ""))
     
     elif cmd == "check_email_queue":
         return await _check_email_queue()
@@ -712,17 +712,11 @@ async def _complete_goal(name: str) -> str:
         return f"Failed: {e}"
 
 
-async def _read_calendar() -> str:
-    """Read today's calendar."""
+async def _read_calendar(message: str = "") -> str:
+    """Read Samsung-synced calendar context for the requested range."""
     try:
-        from app.core.calendar_service import get_todays_events
-        events = await get_todays_events()
-        if not events:
-            return "Nothing in your calendar today."
-        lines = ["Here's what's in your calendar:"]
-        for e in events[:5]:
-            lines.append(f"• {e.get('time', '')} — {e.get('title', '')}")
-        return "\n".join(lines)
+        from app.core.samsung_calendar import read_calendar_for_message
+        return await read_calendar_for_message(message or "today")
     except Exception as e:
         return f"Couldn't read calendar: {e}"
 

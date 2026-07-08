@@ -3,7 +3,7 @@ retrieval_guard.py — anti-fabrication structural guard for retrieval intents.
 
 Layer 2 of the Bug 2 fabrication-guard fix (commit pair started at 7081453;
 Layer 1 is prompt-side in tony.py + providers/council.py). When a chat
-message asks about live-retrieved data (Gmail, cases, web search) but the
+message asks about live-retrieved data (Gmail, cases, web search, calendar) but the
 corresponding context block came back empty (fetch timeout, integration
 failure, keyword miss), this guard short-circuits the deliberation pipeline
 with a deterministic refusal — preventing fabricating providers (Mistral
@@ -77,6 +77,17 @@ _RETRIEVAL_INTENTS: List[Tuple[re.Pattern, str, str]] = [
         "web",
         "web search results",
     ),
+    (
+        re.compile(
+            r"\b(calendar|schedule|diary|appointments?|meetings?|shifts?)\b"
+            r"|what\s+have\s+i\s+got\s+(today|tomorrow|this\s+week|next\s+week)"
+            r"|what'?s\s+on\s+(today|tomorrow|this\s+week|next\s+week)"
+            r"|am\s+i\s+(free|available)\b",
+            re.IGNORECASE,
+        ),
+        "calendar",
+        "Samsung calendar",
+    ),
 ]
 
 
@@ -113,6 +124,13 @@ def _refusal_for(intent_key: str, label: str) -> str:
             "I haven't run a web search for this question. Ask me to search "
             "explicitly, e.g. 'search the web for X'."
         )
+    if intent_key == "calendar":
+        return (
+            "I can't see matching Samsung calendar entries in this context "
+            "right now. The device sync may not cover that range yet, or the "
+            "calendar fetch may have failed. Try a tighter range, e.g. "
+            "'what's on my calendar tomorrow?'"
+        )
     return f"I can't see your {label} in this context right now."
 
 
@@ -123,7 +141,7 @@ def check_retrieval_guard(message: str, ctx: Dict) -> Optional[Dict]:
         message: the raw user message (req.message / request.message).
         ctx: the gathered-context dict (output of _gather_council_context for
              /council, or _gather_context for /chat/stream). Keys we care
-             about: 'gmail', 'case', 'web'. Falsy values (empty string, None,
+             about: 'gmail', 'case', 'web', 'calendar'. Falsy values (empty string, None,
              [], etc.) combined with a matching intent regex trigger the
              short-circuit.
 
@@ -131,7 +149,7 @@ def check_retrieval_guard(message: str, ctx: Dict) -> Optional[Dict]:
         None if no short-circuit is needed.
         Dict with keys:
           - deterministic_reply: ready-to-send refusal text (str)
-          - intent_key: 'gmail' / 'case' / 'web'
+          - intent_key: 'gmail' / 'case' / 'web' / 'calendar'
           - label: user-facing data label (e.g. 'Gmail inbox')
           - ctx_keys_present: list of ctx keys that ARE populated (diagnostic)
         when the guard fires.

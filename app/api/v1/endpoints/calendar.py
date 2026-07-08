@@ -1,12 +1,21 @@
 """Tony's Calendar endpoints."""
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends
 from app.core.security import verify_token
 from app.core.calendar_service import (
     get_upcoming_events, create_event, get_todays_schedule,
-    get_calendar_auth_url, get_grounded_samsung_todays_schedule
+    get_calendar_auth_url
 )
-from app.core.samsung_calendar import get_read_status as get_samsung_calendar_read_status
 from app.core.gmail_service import get_all_accounts
+from app.core.samsung_calendar import (
+    format_events_for_prompt,
+    get_calendar_diagnostics,
+    get_read_status as get_samsung_calendar_read_status,
+    infer_query_window,
+    query_events,
+)
 
 router = APIRouter()
 
@@ -18,39 +27,57 @@ async def calendar_auth(email: str, _=Depends(verify_token)):
 
 @router.get("/calendar/today")
 async def calendar_today(_=Depends(verify_token)):
-    """Tony gets today's schedule across all accounts."""
-    samsung = get_grounded_samsung_todays_schedule()
-    accounts = get_all_accounts()
-    schedules = []
-    if samsung.get("ok") and "Nothing" not in samsung.get("schedule", ""):
-        schedules.append(samsung["schedule"])
-    for account in accounts:
-        try:
-            schedule = await get_todays_schedule(account)
-            if "Nothing" not in schedule:
-                schedules.append(schedule)
-        except Exception as e:
-            schedules.append(f"[{account}] Calendar error: {e}")
-    return {"schedule": "\n\n".join(schedules) if schedules else "Nothing in the calendar today."}
+    """Tony gets today's Samsung-synced device calendar schedule."""
+    start, end, label = infer_query_window("today")
+    try:
+        events = query_events(start, end, limit=50, raise_on_error=True)
+    except Exception:
+        return {
+            "source": "samsung",
+            "ok": False,
+            "schedule": "Calendar is unavailable right now.",
+            "events": [],
+            "count": 0,
+        }
+    return {
+        "source": "samsung",
+        "ok": True,
+        "schedule": format_events_for_prompt(events, label),
+        "events": events,
+        "count": len(events),
+    }
+
 
 @router.get("/calendar/samsung/status")
 async def calendar_samsung_status(_=Depends(verify_token)):
     """Read-only Samsung calendar sync status."""
     return get_samsung_calendar_read_status()
 
+
 @router.get("/calendar/upcoming")
 async def calendar_upcoming(days: int = 7, _=Depends(verify_token)):
-    """Tony gets upcoming events for the next N days."""
-    accounts = get_all_accounts()
-    all_events = []
-    for account in accounts:
-        try:
-            events = await get_upcoming_events(account, days)
-            all_events.extend(events)
-        except Exception as e:
-            print(f"[CALENDAR] {account}: {e}")
-    all_events.sort(key=lambda x: x.get("start", ""))
-    return {"events": all_events, "count": len(all_events)}
+    """Tony gets upcoming Samsung-synced device calendar events."""
+    bounded_days = max(1, min(days, 730))
+    start = datetime.now(ZoneInfo("Europe/London"))
+    end = start + timedelta(days=bounded_days)
+    try:
+        events = query_events(start, end, limit=100, raise_on_error=True)
+    except Exception:
+        return {
+            "source": "samsung",
+            "ok": False,
+            "days": bounded_days,
+            "events": [],
+            "count": 0,
+            "error": "samsung_calendar_unavailable",
+        }
+    return {
+        "source": "samsung",
+        "ok": True,
+        "days": bounded_days,
+        "events": events,
+        "count": len(events),
+    }
 
 @router.post("/calendar/create")
 async def calendar_create(
@@ -73,3 +100,8 @@ async def calendar_test(_=Depends(verify_token)):
         except Exception as e:
             results[account] = {"ok": False, "error": str(e)}
     return {"accounts": results}
+
+@router.get("/calendar/samsung/diagnostics")
+async def samsung_calendar_diagnostics(_=Depends(verify_token)):
+    """Show compact Samsung calendar sync diagnostics."""
+    return get_calendar_diagnostics()
