@@ -101,6 +101,13 @@ async def gmail_debug(_=Depends(verify_token)):
     for account in accounts:
         try:
             token = await refresh_access_token(account)
+            if not token:
+                results[account] = {
+                    "status": "needs_reauth",
+                    "message_count": 0,
+                    "error": "refresh_access_token returned no token",
+                }
+                continue
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
                     "https://gmail.googleapis.com/gmail/v1/users/me/messages",
