@@ -140,6 +140,7 @@ except Exception as e:
     print(f"[ROUTER] RAG table init failed (non-fatal): {e}")
 
 _inits = [
+    ("app.core.logger",                 "init_log_table",             "Request logs"),
     ("app.core.news_monitor",           "init_news_tables",           "News"),
     ("app.core.goals",                  "init_goals_table",           "Goals"),
     ("app.core.emotional_intelligence", "init_emotional_tables",      "EI"),
@@ -166,6 +167,7 @@ _inits = [
     ("app.core.topic_bans",             "init_topic_bans_table",      "Topic bans"),
     ("app.core.gap_detector",           "init_gap_tables",            "Capability gap detector"),
     ("app.core.task_queue",             "init_task_queue_tables",     "Task queue"),
+    ("app.core.pending_actions",        "init_pending_actions_table", "Pending actions"),
     ("app.skills.loader",               "register_skills_in_db",      "Skills registry"),
     ("app.core.fact_extractor",         "init_fact_tables",           "Fact extractor"),
     ("app.core.email_triage",           "init_triage_tables",         "Email triage"),
@@ -182,6 +184,7 @@ _inits = [
     ("app.core.repository_intelligence","init_repo_intel_tables",     "Repo intelligence"),
     ("app.core.run_ledger",            "init_run_ledger_table",      "Run ledger"),
     ("app.core.ebay_oauth",            "init_ebay_oauth_tables",     "eBay OAuth"),
+    ("app.core.vinted_jobs",           "init_vinted_jobs_tables",    "Vinted jobs"),
     ("app.selling.drafts",             "init_drafts_table",          "Selling drafts"),
     ("app.core.push_notifications",    "init_push_table",            "Push notifications"),
     ("app.core.push_notifications",    "init_config_table",          "Tony config"),
