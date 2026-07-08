@@ -186,6 +186,13 @@ async def run_self_repair_cycle() -> Dict:
         print("[SELF_REPAIR] All systems healthy")
         return {"health": health, "repairs": []}
 
+    issue_statuses = []
+    for issue in health.get("issues", []):
+        check = health["checks"].get(issue, {})
+        issue_statuses.append(f"{issue}={check.get('status', 'unknown')}")
+    if issue_statuses:
+        print(f"[SELF_REPAIR] Health issues: {', '.join(issue_statuses)}")
+
     for issue in health.get("issues", []):
         check = health["checks"].get(issue, {})
         status = check.get("status", "")
