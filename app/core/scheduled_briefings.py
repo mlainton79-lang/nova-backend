@@ -129,7 +129,7 @@ def schedule_todays_briefs() -> list:
                 scheduled.append({"type": "morning", "task_id": tid, "delay_s": delay_morn})
 
         # Post-shift brief always available after overnight shift
-        if shift.get("on_shift_now"):
+        if on_shift_now:
             # 08:30 UTC next morning
             delay_post = _seconds_until(8, 30)
             tid = queue_task("scheduled_brief", {"type": "post_shift"}, delay_seconds=delay_post)
