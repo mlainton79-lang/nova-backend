@@ -267,8 +267,8 @@ async def chat(request: ChatRequest, _=Depends(verify_token)):
             provider_key = choice["provider"]
             print(f"[SMART_ROUTER] Chose {provider_key}: {choice['rationale']}")
         except Exception as e:
-            print(f"[SMART_ROUTER] Failed (using gemini): {e}")
-            provider_key = "gemini"
+            print(f"[SMART_ROUTER] Failed (using claude): {e}")
+            provider_key = "claude"
 
     if provider_key == "council":
         return ChatResponse(

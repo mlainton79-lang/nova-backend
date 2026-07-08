@@ -48,6 +48,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
+from app.core.model_router_smart import is_provider_skipped
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +193,8 @@ async def generate_content(
     """
     if tier not in ("pro", "flash"):
         raise ValueError(f"tier must be 'pro' or 'flash', got {tier!r}")
+    if is_provider_skipped("gemini"):
+        raise GeminiClientError("Gemini provider is disabled by DISABLED_AI_PROVIDERS")
     if not GEMINI_API_KEY:
         raise GeminiClientError("GEMINI_API_KEY not configured")
 

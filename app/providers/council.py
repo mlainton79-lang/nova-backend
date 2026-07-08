@@ -41,43 +41,57 @@ async def run_council(message, history, system_prompt, debug=False):
     adapters = {}
 
     try:
+        from app.core.model_router_smart import is_provider_skipped
+    except Exception:
+        def is_provider_skipped(_provider):
+            return False
+
+    try:
         from app.providers.claude_adapter import ClaudeAdapter
-        adapters["claude"] = ClaudeAdapter()
+        if not is_provider_skipped("claude"):
+            adapters["claude"] = ClaudeAdapter()
     except Exception as e:
         print(f"[COUNCIL] claude init failed: {e}")
     try:
         from app.providers.gemini_adapter import GeminiAdapter
-        adapters["gemini"] = GeminiAdapter()
+        if not is_provider_skipped("gemini"):
+            adapters["gemini"] = GeminiAdapter()
     except Exception as e:
         print(f"[COUNCIL] gemini init failed: {e}")
     try:
         from app.providers.xai_adapter import XAIAdapter
-        adapters["grok"] = XAIAdapter()
+        if not is_provider_skipped("grok") and not is_provider_skipped("xai"):
+            adapters["grok"] = XAIAdapter()
     except Exception as e:
         print(f"[COUNCIL] grok init failed: {e}")
     try:
         from app.providers.openai_adapter import OpenAIAdapter
-        adapters["openai"] = OpenAIAdapter()
+        if not is_provider_skipped("openai"):
+            adapters["openai"] = OpenAIAdapter()
     except Exception as e:
         print(f"[COUNCIL] openai init failed: {e}")
     try:
         from app.providers.deepseek_adapter import DeepSeekAdapter
-        adapters["deepseek"] = DeepSeekAdapter()
+        if not is_provider_skipped("deepseek"):
+            adapters["deepseek"] = DeepSeekAdapter()
     except Exception as e:
         print(f"[COUNCIL] deepseek init failed: {e}")
     try:
         from app.providers.openrouter_adapter import OpenRouterAdapter
-        adapters["openrouter"] = OpenRouterAdapter()
+        if not is_provider_skipped("openrouter"):
+            adapters["openrouter"] = OpenRouterAdapter()
     except Exception as e:
         print(f"[COUNCIL] openrouter init failed: {e}")
     try:
         from app.providers.groq_adapter import GroqAdapter
-        adapters["groq"] = GroqAdapter()
+        if not is_provider_skipped("groq"):
+            adapters["groq"] = GroqAdapter()
     except Exception as e:
         print(f"[COUNCIL] groq init failed: {e}")
     try:
         from app.providers.mistral_adapter import MistralAdapter
-        adapters["mistral"] = MistralAdapter()
+        if not is_provider_skipped("mistral"):
+            adapters["mistral"] = MistralAdapter()
     except Exception as e:
         print(f"[COUNCIL] mistral init failed: {e}")
 

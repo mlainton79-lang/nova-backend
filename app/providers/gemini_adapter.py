@@ -6,6 +6,7 @@ from app.schemas.chat import HistoryMessage
 from app.utils.history import to_gemini_history
 from app.core.config import GEMINI_API_KEY
 from app.core.secrets_redact import redact
+from app.core.model_router_smart import is_provider_skipped
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -18,6 +19,8 @@ class GeminiAdapter(ProviderAdapter):
         image_base64: Optional[str] = None,
         image_mime: str = "image/jpeg"
     ) -> str:
+        if is_provider_skipped("gemini"):
+            raise RuntimeError("Gemini provider is disabled by DISABLED_AI_PROVIDERS")
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY is not set")
 

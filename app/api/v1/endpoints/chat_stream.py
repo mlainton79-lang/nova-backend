@@ -18,6 +18,7 @@ from app.core.security import verify_token
 from app.core.injection_filter import check_injection
 from app.core.logger import log_request
 from app.core.secrets_redact import redact
+from app.core.model_router_smart import first_available_provider
 from app.observability import EVENT_TYPES, EventSeverity, record_run_event
 
 router = APIRouter()
@@ -36,6 +37,10 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 async def gemini_stream(message: str, history: list, system_prompt: str,
                         image_base64: str = None, image_mime: str = "image/jpeg"):
     """Real SSE streaming from Gemini."""
+    from app.core.model_router_smart import is_provider_skipped
+    if is_provider_skipped("gemini"):
+        raise RuntimeError("Gemini provider is disabled by DISABLED_AI_PROVIDERS")
+
     contents = []
     for h in history:
         role = h.role if hasattr(h, "role") else h.get("role", "user")
@@ -325,7 +330,7 @@ def _normalise_stream_provider(provider: str, image_base64: str = None) -> str:
        `image_base64`. The other four stream functions have no image
        parameter — passing an image to them silently dropped it. If an
        image is present and the routed provider is one of the four
-       non-vision streams, return `"gemini"` and record a
+       non-vision streams, return the first enabled vision provider and record a
        CAPABILITY_DEGRADED warning event so the routed-away decision is
        visible in tony_run_events.
 
@@ -333,7 +338,8 @@ def _normalise_stream_provider(provider: str, image_base64: str = None) -> str:
        routes around Council, so this guard only fires when a caller
        reaches the streaming dispatcher with `provider='council'`
        directly (e.g. manual /chat/stream with provider='council').
-       Return `"gemini"` and record a CAPABILITY_UNAVAILABLE warning.
+       Return the first enabled Council-compatible stream provider and
+       record a CAPABILITY_UNAVAILABLE warning.
 
     Idempotent: calling this twice with an already-normalised provider
     is a no-op (the conditions both check `provider in <bad set>` which
@@ -351,24 +357,26 @@ def _normalise_stream_provider(provider: str, image_base64: str = None) -> str:
     non-vision-provider re-route).
     """
     if image_base64 and provider in _NON_VISION_STREAM_PROVIDERS:
+        actual_provider = first_available_provider(["gemini", "claude"]) or "claude"
         record_run_event(
             event_type=EVENT_TYPES["CAPABILITY_DEGRADED"],
             severity=EventSeverity.WARNING,
             subsystem="chat.stream_dispatch",
-            message=f"image present but {provider} stream drops it; re-routing to gemini",
-            metadata={"requested_provider": provider, "actual_provider": "gemini", "had_image": True},
+            message=f"image present but {provider} stream drops it; re-routing to {actual_provider}",
+            metadata={"requested_provider": provider, "actual_provider": actual_provider, "had_image": True},
         )
-        return "gemini"
+        return actual_provider
 
     if provider == "council":
+        actual_provider = first_available_provider(["claude", "gemini"]) or "claude"
         record_run_event(
             event_type=EVENT_TYPES["CAPABILITY_UNAVAILABLE"],
             severity=EventSeverity.WARNING,
             subsystem="chat.stream_dispatch",
-            message="council selected on streaming path; falling back to gemini (smart router should have caught this)",
-            metadata={"requested_provider": "council", "actual_provider": "gemini", "had_image": bool(image_base64)},
+            message=f"council selected on streaming path; falling back to {actual_provider} (smart router should have caught this)",
+            metadata={"requested_provider": "council", "actual_provider": actual_provider, "had_image": bool(image_base64)},
         )
-        return "gemini"
+        return actual_provider
 
     return provider
 
@@ -792,9 +800,9 @@ async def chat_stream(request: ChatRequest, _=Depends(verify_token)):
             provider_key = primary  # preserved for failure-path log_request
             print(f"[SMART_ROUTER] chain={chain}: {choice['rationale']}")
         except Exception as e:
-            print(f"[SMART_ROUTER] Failed (using gemini-only): {e}")
-            chain = ["gemini"]
-            provider_key = "gemini"
+            print(f"[SMART_ROUTER] Failed (using claude-only): {e}")
+            chain = ["claude"]
+            provider_key = "claude"
 
     # N1.email-draft-A.fix: Pending Action Router runs FIRST so a numeric
     # reply to "which email?" resolves to the chosen candidate before regex

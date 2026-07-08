@@ -20,12 +20,13 @@ Optimises for:
   - Reliability: fallback chains if a provider is rate-limited
 """
 import re
-from typing import Optional, Dict
+import os
+from typing import Optional, Dict, Iterable
 
 
-# Providers excluded from auto-routing. Currently empty — the mechanism
-# is kept for future provider outages: add a lowercase provider name and
-# _apply_skip will transparently promote the first usable fallback.
+# Providers excluded from auto-routing. Configure in Railway with either
+# DISABLED_AI_PROVIDERS or SKIP_PROVIDERS, comma/space separated, e.g.
+# DISABLED_AI_PROVIDERS=gemini.
 #
 # History: {"claude"} from 2026-04-21 (Anthropic account out of credits;
 # every /v1/messages call returned HTTP 400 "credit balance is too low")
@@ -34,9 +35,30 @@ from typing import Optional, Dict
 # auto/smart routing — manual brain-picker selection builds its chain
 # directly from the picked provider and bypasses this module.
 #
-# Example for a future outage:
-#   SKIP_PROVIDERS = {"openai"}
-SKIP_PROVIDERS = set()
+def _parse_provider_list(value: str) -> set[str]:
+    providers = set()
+    for item in re.split(r"[\s,]+", value or ""):
+        item = item.strip().lower()
+        if item:
+            providers.add(item)
+    return providers
+
+
+SKIP_PROVIDERS = (
+    _parse_provider_list(os.environ.get("DISABLED_AI_PROVIDERS", ""))
+    | _parse_provider_list(os.environ.get("SKIP_PROVIDERS", ""))
+)
+
+
+def is_provider_skipped(provider: Optional[str]) -> bool:
+    return (provider or "").lower() in SKIP_PROVIDERS
+
+
+def first_available_provider(candidates: Iterable[str]) -> Optional[str]:
+    for provider in candidates:
+        if provider and not is_provider_skipped(provider):
+            return provider
+    return None
 
 
 def _apply_skip(choice: Dict) -> Dict:
@@ -64,11 +86,25 @@ def _apply_skip(choice: Dict) -> Dict:
             "fallbacks": rest,
         }
 
+    replacement = first_available_provider(
+        ["claude", "openai", "groq", "mistral", "openrouter", "deepseek", "xai"]
+    )
+    if replacement:
+        return {
+            "provider": replacement,
+            "rationale": (
+                f"{choice.get('rationale', '')} — "
+                f"{primary} skipped and no configured fallbacks available; "
+                f"defaulted to {replacement}"
+            ),
+            "fallbacks": [],
+        }
+
     return {
-        "provider": "gemini",
+        "provider": primary,
         "rationale": (
             f"{choice.get('rationale', '')} — "
-            f"{primary} skipped and no fallbacks available; defaulted to gemini"
+            f"{primary} skipped but every fallback provider is also skipped"
         ),
         "fallbacks": [],
     }
@@ -261,7 +297,7 @@ def _choose_provider_raw(
         if is_streaming:
             # Council's 4-round deliberation can't be SSE-streamed coherently.
             # In streaming context, fall back to Claude (best reasoning) +
-            # Gemini fallback so the wire label matches the actual provider.
+            # configured fallbacks so the wire label matches the actual provider.
             return {
                 "provider": "claude",
                 "rationale": "complex reasoning (streaming) — Council not supported on SSE, using Claude",

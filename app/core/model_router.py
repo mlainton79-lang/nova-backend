@@ -16,6 +16,7 @@ import logging
 from typing import Optional
 
 from app.core import gemini_client
+from app.core.model_router_smart import is_provider_skipped
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,10 @@ async def gemini(
     no-think contract. Callers asking for non-trivial reasoning should
     leave this False even on cheap tasks.
     """
+    if is_provider_skipped("gemini"):
+        log.warning("[MODEL_ROUTER] Gemini disabled by provider skip list for task=%s", task)
+        return None
+
     if disable_thinking:
         tier = "flash"
     else:
