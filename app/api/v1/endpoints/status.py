@@ -350,13 +350,25 @@ PROVIDER_KEYS = [
 
 
 def _providers():
+    try:
+        from app.core.model_router_smart import is_provider_skipped
+    except Exception:
+        def is_provider_skipped(_provider):
+            return False
+
     out = []
     for name, env in PROVIDER_KEYS:
         configured = bool(os.environ.get(env))
+        disabled = is_provider_skipped(name)
+        if disabled:
+            status = "disabled"
+        else:
+            status = "ok" if configured else "missing_key"
         out.append({
             "name": name,
             "configured": configured,
-            "status": "ok" if configured else "missing_key",
+            "disabled": disabled,
+            "status": status,
         })
     return out
 
