@@ -16,6 +16,7 @@ def vec_str(v):
     """Format vector list as pgvector literal string."""
     return '[' + ','.join(str(x) for x in v) + ']' 
 EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIMENSIONS = 3072
 CHUNK_SIZE = 800        # tokens approx — characters / 4
 CHUNK_OVERLAP = 100
 
@@ -37,19 +38,27 @@ def init_rag_tables():
         cur = conn.cursor()
         # Enable pgvector
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        # Drop and recreate case_chunks if wrong vector dimensions
-        cur.execute("SELECT COUNT(*) FROM information_schema.columns WHERE table_name='case_chunks' AND column_name='embedding' AND data_type='USER-DEFINED'")
-        if cur.fetchone()[0] > 0:
-            # Check current dimensions
-            try:
-                cur.execute("SELECT atttypmod FROM pg_attribute JOIN pg_class ON pg_attribute.attrelid = pg_class.oid WHERE pg_class.relname = 'case_chunks' AND pg_attribute.attname = 'embedding'")
-                row = cur.fetchone()
-                if row and row[0] != 3072 + 4:  # pgvector stores dims+4 in atttypmod
-                    cur.execute("DROP TABLE IF EXISTS case_chunks CASCADE")
-                    conn.commit()
-                    print("[RAG] Dropped case_chunks - wrong vector dimensions, recreating")
-            except Exception:
-                pass  # logged above
+        # Drop and recreate case_chunks only if the stored vector type is truly
+        # incompatible. format_type avoids relying on pgvector typmod internals.
+        cur.execute("""
+            SELECT format_type(a.atttypid, a.atttypmod)
+            FROM pg_attribute a
+            JOIN pg_class c ON a.attrelid = c.oid
+            JOIN pg_namespace n ON c.relnamespace = n.oid
+            WHERE c.relname = 'case_chunks'
+              AND n.nspname = current_schema()
+              AND a.attname = 'embedding'
+              AND NOT a.attisdropped
+        """)
+        row = cur.fetchone()
+        expected_embedding_type = f"vector({EMBEDDING_DIMENSIONS})"
+        if row and row[0] != expected_embedding_type:
+            cur.execute("DROP TABLE IF EXISTS case_chunks CASCADE")
+            conn.commit()
+            print(
+                f"[RAG] Dropped case_chunks - embedding type {row[0]} "
+                f"!= {expected_embedding_type}"
+            )
         # Case index — one row per case
         cur.execute("""
             CREATE TABLE IF NOT EXISTS cases (
@@ -82,12 +91,21 @@ def init_rag_tables():
             )
         """)
         conn.commit()
-        # Use hnsw index - supports higher dimensions than ivfflat
+        # Use HNSW. pgvector indexes vector up to 2000 dimensions; for 3072-dim
+        # Gemini embeddings, half-precision expression indexing supports up to
+        # 4000 dimensions on pgvector versions that include halfvec.
         try:
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS case_chunks_embedding_idx
-                ON case_chunks USING hnsw (embedding vector_cosine_ops)
-            """)
+            if EMBEDDING_DIMENSIONS <= 2000:
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS case_chunks_embedding_idx
+                    ON case_chunks USING hnsw (embedding vector_cosine_ops)
+                """)
+            else:
+                cur.execute(f"""
+                    CREATE INDEX IF NOT EXISTS case_chunks_embedding_halfvec_idx
+                    ON case_chunks USING hnsw
+                    ((embedding::halfvec({EMBEDDING_DIMENSIONS})) halfvec_cosine_ops)
+                """)
             conn.commit()
         except Exception as idx_err:
             print(f"[RAG] Index creation skipped: {idx_err}")
