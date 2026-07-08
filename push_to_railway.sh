@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+import os
 """Push Firebase credentials to Railway environment variables."""
 import json
 import urllib.request
 import urllib.error
 
-RAILWAY_TOKEN = "3845f37d-4d58-4499-9a4f-eff00fdb29ad"
+RAILWAY_TOKEN = os.environ.get("RAILWAY_TOKEN", "")
 PROJECT_ID = "fabf0e60-9429-4a03-880b-72a5704"  # from session notes
 
 # Read the Firebase service account
@@ -17,6 +18,9 @@ except Exception as e:
 
 # Railway GraphQL API
 url = "https://backboard.railway.app/graphql/v2"
+if not RAILWAY_TOKEN:
+    raise SystemExit("Set RAILWAY_TOKEN in the environment")
+
 headers = {
     "Authorization": f"Bearer {RAILWAY_TOKEN}",
     "Content-Type": "application/json"

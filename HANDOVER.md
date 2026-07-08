@@ -61,10 +61,10 @@
 
 ### Backend
 - **URL:** `https://web-production-be42b.up.railway.app`
-- **Auth token:** `nova-dev-token`
+- **Auth token:** `<DEV_TOKEN from Railway>`
 - **Framework:** FastAPI, Python, Railway (auto-deploys from GitHub push to main)
 - **GitHub:** `mlainton79-lang/nova-backend` (branch: main)
-- **GitHub token:** `ghp_YOUR_GITHUB_TOKEN_HERE` (expires ~July 2026)
+- **GitHub token:** `<GITHUB_TOKEN_FROM_RAILWAY>` (expires ~July 2026)
 - **Local backend path:** `~/nova-backend` (in Claude sandbox)
 
 ### Database
@@ -87,11 +87,11 @@ MISTRAL_API_KEY, MISTRAL_MODEL=mistral-small-latest
 OPENROUTER_API_KEY
 BRAVE_API_KEY=YOUR_BRAVE_API_KEY
 GMAIL_CLIENT_ID=YOUR_GMAIL_CLIENT_ID
-GMAIL_CLIENT_SECRET=YOUR_GMAIL_CLIENT_SECRET
+GMAIL_CLIENT_SECRET=<set in Railway>
 GMAIL_REDIRECT_URI=https://web-production-be42b.up.railway.app/api/v1/gmail/auth/callback
 DATABASE_URL (set by Railway)
-DEV_TOKEN=nova-dev-token
-GITHUB_TOKEN=ghp_YOUR_GITHUB_TOKEN_HERE
+DEV_TOKEN=<set in Railway>
+GITHUB_TOKEN=<GITHUB_TOKEN_FROM_RAILWAY>
 GITHUB_REPO=mlainton79-lang/nova-backend
 FRONTEND_REPO=mlainton79-lang/nova-android
 FIREBASE_PROJECT_ID=nova-f83e3 (may need adding)
@@ -108,12 +108,12 @@ FIREBASE_PROJECT_ID=nova-f83e3 (may need adding)
 
 ```bash
 cd ~/nova-backend
-git pull https://ghp_YOUR_GITHUB_TOKEN_HERE@github.com/mlainton79-lang/nova-backend.git main -q
+git pull https://<GITHUB_TOKEN_FROM_RAILWAY>@github.com/mlainton79-lang/nova-backend.git main -q
 # ... make changes ...
 # ALWAYS run import test first
 git add -A
 git commit -m "feat/fix: description"
-git push https://ghp_YOUR_GITHUB_TOKEN_HERE@github.com/mlainton79-lang/nova-backend.git main
+git push https://<GITHUB_TOKEN_FROM_RAILWAY>@github.com/mlainton79-lang/nova-backend.git main
 ```
 
 ---
@@ -145,7 +145,7 @@ git push https://ghp_YOUR_GITHUB_TOKEN_HERE@github.com/mlainton79-lang/nova-back
 
 ### Legal / RAG Case Builder
 - Western Circle case: **NEEDS REBUILD** after table reset
-  - Rebuild: `curl -X POST "https://web-production-be42b.up.railway.app/api/v1/cases/build?name=Western%20Circle&query=westerncircle" -H "Authorization: Bearer nova-dev-token"`
+  - Rebuild: `curl -X POST "https://web-production-be42b.up.railway.app/api/v1/cases/build?name=Western%20Circle&query=westerncircle" -H "Authorization: Bearer <DEV_TOKEN>"`
 - pgvector with hnsw index (3072 dims)
 - Ingests full email bodies + attachments
 - Semantic search wired into chat
@@ -175,7 +175,7 @@ git push https://ghp_YOUR_GITHUB_TOKEN_HERE@github.com/mlainton79-lang/nova-back
 - Push notifications via FCM V1 API
   - Firebase project: nova-f83e3, Sender ID: 612993915552
   - Service account credentials stored in `tony_config` DB table (not Railway vars)
-  - To re-store: `python3 -c "import urllib.request, json, urllib.parse; key = open('/sdcard/Download/nova-f83e3-86d2fc27598e.json').read().strip(); encoded = urllib.parse.quote(key); url = f'https://web-production-be42b.up.railway.app/api/v1/push/setup-firebase?service_account_json={encoded}'; req = urllib.request.Request(url, data=b'', headers={'Authorization': 'Bearer nova-dev-token'}, method='POST'); print(urllib.request.urlopen(req, timeout=15).read().decode())"`
+  - To re-store: `python3 -c "import urllib.request, json, urllib.parse; key = open('/sdcard/Download/nova-f83e3-86d2fc27598e.json').read().strip(); encoded = urllib.parse.quote(key); url = f'https://web-production-be42b.up.railway.app/api/v1/push/setup-firebase?service_account_json={encoded}'; req = urllib.request.Request(url, data=b'', headers={'Authorization': 'Bearer <DEV_TOKEN>'}, method='POST'); print(urllib.request.urlopen(req, timeout=15).read().decode())"`
 
 ### New (built this session, just deployed)
 - Weather: Open-Meteo API, free, no key, Rotherham coordinates (53.4326, -1.3635)
