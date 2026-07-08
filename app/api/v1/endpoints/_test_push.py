@@ -1,4 +1,10 @@
 import asyncio
+import os
+import sys
+
+HERE = os.path.dirname(__file__)
+sys.path = [p for p in sys.path if os.path.abspath(p or ".") != os.path.abspath(HERE)]
+sys.path.insert(0, os.path.join(HERE, "..", "..", "..", ".."))
 
 from fastapi import HTTPException
 
