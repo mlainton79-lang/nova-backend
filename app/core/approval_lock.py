@@ -474,6 +474,22 @@ def _coerce_dt(value):
     return str(value)
 
 
+def _approval_display_fields(capability_key: str, action_snapshot) -> dict:
+    snapshot = action_snapshot if isinstance(action_snapshot, Mapping) else {}
+    summary = snapshot.get("step_summary") or snapshot.get("summary") or "Approval required"
+    action_type = snapshot.get("action_type") or snapshot.get("action") or "action"
+    cap = str(capability_key or "unknown")
+    risk = "high" if any(
+        token in cap.lower()
+        for token in ("delete", "remove", "trash", "archive", "send", "write", "update")
+    ) else "medium"
+    return {
+        "display_title": f"{cap}: {action_type}",
+        "display_summary": str(summary),
+        "risk_level": risk,
+    }
+
+
 def list_active_pending_approvals(limit: int = 20) -> list[dict]:
     """Return sanitized awaiting approvals that have not expired yet."""
     try:
@@ -498,17 +514,20 @@ def list_active_pending_approvals(limit: int = 20) -> list[dict]:
                 (bounded_limit,),
             )
             rows = cur.fetchall()
-        return [
-            {
+        pending = []
+        for row in rows:
+            sanitized_snapshot = _sanitize_pending_approval_value(row[2])
+            item = {
                 "pending_id": str(row[0]),
                 "capability_key": row[1],
-                "action_snapshot": _sanitize_pending_approval_value(row[2]),
+                "action_snapshot": sanitized_snapshot,
                 "created_at": _coerce_dt(row[3]),
                 "expires_at": _coerce_dt(row[4]),
                 "status": row[5],
             }
-            for row in rows
-        ]
+            item.update(_approval_display_fields(row[1], sanitized_snapshot))
+            pending.append(item)
+        return pending
     except Exception as error:
         print(
             "[APPROVAL_LOCK] Pending approval list failed: "

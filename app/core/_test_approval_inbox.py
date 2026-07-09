@@ -625,6 +625,11 @@ class ApprovalInboxTests(unittest.TestCase):
             pending[0]["action_snapshot"]["nested"][0]["api_key"],
             "[REDACTED]",
         )
+        self.assertEqual(
+            pending[0]["display_summary"],
+            "Send the reviewed email",
+        )
+        self.assertEqual(pending[0]["risk_level"], "high")
 
     def test_endpoint_returns_sanitized_items(self):
         now = datetime.now(timezone.utc)
