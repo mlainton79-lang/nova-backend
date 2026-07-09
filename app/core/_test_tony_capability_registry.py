@@ -15,6 +15,8 @@ REQUIRED_KEYS = {
     "chat.answer",
     "memory.recall",
     "memory.save_low_risk",
+    "briefing.today",
+    "review.daily",
     "gmail.review_and_draft",
     "calendar.plan",
     "selling.draft_listing",
@@ -104,6 +106,14 @@ class TonyCapabilityRegistryTests(unittest.TestCase):
         text = " ".join((card.user_facing_summary, card.safe_to_say, " ".join(card.limits)))
         self.assertIn("harmless no-op", text)
         self.assertIn("Must never become a generic action dispatcher.", card.limits)
+
+    def test_daily_loop_cards_are_limited_read_only_surfaces(self):
+        for key in ("briefing.today", "review.daily"):
+            card = registry.get_tony_capability_card(key)
+            self.assertEqual(card.state, registry.LIMITED)
+            text = " ".join((card.user_facing_summary, card.safe_to_say, " ".join(card.limits))).lower()
+            self.assertIn("read-only", text)
+            self.assertIn("external", text)
 
     def test_registry_module_imports_no_external_integrations(self):
         with open(registry.__file__, encoding="utf-8") as source_file:

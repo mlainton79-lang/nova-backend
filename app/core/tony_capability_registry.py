@@ -98,6 +98,30 @@ _CARDS = (
         ),
     ),
     _card(
+        "briefing.today",
+        LIMITED,
+        "Show today's focus",
+        "Tony can assemble a daily focus view with briefing text, next actions, approvals, health flags, and recent activity.",
+        "I can show what needs attention now and suggest the next practical steps.",
+        (
+            "Only as accurate as the connected signals and latest syncs.",
+            "Read-only summary; it does not send messages, approve actions, deploy code, or mutate external accounts.",
+            "Live integration failures should be surfaced as flags rather than hidden.",
+        ),
+    ),
+    _card(
+        "review.daily",
+        LIMITED,
+        "Review the day",
+        "Tony can summarise today's activity and carry forward follow-up actions.",
+        "I can give you an end-of-day review with the Nova runs, urgent items, and follow-ups that need carrying forward.",
+        (
+            "Only includes signals Nova can read from its current stores and integrations.",
+            "Read-only summary; it does not close tasks, send messages, or change external systems.",
+            "Quiet or partially synced days may produce a short or incomplete review.",
+        ),
+    ),
+    _card(
         "gmail.review_and_draft",
         APPROVAL_REQUIRED,
         "Review email and prepare drafts",
