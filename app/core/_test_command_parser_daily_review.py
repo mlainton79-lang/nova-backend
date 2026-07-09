@@ -1,12 +1,42 @@
+import asyncio
 import sys
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 class CommandParserDailyReviewTests(unittest.TestCase):
+    def test_capture_command_detects_remember_phrase(self):
+        from app.core.command_parser import detect_command
+
+        command = detect_command("remember that the blue folder is for nursery forms")
+
+        self.assertIsNotNone(command)
+        self.assertEqual(command["command"], "capture_note")
+        self.assertEqual(command["args"][0], "the blue folder is for nursery forms")
+
+    def test_capture_command_reports_saved_and_rejected_results(self):
+        from app.core import command_parser
+
+        async def fake_capture_note(text):
+            if "password" in text:
+                return {"ok": False, "saved": False, "error": "credential-like"}
+            return {"ok": True, "saved": True}
+
+        fake_capture = types.ModuleType("app.core.capture")
+        fake_capture.capture_note = fake_capture_note
+
+        with mock.patch.dict(sys.modules, {"app.core.capture": fake_capture}):
+            saved = asyncio.run(command_parser._capture_note("buy printer paper"))
+            rejected = asyncio.run(command_parser._capture_note("password is nope"))
+
+        self.assertEqual(saved, "Captured.")
+        self.assertEqual(rejected, "Not captured — credential-like")
+
     def test_today_brief_command_detects_now_phrase(self):
         from app.core.command_parser import detect_command
 

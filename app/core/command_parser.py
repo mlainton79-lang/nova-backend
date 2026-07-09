@@ -85,6 +85,8 @@ COMMAND_PATTERNS = [
     (r'remove (.+) from (?:your|my) memory', 'clear_topic'),
     # Actionable today/now surface
     (r'^(?:now|what now|what can we do now(?: then)?|what should i do now|what needs doing now|what do we do now|where should i start)\??$', 'today_brief'),
+    # Low-risk capture into memory
+    (r'^(?:remember|note|capture) (?:that |this )?(.+)$', 'capture_note'),
     # Smart briefing on demand
     (r'^(?:what(?:\'s| is)? (?:new|up)|any updates?|anything (?:new|happening)|brief me|give me (?:a )?briefing|what(?:\'s| is)? (?:going on|happening))\??$', 'smart_brief'),
     # Expense summary
@@ -162,6 +164,9 @@ async def execute_command(command: Dict) -> str:
 
     elif cmd == "today_brief":
         return await _today_brief()
+
+    elif cmd == "capture_note":
+        return await _capture_note(args[0] if args else "")
 
     elif cmd == "expense_summary":
         days = int(args[0]) if args and len(args) > 0 and args[0] and str(args[0]).isdigit() else 30
@@ -849,6 +854,21 @@ def _format_today_brief_response(result: Dict) -> str:
     if flags:
         parts.append("Flags:\n" + "\n".join(f"- {message}" for message in flags))
     return "\n\n".join(parts)
+
+
+async def _capture_note(text: str) -> str:
+    """Capture a low-risk note into memory."""
+    try:
+        from app.core.capture import capture_note
+        result = await capture_note(text)
+    except Exception as e:
+        return f"Capture failed — {str(e)[:100]}"
+
+    if result.get("ok") and result.get("saved"):
+        return "Captured."
+    if result.get("ok"):
+        return "Already captured, or nothing new was saved."
+    return f"Not captured — {result.get('error', 'unknown error')}"
 
 
 async def _expense_summary(days: int = 30) -> str:
