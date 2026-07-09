@@ -26,6 +26,7 @@ TEST_MODULES = [
     "app.api.v1.endpoints._test_mcp_readonly_routes_source",
     "app.core._test_daily_surface_model_eval",
     "app.core._test_production_failure_evals",
+    "app.evals._test_production_failure_cases",
 ]
 
 

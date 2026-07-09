@@ -10,6 +10,8 @@ Each test has:
 
 These are not made-up. Each one corresponds to a real bug we've actually had.
 """
+import json
+from pathlib import Path
 from typing import List, Dict
 
 
@@ -190,6 +192,29 @@ TESTS: List[Dict] = [
         "category": "commands",
     },
 ]
+
+
+def _load_production_failure_cases() -> List[Dict]:
+    path = Path(__file__).with_name("production_failure_cases.json")
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    cases = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("id") or not item.get("message"):
+            continue
+        cases.append(item)
+    return cases
+
+
+TESTS.extend(_load_production_failure_cases())
 
 
 def get_tests_by_category(category: str = None) -> List[Dict]:
