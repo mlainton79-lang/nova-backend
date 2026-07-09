@@ -196,6 +196,70 @@ def _save_triage(email: Dict, triage: Dict):
         print(f"[TRIAGE] Save failed: {e}")
 
 
+def _row_to_triage_item(row) -> Dict:
+    return {
+        "email_hash": row[0],
+        "message_id": row[1],
+        "account": row[2],
+        "sender": row[3],
+        "subject": row[4],
+        "urgency": row[5],
+        "category": row[6],
+        "needs_reply": bool(row[7]),
+        "reply_draft": row[8] or "",
+        "summary": row[9] or "",
+        "action": row[10] or "",
+        "triaged_at": row[11].isoformat() if hasattr(row[11], "isoformat") else str(row[11]),
+    }
+
+
+def list_triage_items(kind: str = "recent", limit: int = 20) -> Dict:
+    """Read cached triage rows for focused UI surfaces.
+
+    kind:
+      - urgent: urgent rows only
+      - needs_reply: rows with reply drafts / needs_reply flag
+      - recent: latest cached triage rows
+    """
+    limit = min(max(int(limit or 20), 1), 50)
+    where = ""
+    params = []
+    if kind == "urgent":
+        where = "WHERE urgency = %s"
+        params.append("urgent")
+    elif kind == "needs_reply":
+        where = "WHERE needs_reply = TRUE"
+    elif kind != "recent":
+        return {"ok": False, "error": f"unknown triage kind: {kind}", "items": []}
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT email_hash, message_id, account, sender, subject,
+                   urgency, category, needs_reply, reply_draft, summary,
+                   action, triaged_at
+            FROM tony_email_triage
+            {where}
+            ORDER BY
+                CASE urgency WHEN 'urgent' THEN 1 WHEN 'normal' THEN 2
+                             WHEN 'low' THEN 3 ELSE 4 END,
+                triaged_at DESC
+            LIMIT %s
+        """, (*params, limit))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {
+            "ok": True,
+            "kind": kind,
+            "count": len(rows),
+            "items": [_row_to_triage_item(row) for row in rows],
+        }
+    except Exception as e:
+        return {"ok": False, "kind": kind, "error": str(e), "items": []}
+
+
 async def triage_emails(emails: List[Dict], use_cache: bool = True) -> List[Dict]:
     """Triage a batch. Returns emails enriched with triage fields."""
     results = []

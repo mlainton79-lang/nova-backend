@@ -4,7 +4,7 @@ Email triage endpoints — smart digest with categorisation + draft replies.
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.core.security import verify_token
-from app.core.email_triage import get_smart_digest, triage_emails
+from app.core.email_triage import get_smart_digest, list_triage_items, triage_emails
 
 router = APIRouter()
 
@@ -13,6 +13,24 @@ router = APIRouter()
 async def smart_digest(_=Depends(verify_token)):
     """Get a full triage digest — what's urgent, what needs a reply, what to skip."""
     return await get_smart_digest()
+
+
+@router.get("/triage/urgent")
+async def urgent_items(limit: int = 20, _=Depends(verify_token)):
+    """Cached urgent email triage items."""
+    return list_triage_items("urgent", limit=limit)
+
+
+@router.get("/triage/needs-reply")
+async def needs_reply_items(limit: int = 20, _=Depends(verify_token)):
+    """Cached email triage items that need a reply."""
+    return list_triage_items("needs_reply", limit=limit)
+
+
+@router.get("/triage/recent")
+async def recent_items(limit: int = 20, _=Depends(verify_token)):
+    """Latest cached email triage items."""
+    return list_triage_items("recent", limit=limit)
 
 
 class TriageBatchRequest(BaseModel):
