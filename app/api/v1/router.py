@@ -102,6 +102,8 @@ from app.api.v1.endpoints import facts
 router.include_router(facts.router, tags=["facts"])
 from app.api.v1.endpoints import email_triage
 router.include_router(email_triage.router, tags=["triage"])
+from app.api.v1.endpoints import think
+router.include_router(think.router, tags=["think"])
 from app.api.v1.endpoints import health_dashboard
 router.include_router(health_dashboard.router, tags=["health"])
 from app.api.v1.endpoints import status as status_endpoint

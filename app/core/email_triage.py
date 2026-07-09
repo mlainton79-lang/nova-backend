@@ -14,6 +14,7 @@ Results are cached so the same emails aren't re-triaged on every check.
 import os
 import json
 import hashlib
+import asyncio
 import psycopg2
 import httpx
 from typing import List, Dict, Optional
@@ -220,18 +221,36 @@ async def get_smart_digest() -> Dict:
     if not accounts:
         return {"ok": False, "error": "No Gmail accounts connected"}
 
-    all_emails = []
-    for account in accounts:
+    async def _fetch_account(account: str):
         try:
             emails = await list_emails(
                 account, query="is:unread newer_than:3d",
                 max_results=20, label=""
             )
-            all_emails.extend(emails)
+            return account, emails, None
         except Exception as e:
-            print(f"[TRIAGE] List failed for {account}: {e}")
+            err = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            print(f"[TRIAGE] List failed for {account}: {err}")
+            return account, [], err
+
+    fetched = await asyncio.gather(*[_fetch_account(account) for account in accounts])
+
+    all_emails = []
+    errors = []
+    for account, emails, err in fetched:
+        all_emails.extend(emails)
+        if err:
+            errors.append({"account": account, "error": err})
 
     if not all_emails:
+        if errors:
+            return {
+                "ok": False,
+                "count": 0,
+                "error": "Gmail fetch failed for one or more accounts",
+                "errors": errors,
+                "digest": "Couldn't check Gmail triage. Account fetch failed.",
+            }
         return {"ok": True, "count": 0, "digest": "All caught up — no unread in last 3 days."}
 
     triaged = await triage_emails(all_emails, use_cache=True)
@@ -281,5 +300,6 @@ async def get_smart_digest() -> Dict:
         "needs_reply_count": len(needs_reply),
         "digest": "\n".join(lines),
         "by_urgency": {k: len(v) for k, v in by_urgency.items()},
+        "errors": errors,
         "triaged_emails": triaged[:30],  # include full detail for UI
     }
