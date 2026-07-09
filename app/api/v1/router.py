@@ -28,6 +28,8 @@ from app.api.v1.endpoints import vision
 router.include_router(vision.router, tags=["vision"])
 from app.api.v1.endpoints import proactive
 router.include_router(proactive.router, tags=["proactive"])
+from app.api.v1.endpoints import briefing
+router.include_router(briefing.router, tags=["briefing"])
 from app.api.v1.endpoints import calendar
 router.include_router(calendar.router, tags=["calendar"])
 from app.api.v1.endpoints import calendar_sync
