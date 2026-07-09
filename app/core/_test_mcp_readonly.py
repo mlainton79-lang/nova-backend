@@ -20,12 +20,24 @@ class McpReadonlyTests(unittest.TestCase):
             "nova.capability_cards",
             "nova.codebase_stats",
             "nova.daily_loop_quality",
+            "nova.daily_surface_model_eval",
+            "nova.failure_candidates",
         ])
         for name in names:
             self.assertTrue(name.startswith("nova."))
             self.assertNotIn("send", name)
             self.assertNotIn("delete", name)
             self.assertNotIn("approve", name)
+
+    def test_failure_candidates_tool_has_bounded_input_schema(self):
+        from app.core.mcp_readonly import list_tools
+
+        tools = {tool["name"]: tool for tool in list_tools()["tools"]}
+        schema = tools["nova.failure_candidates"]["inputSchema"]
+
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(schema["properties"]["minutes"]["maximum"], 1440)
+        self.assertEqual(schema["properties"]["limit"]["maximum"], 100)
 
     def test_unknown_tool_returns_error_content(self):
         from app.core.mcp_readonly import call_tool

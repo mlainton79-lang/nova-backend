@@ -76,12 +76,43 @@ async def _daily_loop_quality(_arguments: Dict[str, Any]) -> Dict[str, Any]:
     ])
 
 
+async def _daily_surface_model_eval(_arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from app.core.daily_surface_model_eval import run_daily_surface_model_eval
+
+    return await run_daily_surface_model_eval()
+
+
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+async def _failure_candidates(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from app.core.production_failure_evals import recent_failure_events
+
+    minutes = _bounded_int(arguments.get("minutes"), default=24 * 60, minimum=1, maximum=24 * 60)
+    limit = _bounded_int(arguments.get("limit"), default=25, minimum=1, maximum=100)
+    return recent_failure_events(minutes=minutes, limit=limit)
+
+
 TOOL_DEFINITIONS = (
     _tool_schema("nova.today_brief", "Read Nova's actionable Today Brief."),
     _tool_schema("nova.daily_review", "Read Nova's end-of-day Daily Review."),
     _tool_schema("nova.capability_cards", "List Nova capability truth cards."),
     _tool_schema("nova.codebase_stats", "Read codebase sync statistics."),
     _tool_schema("nova.daily_loop_quality", "Run deterministic daily-loop quality checks."),
+    _tool_schema("nova.daily_surface_model_eval", "Run model-assisted Today Brief / Daily Review quality checks."),
+    _tool_schema(
+        "nova.failure_candidates",
+        "Suggest eval cases from recent production warning/error/critical events.",
+        properties={
+            "minutes": {"type": "integer", "minimum": 1, "maximum": 1440},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+    ),
 )
 
 
@@ -91,6 +122,8 @@ TOOL_HANDLERS: Dict[str, ToolHandler] = {
     "nova.capability_cards": _capability_cards,
     "nova.codebase_stats": _codebase_stats,
     "nova.daily_loop_quality": _daily_loop_quality,
+    "nova.daily_surface_model_eval": _daily_surface_model_eval,
+    "nova.failure_candidates": _failure_candidates,
 }
 
 
