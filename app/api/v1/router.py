@@ -191,6 +191,7 @@ _inits = [
     ("app.core.known_facts_seed",       "seed_bedrock_facts",         "Bedrock facts"),
     ("app.core.repository_intelligence","init_repo_intel_tables",     "Repo intelligence"),
     ("app.core.run_ledger",            "init_run_ledger_table",      "Run ledger"),
+    ("app.core.workflow_state",        "init_workflow_state_table",  "Workflow state"),
     ("app.core.ebay_oauth",            "init_ebay_oauth_tables",     "eBay OAuth"),
     ("app.core.vinted_jobs",           "init_vinted_jobs_tables",    "Vinted jobs"),
     ("app.selling.drafts",             "init_drafts_table",          "Selling drafts"),
