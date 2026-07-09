@@ -174,9 +174,20 @@ def classify_request(
         msg_lower
     ))
 
+    is_trivial = (
+        length <= 3
+        and not has_image
+        and not has_document
+        and not is_code
+        and not is_creative
+        and not is_reasoning
+        and not is_sensitive
+    )
+
     return {
         "is_greeting": is_greeting,
         "is_ack": is_ack,
+        "is_trivial": is_trivial,
         "is_code": is_code,
         "is_creative": is_creative,
         "is_reasoning": is_reasoning,
@@ -260,11 +271,11 @@ def _choose_provider_raw(
             "fallbacks": ["claude", "openrouter"],
         }
 
-    # Simple greeting or acknowledgement → cheapest + fastest
-    if classify["is_greeting"] or classify["is_ack"]:
+    # Simple greeting / acknowledgement / trivial ping → cheapest + fastest
+    if classify["is_greeting"] or classify["is_ack"] or classify["is_trivial"]:
         return {
             "provider": "groq",
-            "rationale": "greeting/ack — use fastest provider",
+            "rationale": "trivial message — use fastest provider",
             "fallbacks": ["gemini", "mistral"],
         }
 
