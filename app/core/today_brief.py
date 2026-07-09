@@ -61,11 +61,23 @@ async def get_today_brief() -> Dict[str, Any]:
         briefing_state = {"error": f"{type(e).__name__}: {e}"}
 
     try:
-        from app.core.approval_lock import list_active_pending_approvals
+        from app.core.approval_lock import (
+            build_pending_approval_summary,
+            list_active_pending_approvals,
+        )
 
         approvals = list_active_pending_approvals(limit=10)
     except Exception:
         approvals = []
+        approval_summary = {
+            "count": 0,
+            "has_pending": False,
+            "high_risk_count": 0,
+            "risk_counts": {"high": 0, "medium": 0, "low": 0, "unknown": 0},
+            "cards": [],
+        }
+    else:
+        approval_summary = build_pending_approval_summary(approvals)
 
     try:
         from app.core.run_ledger import recent_runs
@@ -94,6 +106,7 @@ async def get_today_brief() -> Dict[str, Any]:
         "briefing": briefing,
         "attention": {
             "pending_approvals_count": len(approvals),
+            "approvals": approval_summary,
             "email": {
                 "ok": email_digest.get("ok"),
                 "count": email_digest.get("count"),
@@ -106,6 +119,7 @@ async def get_today_brief() -> Dict[str, Any]:
             "codebase": codebase_stats,
         },
         "next_actions": next_actions,
+        "approval_cards": approval_summary["cards"][:5],
         "pending_approvals": approvals[:5],
         "recent_activity": recent_activity[:5],
     }

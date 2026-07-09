@@ -11,6 +11,7 @@ from app.core.approval_lock import (
     TEST_APPROVAL_RESUME_STEP_SUMMARY,
     approve_pending_approval,
     create_pending_approval_once,
+    build_pending_approval_summary,
     list_active_pending_approvals,
     reject_pending_approval,
 )
@@ -32,9 +33,12 @@ async def get_pending_approvals(
 ):
     """List active pending approvals without exposing secrets."""
     pending = list_active_pending_approvals(limit=limit)
+    summary = build_pending_approval_summary(pending)
     return {
         "ok": True,
         "count": len(pending),
+        "summary": summary,
+        "approval_cards": summary["cards"],
         "pending_approvals": pending,
     }
 

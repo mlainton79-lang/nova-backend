@@ -32,8 +32,26 @@ class TodayBriefTests(unittest.TestCase):
 
         fake_approval_module = types.ModuleType("app.core.approval_lock")
         fake_approval_module.list_active_pending_approvals = lambda limit=10: [
-            {"pending_id": "p1", "step_summary": "Send email"}
+            {
+                "pending_id": "p1",
+                "display_title": "gmail_send: send",
+                "display_summary": "Send email",
+                "risk_level": "high",
+                "status": "awaiting",
+            }
         ]
+        fake_approval_module.build_pending_approval_summary = lambda approvals: {
+            "count": len(approvals),
+            "has_pending": bool(approvals),
+            "high_risk_count": 1,
+            "risk_counts": {"high": 1, "medium": 0, "low": 0, "unknown": 0},
+            "cards": [{
+                "pending_id": "p1",
+                "title": "gmail_send: send",
+                "summary": "Send email",
+                "risk_level": "high",
+            }],
+        }
 
         fake_run_ledger = types.ModuleType("app.core.run_ledger")
         fake_run_ledger.recent_runs = lambda limit=5: [
@@ -55,6 +73,8 @@ class TodayBriefTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["attention"]["pending_approvals_count"], 1)
+        self.assertEqual(result["attention"]["approvals"]["high_risk_count"], 1)
+        self.assertEqual(result["approval_cards"][0]["title"], "gmail_send: send")
         self.assertEqual(result["attention"]["email"]["needs_reply_count"], 2)
         self.assertIn("Review 1 pending approval", result["next_actions"][0])
         self.assertTrue(any("email reply" in action for action in result["next_actions"]))

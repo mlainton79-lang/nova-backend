@@ -542,6 +542,36 @@ def list_active_pending_approvals(limit: int = 20) -> list[dict]:
                 pass
 
 
+def build_pending_approval_summary(pending: Sequence[Mapping]) -> dict:
+    """Build a compact UI-safe summary from sanitized pending approvals."""
+    cards = []
+    risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+    for item in pending or []:
+        if not isinstance(item, Mapping):
+            continue
+        risk = str(item.get("risk_level") or "unknown").lower()
+        if risk not in risk_counts:
+            risk = "unknown"
+        risk_counts[risk] += 1
+        cards.append({
+            "pending_id": str(item.get("pending_id") or ""),
+            "title": str(item.get("display_title") or "Approval required"),
+            "summary": str(item.get("display_summary") or ""),
+            "risk_level": risk,
+            "capability_key": item.get("capability_key"),
+            "status": item.get("status"),
+            "expires_at": item.get("expires_at"),
+        })
+
+    return {
+        "count": len(cards),
+        "has_pending": bool(cards),
+        "high_risk_count": risk_counts["high"],
+        "risk_counts": risk_counts,
+        "cards": cards,
+    }
+
+
 def create_pending_approval_once(
     *,
     capability_key: str,
