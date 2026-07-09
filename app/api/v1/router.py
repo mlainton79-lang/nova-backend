@@ -134,6 +134,8 @@ from app.api.v1.endpoints import admin_worker_log
 router.include_router(admin_worker_log.router, tags=["admin"])
 from app.api.v1.endpoints import tony_capabilities
 router.include_router(tony_capabilities.router, tags=["tony_capabilities"])
+from app.api.v1.endpoints import mcp_readonly
+router.include_router(mcp_readonly.router, tags=["mcp_readonly"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:
