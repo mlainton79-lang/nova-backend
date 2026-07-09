@@ -76,6 +76,18 @@ class DailyReviewTests(unittest.TestCase):
 
         self.assertIn("2 Nova run(s) completed", text)
 
+    def test_fallback_review_mentions_captures(self):
+        from app.core.daily_review import _fallback_review
+
+        text = _fallback_review({
+            "captures": [
+                {"category": "capture", "text": "Blue folder is for nursery forms"},
+                {"category": "capture", "text": "Buy printer paper"},
+            ],
+        })
+
+        self.assertIn("Captured 2 note(s).", text)
+
 
 if __name__ == "__main__":
     unittest.main()

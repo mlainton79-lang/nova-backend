@@ -181,6 +181,21 @@ async def gather_daily_signals() -> Dict:
         except Exception:
             signals["docs"] = []
 
+        # Low-risk notes captured today
+        try:
+            cur.execute("""
+                SELECT category, text FROM semantic_memories
+                WHERE created_at::date = CURRENT_DATE
+                  AND category IN ('capture', 'daily_capture')
+                ORDER BY created_at DESC LIMIT 5
+            """)
+            signals["captures"] = [
+                {"category": r[0], "text": (r[1] or "")[:150]}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            signals["captures"] = []
+
         # Tony's own work today (capabilities built, tasks completed)
         try:
             cur.execute("""
@@ -265,6 +280,12 @@ async def synthesise_review(signals: Dict) -> str:
     if docs:
         facts.append(f"Documents indexed: {[d['name'] for d in docs]}")
 
+    captures = signals.get("captures", [])
+    if captures:
+        facts.append(f"Captured notes: {len(captures)}")
+        for capture in captures[:3]:
+            facts.append(f"  - {capture['text'][:100]}")
+
     tony_tasks = signals.get("tony_tasks", [])
     if tony_tasks:
         completed = [t for t in tony_tasks if t["status"] == "completed"]
@@ -333,6 +354,9 @@ def _fallback_review(signals: Dict) -> str:
     emails = signals.get("emails_by_urgency", {})
     if emails.get("urgent"):
         parts.append(f"{emails['urgent']} urgent emails.")
+    captures = signals.get("captures", [])
+    if captures:
+        parts.append(f"Captured {len(captures)} note(s).")
     ledger_counts = (signals.get("run_ledger") or {}).get("counts") or {}
     if ledger_counts.get("failed"):
         parts.append(f"{ledger_counts['failed']} Nova run(s) failed.")
