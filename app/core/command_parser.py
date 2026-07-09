@@ -852,6 +852,18 @@ async def _daily_review() -> str:
     try:
         from app.core.daily_review import get_daily_review
         result = await get_daily_review()
-        return result.get("review", "Quiet one today.")
+        return _format_daily_review_response(result)
     except Exception as e:
         return f"Couldn't run daily review — {str(e)[:100]}"
+
+
+def _format_daily_review_response(result: Dict) -> str:
+    review = str(result.get("review") or "Quiet one today.").strip()
+    actions = [
+        str(action).strip()
+        for action in result.get("follow_up_actions", [])
+        if str(action).strip() and str(action).strip() != "No follow-up action surfaced."
+    ]
+    if not actions:
+        return review
+    return review + "\n\nFollow-up:\n" + "\n".join(f"- {action}" for action in actions)
