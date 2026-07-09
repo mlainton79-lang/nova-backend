@@ -83,6 +83,8 @@ COMMAND_PATTERNS = [
     (r'permanently forget (.+)', 'clear_topic'),
     (r'wipe (.+) from (?:your|my) memory', 'clear_topic'),
     (r'remove (.+) from (?:your|my) memory', 'clear_topic'),
+    # Actionable today/now surface
+    (r'^(?:now|what now|what can we do now(?: then)?|what should i do now|what needs doing now|what do we do now|where should i start)\??$', 'today_brief'),
     # Smart briefing on demand
     (r'^(?:what(?:\'s| is)? (?:new|up)|any updates?|anything (?:new|happening)|brief me|give me (?:a )?briefing|what(?:\'s| is)? (?:going on|happening))\??$', 'smart_brief'),
     # Expense summary
@@ -157,6 +159,9 @@ async def execute_command(command: Dict) -> str:
 
     elif cmd == "smart_brief":
         return await _smart_brief()
+
+    elif cmd == "today_brief":
+        return await _today_brief()
 
     elif cmd == "expense_summary":
         days = int(args[0]) if args and len(args) > 0 and args[0] and str(args[0]).isdigit() else 30
@@ -813,6 +818,37 @@ async def _smart_brief() -> str:
         return result.get("briefing", "All clear. Nothing needing you.")
     except Exception as e:
         return f"Couldn't generate brief — {str(e)[:100]}"
+
+
+async def _today_brief() -> str:
+    """Run the actionable today surface."""
+    try:
+        from app.core.today_brief import get_today_brief
+        result = await get_today_brief()
+        return _format_today_brief_response(result)
+    except Exception as e:
+        return f"Today brief error — {str(e)[:100]}"
+
+
+def _format_today_brief_response(result: Dict) -> str:
+    briefing = str(result.get("briefing") or "All clear.").strip()
+    next_actions = [
+        str(action).strip()
+        for action in result.get("next_actions", [])
+        if str(action).strip() and str(action).strip() != "No urgent action surfaced."
+    ]
+    flags = [
+        str(flag.get("message") or "").strip()
+        for flag in result.get("health_flags", [])
+        if isinstance(flag, dict) and str(flag.get("message") or "").strip()
+    ]
+
+    parts = [briefing]
+    if next_actions:
+        parts.append("Next:\n" + "\n".join(f"- {action}" for action in next_actions))
+    if flags:
+        parts.append("Flags:\n" + "\n".join(f"- {message}" for message in flags))
+    return "\n\n".join(parts)
 
 
 async def _expense_summary(days: int = 30) -> str:
