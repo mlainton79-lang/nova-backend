@@ -17,7 +17,7 @@ import os
 import httpx
 import psycopg2
 from datetime import datetime, date, timedelta
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 def get_conn():
@@ -27,6 +27,69 @@ def get_conn():
 def _today_bounds():
     today = date.today()
     return today, today + timedelta(days=1)
+
+
+def _is_today(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, datetime):
+        return value.date() == date.today()
+    text = str(value)
+    return text.startswith(str(date.today()))
+
+
+def _recent_run_ledger_activity(limit: int = 20) -> Dict[str, Any]:
+    try:
+        from app.core.run_ledger import recent_runs
+
+        rows = recent_runs(limit=limit)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:80]}", "items": []}
+
+    items = []
+    counts = {"success": 0, "failed": 0, "awaiting_approval": 0, "other": 0}
+    for row in rows:
+        if not _is_today(row.get("created_at")):
+            continue
+        status = str(row.get("status") or "other").lower()
+        bucket = status if status in counts else "other"
+        counts[bucket] += 1
+        items.append({
+            "id": row.get("id"),
+            "action_type": row.get("action_type"),
+            "summary": row.get("summary"),
+            "status": status,
+            "trace_id": row.get("trace_id"),
+            "created_at": str(row.get("created_at")) if row.get("created_at") is not None else None,
+        })
+
+    return {"counts": counts, "items": items[:10]}
+
+
+def _build_review_actions(signals: Dict[str, Any]) -> List[str]:
+    actions: List[str] = []
+    ledger = signals.get("run_ledger") or {}
+    counts = ledger.get("counts") or {}
+    failed = int(counts.get("failed") or 0)
+    awaiting = int(counts.get("awaiting_approval") or 0)
+    if failed:
+        actions.append(f"Review {failed} failed Nova run(s).")
+    if awaiting:
+        actions.append(f"Pick up {awaiting} run(s) awaiting approval.")
+
+    emails = signals.get("emails_by_urgency") or {}
+    urgent_emails = int(emails.get("urgent") or 0)
+    if urgent_emails:
+        actions.append(f"Carry forward {urgent_emails} urgent email(s).")
+
+    alerts = signals.get("alerts") or []
+    urgent_alerts = [a for a in alerts if a.get("priority") == "urgent"]
+    if urgent_alerts:
+        actions.append(f"Resolve {len(urgent_alerts)} urgent alert(s).")
+
+    if not actions:
+        actions.append("No follow-up action surfaced.")
+    return actions
 
 
 async def gather_daily_signals() -> Dict:
@@ -161,6 +224,7 @@ async def gather_daily_signals() -> Dict:
     except Exception as e:
         signals["gather_error"] = str(e)[:100]
 
+    signals["run_ledger"] = _recent_run_ledger_activity()
     return signals
 
 
@@ -206,6 +270,15 @@ async def synthesise_review(signals: Dict) -> str:
         completed = [t for t in tony_tasks if t["status"] == "completed"]
         if completed:
             facts.append(f"Tony completed: {len(completed)} background tasks")
+
+    run_ledger = signals.get("run_ledger", {})
+    ledger_counts = run_ledger.get("counts", {})
+    if ledger_counts.get("success") or ledger_counts.get("failed"):
+        facts.append(
+            "Nova runs: "
+            f"{ledger_counts.get('success', 0)} succeeded, "
+            f"{ledger_counts.get('failed', 0)} failed"
+        )
 
     if signals.get("fabrications_flagged", 0) > 0:
         facts.append(f"Fabrication-check caught: {signals['fabrications_flagged']}")
@@ -260,6 +333,11 @@ def _fallback_review(signals: Dict) -> str:
     emails = signals.get("emails_by_urgency", {})
     if emails.get("urgent"):
         parts.append(f"{emails['urgent']} urgent emails.")
+    ledger_counts = (signals.get("run_ledger") or {}).get("counts") or {}
+    if ledger_counts.get("failed"):
+        parts.append(f"{ledger_counts['failed']} Nova run(s) failed.")
+    elif ledger_counts.get("success"):
+        parts.append(f"{ledger_counts['success']} Nova run(s) completed.")
     if not parts:
         return "Quiet one today."
     return " ".join(parts)
@@ -268,4 +346,9 @@ def _fallback_review(signals: Dict) -> str:
 async def get_daily_review() -> Dict:
     signals = await gather_daily_signals()
     review = await synthesise_review(signals)
-    return {"ok": True, "review": review, "signals": signals}
+    return {
+        "ok": True,
+        "review": review,
+        "signals": signals,
+        "follow_up_actions": _build_review_actions(signals),
+    }
