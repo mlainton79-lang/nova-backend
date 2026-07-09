@@ -81,3 +81,27 @@ async def eval_history(limit: int = 10, _=Depends(verify_token)):
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/evals/daily-loop")
+async def daily_loop_quality(_=Depends(verify_token)):
+    """Run deterministic shape checks for Capture / Resume / Review."""
+    from app.core.capture import capture_note
+    from app.core.daily_loop_quality import (
+        combine_daily_loop_quality,
+        evaluate_capture_result,
+        evaluate_daily_review_payload,
+        evaluate_today_brief_payload,
+    )
+    from app.core.daily_review import get_daily_review
+    from app.core.today_brief import get_today_brief
+
+    today_payload = await get_today_brief()
+    review_payload = await get_daily_review()
+    capture_payload = await capture_note("api key should not be saved")
+
+    return combine_daily_loop_quality([
+        evaluate_today_brief_payload(today_payload),
+        evaluate_daily_review_payload(review_payload),
+        evaluate_capture_result(capture_payload),
+    ])
