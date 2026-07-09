@@ -17,6 +17,13 @@ class DailyLoopEvalRouteSourceTests(unittest.TestCase):
         self.assertIn("async def memory_retrieval_quality(_=Depends(verify_token))", source)
         self.assertIn("run_capture_retrieval_eval", source)
 
+    def test_daily_surface_model_eval_route_is_secured(self):
+        source = Path(__file__).with_name("evals.py").read_text(encoding="utf-8")
+
+        self.assertIn('@router.get("/evals/daily-surface-model")', source)
+        self.assertIn("async def daily_surface_model_quality(_=Depends(verify_token))", source)
+        self.assertIn("run_daily_surface_model_eval", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,3 +113,11 @@ async def memory_retrieval_quality(_=Depends(verify_token)):
     from app.core.memory_quality import run_capture_retrieval_eval
 
     return await run_capture_retrieval_eval()
+
+
+@router.get("/evals/daily-surface-model")
+async def daily_surface_model_quality(_=Depends(verify_token)):
+    """Run model-assisted quality checks for Today Brief / Daily Review."""
+    from app.core.daily_surface_model_eval import run_daily_surface_model_eval
+
+    return await run_daily_surface_model_eval()
