@@ -75,6 +75,7 @@ class TodayBriefTests(unittest.TestCase):
         self.assertEqual(result["attention"]["pending_approvals_count"], 1)
         self.assertEqual(result["attention"]["approvals"]["high_risk_count"], 1)
         self.assertEqual(result["approval_cards"][0]["title"], "gmail_send: send")
+        self.assertEqual(result["health_flags"][0]["code"], "high_risk_approvals")
         self.assertEqual(result["attention"]["email"]["needs_reply_count"], 2)
         self.assertIn("Review 1 pending approval", result["next_actions"][0])
         self.assertTrue(any("email reply" in action for action in result["next_actions"]))
@@ -90,6 +91,24 @@ class TodayBriefTests(unittest.TestCase):
         )
 
         self.assertEqual(actions, ["No urgent action surfaced."])
+
+    def test_health_flags_surface_degraded_daily_signals(self):
+        from app.core.today_brief import _build_health_flags
+
+        flags = _build_health_flags(
+            email_digest={"ok": False, "error": "Gmail failed"},
+            recent_activity=[{"status": "failed", "summary": "Briefing failed"}],
+            codebase_stats={"error": "database unavailable"},
+            approval_summary={"high_risk_count": 2},
+        )
+
+        codes = [flag["code"] for flag in flags]
+        self.assertEqual(codes, [
+            "gmail_connection",
+            "high_risk_approvals",
+            "codebase_sync_error",
+            "recent_run_failed",
+        ])
 
 
 if __name__ == "__main__":

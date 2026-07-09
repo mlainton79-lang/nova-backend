@@ -11,6 +11,55 @@ def _safe_count(value) -> int:
         return 0
 
 
+def _build_health_flags(
+    email_digest: Dict[str, Any],
+    recent_activity: List[Dict[str, Any]],
+    codebase_stats: Dict[str, Any],
+    approval_summary: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    flags: List[Dict[str, str]] = []
+
+    if email_digest and not email_digest.get("ok", True):
+        flags.append({
+            "code": "gmail_connection",
+            "severity": "warning",
+            "message": "Gmail triage has connection errors.",
+        })
+
+    if _safe_count(approval_summary.get("high_risk_count")):
+        flags.append({
+            "code": "high_risk_approvals",
+            "severity": "attention",
+            "message": "High-risk approvals are waiting.",
+        })
+
+    if codebase_stats.get("error"):
+        flags.append({
+            "code": "codebase_sync_error",
+            "severity": "warning",
+            "message": "Codebase sync status could not be read.",
+        })
+    elif not codebase_stats.get("sources"):
+        flags.append({
+            "code": "codebase_sync_missing",
+            "severity": "info",
+            "message": "Codebase sync has no indexed sources.",
+        })
+
+    failed_recent = [
+        r for r in recent_activity[:5]
+        if str(r.get("status", "")).lower() in ("failed", "error")
+    ]
+    if failed_recent:
+        flags.append({
+            "code": "recent_run_failed",
+            "severity": "warning",
+            "message": "Recent Nova runs include failures.",
+        })
+
+    return flags
+
+
 def _build_next_actions(
     approvals_count: int,
     email_digest: Dict[str, Any],
@@ -100,6 +149,12 @@ async def get_today_brief() -> Dict[str, Any]:
         recent_activity=recent_activity,
         codebase_stats=codebase_stats,
     )
+    health_flags = _build_health_flags(
+        email_digest=email_digest,
+        recent_activity=recent_activity,
+        codebase_stats=codebase_stats,
+        approval_summary=approval_summary,
+    )
 
     return {
         "ok": True,
@@ -118,6 +173,7 @@ async def get_today_brief() -> Dict[str, Any]:
             "recent_activity_count": len(recent_activity),
             "codebase": codebase_stats,
         },
+        "health_flags": health_flags,
         "next_actions": next_actions,
         "approval_cards": approval_summary["cards"][:5],
         "pending_approvals": approvals[:5],
