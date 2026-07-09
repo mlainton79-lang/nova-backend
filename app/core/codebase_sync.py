@@ -103,11 +103,13 @@ def store_files(source: str, files: Dict[str, str]) -> Dict:
     """
     stored = 0
     failed = 0
+    failed_paths = []
     try:
         conn = get_conn()
         cur = conn.cursor()
         for path, content in files.items():
             try:
+                cur.execute("SAVEPOINT codebase_file")
                 if path.endswith(".kt"):
                     summary = _summarise_kotlin(content, path)
                 elif path.endswith(".py"):
@@ -123,18 +125,37 @@ def store_files(source: str, files: Dict[str, str]) -> Dict:
                                   summary = EXCLUDED.summary,
                                   updated_at = NOW()
                 """, (source, path, content[:50000], summary))
+                cur.execute("RELEASE SAVEPOINT codebase_file")
                 stored += 1
             except Exception as e:
+                try:
+                    cur.execute("ROLLBACK TO SAVEPOINT codebase_file")
+                    cur.execute("RELEASE SAVEPOINT codebase_file")
+                except Exception:
+                    pass
                 print(f"[CODEBASE] Failed {path}: {e}")
                 failed += 1
+                failed_paths.append(path)
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
         print(f"[CODEBASE] Store failed: {e}")
-        return {"ok": False, "error": str(e), "stored": stored, "failed": failed}
+        return {
+            "ok": False,
+            "error": str(e),
+            "stored": stored,
+            "failed": failed,
+            "failed_paths": failed_paths[:20],
+        }
 
-    return {"ok": True, "stored": stored, "failed": failed, "source": source}
+    return {
+        "ok": True,
+        "stored": stored,
+        "failed": failed,
+        "failed_paths": failed_paths[:20],
+        "source": source,
+    }
 
 
 def get_codebase_summary(max_chars: int = 2000) -> str:

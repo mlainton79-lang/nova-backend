@@ -2,7 +2,7 @@
 Codebase sync endpoint.
 Receives files from Android app and stores them for Tony's reference.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List
 from app.core.security import verify_token
@@ -29,6 +29,8 @@ async def sync_codebase(req: CodebaseSyncRequest, _=Depends(verify_token)):
     """Receive files from Android app and store them."""
     file_map = {f.path: f.content for f in req.files}
     result = store_files(req.source, file_map)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result)
     return result
 
 
