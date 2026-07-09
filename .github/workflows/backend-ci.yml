@@ -28,5 +28,8 @@ jobs:
       - name: Compile application modules
         run: python -m compileall -q app think_worker.py vinted_worker
 
+      - name: Daily Loop Contract Tests
+        run: python tools/run_daily_loop_contract_tests.py
+
       - name: Run local unit tests
         run: python tools/run_unit_tests.py
