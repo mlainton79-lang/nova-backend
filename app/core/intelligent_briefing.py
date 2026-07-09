@@ -19,6 +19,7 @@ trusted assistant giving you a real brief, not a database readout.
 import os
 import json
 import httpx
+import asyncio
 import psycopg2
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
@@ -98,6 +99,58 @@ async def gather_state() -> Dict:
         conn.close()
     except Exception:
         state["emails"] = []
+
+    # If the cache has no recent triage rows, actively ask the triage engine
+    # for a live digest. This keeps morning briefs from saying "quiet one" just
+    # because the triage table has not been warmed yet. The digest helper is
+    # responsible for distinguishing "no unread" from Gmail fetch failures.
+    if not state.get("emails"):
+        try:
+            from app.core.email_triage import get_smart_digest
+
+            digest = await asyncio.wait_for(get_smart_digest(), timeout=25.0)
+            state["email_digest"] = {
+                "ok": bool(digest.get("ok")),
+                "count": int(digest.get("count") or 0),
+                "urgent_count": int(digest.get("urgent_count") or 0),
+                "needs_reply_count": int(digest.get("needs_reply_count") or 0),
+                "digest": (digest.get("digest") or "")[:1000],
+                "error": digest.get("error"),
+                "errors": digest.get("errors") or [],
+            }
+            if digest.get("ok"):
+                triaged = digest.get("triaged_emails") or []
+                state["emails"] = [
+                    {
+                        "sender": e.get("from", ""),
+                        "subject": e.get("subject", ""),
+                        "urgency": (e.get("triage") or {}).get("urgency", "normal"),
+                        "summary": (e.get("triage") or {}).get("summary", e.get("subject", "")),
+                        "action": (e.get("triage") or {}).get("action", "read"),
+                        "has_draft": bool((e.get("triage") or {}).get("reply_draft")),
+                    }
+                    for e in triaged[:5]
+                ]
+        except asyncio.TimeoutError:
+            state["email_digest"] = {
+                "ok": False,
+                "count": 0,
+                "urgent_count": 0,
+                "needs_reply_count": 0,
+                "digest": "",
+                "error": "email triage timed out",
+                "errors": [],
+            }
+        except Exception as e:
+            state["email_digest"] = {
+                "ok": False,
+                "count": 0,
+                "urgent_count": 0,
+                "needs_reply_count": 0,
+                "digest": "",
+                "error": f"{type(e).__name__}: {e}",
+                "errors": [],
+            }
 
     # Today's calendar events (uses get_upcoming_events which needs an email)
     try:
@@ -262,6 +315,14 @@ async def synthesise_briefing(state: Dict) -> str:
         other_emails = [e for e in emails if e["urgency"] == "normal"]
         if other_emails:
             facts.append(f"Normal emails: {len(other_emails)}")
+    elif state.get("email_digest"):
+        digest = state["email_digest"]
+        if digest.get("ok") and digest.get("count", 0) > 0:
+            facts.append(f"Unread emails: {digest['count']}")
+            if digest.get("needs_reply_count", 0) > 0:
+                facts.append(f"Emails needing reply: {digest['needs_reply_count']}")
+        elif not digest.get("ok"):
+            facts.append(f"Email triage unavailable: {digest.get('error') or 'unknown error'}")
 
     cal = state.get("calendar", [])
     if cal:
@@ -338,6 +399,12 @@ def _fallback_briefing(state: Dict) -> str:
     urgent_emails = [e for e in emails if e["urgency"] == "urgent"]
     if urgent_emails:
         parts.append(f"{len(urgent_emails)} urgent email(s).")
+    elif state.get("email_digest"):
+        digest = state["email_digest"]
+        if digest.get("ok") and digest.get("count", 0) > 0:
+            parts.append(f"{digest['count']} unread email(s).")
+        elif not digest.get("ok"):
+            parts.append("Email triage unavailable.")
     cal = state.get("calendar", [])
     if cal:
         parts.append(f"{len(cal)} on calendar today.")
