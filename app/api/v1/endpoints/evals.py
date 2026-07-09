@@ -1,7 +1,7 @@
 """
 Eval endpoints — lets Matthew (or Tony himself) run the regression suite.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from typing import Optional
 from app.core.security import verify_token
@@ -121,3 +121,15 @@ async def daily_surface_model_quality(_=Depends(verify_token)):
     from app.core.daily_surface_model_eval import run_daily_surface_model_eval
 
     return await run_daily_surface_model_eval()
+
+
+@router.get("/evals/failure-candidates")
+async def production_failure_eval_candidates(
+    minutes: int = Query(24 * 60, ge=1, le=24 * 60),
+    limit: int = Query(25, ge=1, le=100),
+    _=Depends(verify_token),
+):
+    """Suggest eval cases from recent warning/error/critical run_events."""
+    from app.core.production_failure_evals import recent_failure_events
+
+    return recent_failure_events(minutes=minutes, limit=limit)
