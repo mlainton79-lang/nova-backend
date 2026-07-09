@@ -63,11 +63,24 @@ class TodayBriefTests(unittest.TestCase):
             "sources": [{"source": "frontend", "file_count": 10}]
         }
 
+        fake_email_triage = types.ModuleType("app.core.email_triage")
+        fake_email_triage.list_triage_items = lambda kind, limit=3: {
+            "ok": True,
+            "items": [
+                {
+                    "message_id": f"{kind}-1",
+                    "subject": "Needs attention",
+                    "summary": "Short summary",
+                }
+            ],
+        }
+
         with mock.patch.dict(sys.modules, {
             "app.core.intelligent_briefing": fake_intelligent_module,
             "app.core.approval_lock": fake_approval_module,
             "app.core.run_ledger": fake_run_ledger,
             "app.core.codebase_sync": fake_codebase,
+            "app.core.email_triage": fake_email_triage,
         }):
             result = asyncio.run(today_brief.get_today_brief())
 
@@ -75,6 +88,11 @@ class TodayBriefTests(unittest.TestCase):
         self.assertEqual(result["attention"]["pending_approvals_count"], 1)
         self.assertEqual(result["attention"]["approvals"]["high_risk_count"], 1)
         self.assertEqual(result["approval_cards"][0]["title"], "gmail_send: send")
+        self.assertEqual(result["email_attention"]["urgent"][0]["message_id"], "urgent-1")
+        self.assertEqual(
+            result["attention"]["email_attention"]["needs_reply"][0]["message_id"],
+            "needs_reply-1",
+        )
         self.assertEqual(result["health_flags"][0]["code"], "high_risk_approvals")
         self.assertEqual(result["attention"]["email"]["needs_reply_count"], 2)
         self.assertIn("Review 1 pending approval", result["next_actions"][0])
@@ -108,6 +126,25 @@ class TodayBriefTests(unittest.TestCase):
             "high_risk_approvals",
             "codebase_sync_error",
             "recent_run_failed",
+        ])
+
+    def test_email_attention_reports_read_errors(self):
+        from app.core import today_brief
+
+        fake_email_triage = types.ModuleType("app.core.email_triage")
+        fake_email_triage.list_triage_items = lambda kind, limit=3: {
+            "ok": False,
+            "error": "triage table unavailable",
+        }
+
+        with mock.patch.dict(sys.modules, {"app.core.email_triage": fake_email_triage}):
+            result = today_brief._get_email_attention()
+
+        self.assertEqual(result["urgent"], [])
+        self.assertEqual(result["needs_reply"], [])
+        self.assertEqual(result["errors"], [
+            "urgent: triage table unavailable",
+            "needs_reply: triage table unavailable",
         ])
 
 

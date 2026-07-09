@@ -60,6 +60,33 @@ def _build_health_flags(
     return flags
 
 
+def _empty_email_attention(error: str | None = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"urgent": [], "needs_reply": [], "errors": []}
+    if error:
+        payload["errors"].append(error)
+    return payload
+
+
+def _get_email_attention(limit: int = 3) -> Dict[str, Any]:
+    try:
+        from app.core.email_triage import list_triage_items
+    except Exception as e:
+        return _empty_email_attention(f"{type(e).__name__}: {e}")
+
+    attention = _empty_email_attention()
+    for kind, output_key in (("urgent", "urgent"), ("needs_reply", "needs_reply")):
+        try:
+            result = list_triage_items(kind, limit=limit)
+        except Exception as e:
+            attention["errors"].append(f"{kind}: {type(e).__name__}: {e}")
+            continue
+        if not result.get("ok"):
+            attention["errors"].append(f"{kind}: {result.get('error', 'unknown error')}")
+            continue
+        attention[output_key] = result.get("items", [])[:limit]
+    return attention
+
+
 def _build_next_actions(
     approvals_count: int,
     email_digest: Dict[str, Any],
@@ -143,6 +170,7 @@ async def get_today_brief() -> Dict[str, Any]:
         codebase_stats = {"error": f"{type(e).__name__}: {e}"}
 
     email_digest = briefing_state.get("email_digest") or {}
+    email_attention = _get_email_attention(limit=3)
     next_actions = _build_next_actions(
         approvals_count=len(approvals),
         email_digest=email_digest,
@@ -170,11 +198,13 @@ async def get_today_brief() -> Dict[str, Any]:
                 "error": email_digest.get("error"),
                 "errors": email_digest.get("errors") or [],
             } if email_digest else None,
+            "email_attention": email_attention,
             "recent_activity_count": len(recent_activity),
             "codebase": codebase_stats,
         },
         "health_flags": health_flags,
         "next_actions": next_actions,
+        "email_attention": email_attention,
         "approval_cards": approval_summary["cards"][:5],
         "pending_approvals": approvals[:5],
         "recent_activity": recent_activity[:5],
