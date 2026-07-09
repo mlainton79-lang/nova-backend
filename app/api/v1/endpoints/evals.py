@@ -105,3 +105,11 @@ async def daily_loop_quality(_=Depends(verify_token)):
         evaluate_daily_review_payload(review_payload),
         evaluate_capture_result(capture_payload),
     ])
+
+
+@router.get("/evals/memory-retrieval")
+async def memory_retrieval_quality(_=Depends(verify_token)):
+    """Check that a captured note can be retrieved again."""
+    from app.core.memory_quality import run_capture_retrieval_eval
+
+    return await run_capture_retrieval_eval()
