@@ -5,7 +5,7 @@ from app.core.security import verify_token
 from app.core.gmail_service import (
     get_auth_url, exchange_code, get_user_email, save_account,
     get_all_accounts, list_emails, get_email_body, send_email,
-    trash_email, delete_email, search_all_accounts, get_morning_summary,
+    trash_email, delete_email, search_all_accounts, search_all_accounts_detailed, get_morning_summary,
     init_gmail_tables
 )
 
@@ -58,9 +58,14 @@ async def gmail_accounts(_=Depends(verify_token)):
 async def gmail_list(account: str = None, query: str = "", max_results: int = 20, label: str = "INBOX", _=Depends(verify_token)):
     if account:
         emails = await list_emails(account, query=query, max_results=max_results, label=label)
+        errors = []
+        accounts_checked = 1
     else:
-        emails = await search_all_accounts(query=query or "is:unread", max_per_account=max_results)
-    return {"emails": emails, "count": len(emails)}
+        detailed = await search_all_accounts_detailed(query=query or "is:unread", max_per_account=max_results)
+        emails = detailed["results"]
+        errors = detailed["errors"]
+        accounts_checked = detailed["accounts_checked"]
+    return {"emails": emails, "count": len(emails), "errors": errors, "accounts_checked": accounts_checked}
 
 @router.get("/gmail/email/{message_id}")
 async def gmail_get(message_id: str, account: str, _=Depends(verify_token)):
@@ -68,8 +73,15 @@ async def gmail_get(message_id: str, account: str, _=Depends(verify_token)):
 
 @router.get("/gmail/search")
 async def gmail_search(query: str, max_per_account: int = 10, _=Depends(verify_token)):
-    results = await search_all_accounts(query, max_per_account)
-    return {"results": results, "count": len(results)}
+    detailed = await search_all_accounts_detailed(query, max_per_account)
+    results = detailed["results"]
+    return {
+        "results": results,
+        "count": len(results),
+        "errors": detailed["errors"],
+        "accounts_checked": detailed["accounts_checked"],
+        "query": detailed["query"],
+    }
 
 @router.post("/gmail/send")
 async def gmail_send(account: str, to: str, subject: str, body: str, reply_to_id: str = None, _=Depends(verify_token)):

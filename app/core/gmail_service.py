@@ -20,6 +20,26 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email"
 ]
 
+
+class GmailApiError(Exception):
+    """Concise, token-safe Gmail API failure for callers to surface."""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"Gmail API {status_code}: {message}")
+
+
+def _google_error_message(resp: httpx.Response) -> str:
+    try:
+        data = resp.json()
+        msg = data.get("error", {}).get("message")
+        if msg:
+            return str(msg)[:240]
+    except Exception:
+        pass
+    return (resp.text or resp.reason_phrase or "request failed")[:240]
+
 def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
@@ -238,7 +258,22 @@ async def list_emails(email: str, query: str = "", max_results: int = 20, label:
         if query:
             params["q"] = query
         resp = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers={"Authorization": f"Bearer {token}"}, params=params)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            message = _google_error_message(resp)
+            record_run_event(
+                event_type=EVENT_TYPES["PROVIDER_ERROR"],
+                severity=EventSeverity.WARNING,
+                subsystem="gmail.list",
+                message=f"list_emails: Gmail returned {resp.status_code}",
+                metadata={
+                    "account": email,
+                    "status_code": resp.status_code,
+                    "label": label,
+                    "query_present": bool(query),
+                    "error": message,
+                },
+            )
+            raise GmailApiError(resp.status_code, message)
         messages = resp.json().get("messages", [])[:min(max_results, 10)]
         if not messages:
             return []
@@ -526,6 +561,11 @@ async def build_smart_query(raw_query: str) -> str:
     return q
 
 async def search_all_accounts(query: str, max_per_account: int = 10, label: str = "") -> list:
+    detailed = await search_all_accounts_detailed(query, max_per_account=max_per_account, label=label)
+    return detailed["results"]
+
+
+async def search_all_accounts_detailed(query: str, max_per_account: int = 10, label: str = "") -> dict:
     smart_query = await build_smart_query(query)
     # For exact email address searches, limit results to speed up response
     import re as _re
@@ -533,13 +573,21 @@ async def search_all_accounts(query: str, max_per_account: int = 10, label: str 
         max_per_account = min(max_per_account, 5)
     accounts = get_all_accounts()
     all_results = []
+    errors = []
     for account in accounts:
         try:
             results = await list_emails(account, query=smart_query, max_results=max_per_account, label=label)
             all_results.extend(results)
         except Exception as e:
-            print(f"[GMAIL] Search failed for {account}: {e}")
-    return sorted(all_results, key=lambda x: x.get("date", ""), reverse=True)
+            err = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            errors.append({"account": account, "error": err})
+            print(f"[GMAIL] Search failed for {account}: {err}")
+    return {
+        "results": sorted(all_results, key=lambda x: x.get("date", ""), reverse=True),
+        "errors": errors,
+        "accounts_checked": len(accounts),
+        "query": smart_query,
+    }
 
 async def deep_search_account(email: str, query: str, max_results: int = 200) -> list:
     """Paginated search - fetches ALL matching emails up to max_results. For case building etc."""
