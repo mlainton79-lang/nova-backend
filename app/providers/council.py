@@ -2,6 +2,16 @@ import asyncio
 import time
 
 
+def _provider_failure(exc: Exception, stage: str) -> dict:
+    """Token-safe provider failure metadata for Council diagnostics."""
+    msg = str(exc) or "(no message)"
+    return {
+        "stage": stage,
+        "error_class": type(exc).__name__,
+        "message": msg[:300],
+    }
+
+
 def _recent_context(history, n=2, max_chars=500):
     """
     Build a compact textual representation of the last n*2 turns of conversation
@@ -39,6 +49,7 @@ def _recent_context(history, n=2, max_chars=500):
 async def run_council(message, history, system_prompt, debug=False):
     start = time.time()
     adapters = {}
+    init_failures = {}
 
     try:
         from app.core.model_router_smart import is_provider_skipped
@@ -51,65 +62,74 @@ async def run_council(message, history, system_prompt, debug=False):
         if not is_provider_skipped("claude"):
             adapters["claude"] = ClaudeAdapter()
     except Exception as e:
-        print(f"[COUNCIL] claude init failed: {e}")
+        init_failures["claude"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] claude init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.gemini_adapter import GeminiAdapter
         if not is_provider_skipped("gemini"):
             adapters["gemini"] = GeminiAdapter()
     except Exception as e:
-        print(f"[COUNCIL] gemini init failed: {e}")
+        init_failures["gemini"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] gemini init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.xai_adapter import XAIAdapter
         if not is_provider_skipped("grok") and not is_provider_skipped("xai"):
             adapters["grok"] = XAIAdapter()
     except Exception as e:
-        print(f"[COUNCIL] grok init failed: {e}")
+        init_failures["grok"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] grok init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.openai_adapter import OpenAIAdapter
         if not is_provider_skipped("openai"):
             adapters["openai"] = OpenAIAdapter()
     except Exception as e:
-        print(f"[COUNCIL] openai init failed: {e}")
+        init_failures["openai"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] openai init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.deepseek_adapter import DeepSeekAdapter
         if not is_provider_skipped("deepseek"):
             adapters["deepseek"] = DeepSeekAdapter()
     except Exception as e:
-        print(f"[COUNCIL] deepseek init failed: {e}")
+        init_failures["deepseek"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] deepseek init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.openrouter_adapter import OpenRouterAdapter
         if not is_provider_skipped("openrouter"):
             adapters["openrouter"] = OpenRouterAdapter()
     except Exception as e:
-        print(f"[COUNCIL] openrouter init failed: {e}")
+        init_failures["openrouter"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] openrouter init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.groq_adapter import GroqAdapter
         if not is_provider_skipped("groq"):
             adapters["groq"] = GroqAdapter()
     except Exception as e:
-        print(f"[COUNCIL] groq init failed: {e}")
+        init_failures["groq"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] groq init failed: {type(e).__name__}: {str(e) or '(no message)'}")
     try:
         from app.providers.mistral_adapter import MistralAdapter
         if not is_provider_skipped("mistral"):
             adapters["mistral"] = MistralAdapter()
     except Exception as e:
-        print(f"[COUNCIL] mistral init failed: {e}")
+        init_failures["mistral"] = _provider_failure(e, "init")
+        print(f"[COUNCIL] mistral init failed: {type(e).__name__}: {str(e) or '(no message)'}")
 
     if not adapters:
-        return {"ok": False, "provider": "council", "reply": "No AI providers are currently available. Please try again shortly.", "failures": {}, "latency_ms": round((time.time() - start) * 1000)}
+        return {"ok": False, "provider": "council", "reply": "No AI providers are currently available. Please try again shortly.", "failures": init_failures, "latency_ms": round((time.time() - start) * 1000)}
 
     async def safe_call(name, adapter, msg, hist, sp, timeout=50.0):
         try:
             result = await asyncio.wait_for(adapter.chat(msg, hist, sp), timeout=timeout)
             return name, result, None
         except Exception as e:
-            print(f"[COUNCIL] {name} failed: {e}")
-            return name, None, str(e)
+            failure = _provider_failure(e, "chat")
+            print(f"[COUNCIL] {name} failed: {failure['error_class']}: {failure['message']}")
+            return name, None, failure
 
     round1_tasks = [safe_call(n, a, message, history, system_prompt) for n, a in adapters.items()]
     round1_results = await asyncio.gather(*round1_tasks)
     successes = {n: r for n, r, e in round1_results if r is not None}
-    failures = {n: e for n, r, e in round1_results if r is None}
+    failures = {**init_failures, **{n: e for n, r, e in round1_results if r is None}}
     print(f"[COUNCIL] Round 1 — {len(successes)} succeeded, {len(failures)} failed")
 
     if not successes:
