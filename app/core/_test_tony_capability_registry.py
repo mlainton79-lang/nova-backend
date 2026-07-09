@@ -107,6 +107,12 @@ class TonyCapabilityRegistryTests(unittest.TestCase):
         self.assertIn("harmless no-op", text)
         self.assertIn("Must never become a generic action dispatcher.", card.limits)
 
+    def test_low_risk_memory_card_mentions_guarded_capture_path(self):
+        card = registry.get_tony_capability_card("memory.save_low_risk")
+        text = " ".join((card.user_facing_summary, card.safe_to_say, " ".join(card.limits))).lower()
+        self.assertIn("capture", text)
+        self.assertIn("credential-like", text)
+
     def test_daily_loop_cards_are_limited_read_only_surfaces(self):
         for key in ("briefing.today", "review.daily"):
             card = registry.get_tony_capability_card(key)

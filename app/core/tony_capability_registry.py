@@ -89,12 +89,12 @@ _CARDS = (
         "memory.save_low_risk",
         AVAILABLE,
         "Save low-risk memory",
-        "Tony can save low-risk internal facts for future context.",
-        "I can remember low-risk details that make future answers more useful.",
+        "Tony can save low-risk internal facts and captured notes for future context.",
+        "I can remember low-risk details through the guarded capture path.",
         (
             "No external system is changed.",
             "Sensitive, credential-like, or risky material should not be saved as ordinary memory.",
-            "This is not a general database editing ability.",
+            "The capture path rejects empty, too-long, and obvious credential-like notes.",
         ),
     ),
     _card(
