@@ -5,8 +5,8 @@ from fastapi import FastAPI, Request
 from app.observability import record_run_event, EventSeverity, EVENT_TYPES
 
 # Logfire setup: configure once at module load, before any DB or HTTP work.
-# instrument_psycopg() must run before the startup cleanup's psycopg2.connect()
-# (R1.3 Part 2 — full DB observability across web + nova-backend cron).
+# instrument_psycopg() must run before any psycopg2.connect() calls
+# (R1.3 Part 2 - full DB observability across web + nova-backend cron).
 import logfire
 logfire.configure(
     service_name="nova-backend",
@@ -35,9 +35,12 @@ logfire.instrument_httpx()
 
 def _one_time_ccj_cleanup_sync():
     """
-    One-off cleanup: wipe Western Circle / CCJ from Tony's active memory.
+    Operator-triggered maintenance cleanup: wipe Western Circle / CCJ
+    from Tony's active memory.
+
     Matthew has asked repeatedly to stop mentioning it. The prompt rules weren't enough.
-    Runs once per process startup. Idempotent — safe to run every boot.
+    Intentionally not called during application import or startup: it deletes
+    user data and must only run as an explicit maintenance action.
     """
     import os
     import psycopg2
@@ -222,13 +225,6 @@ def _one_time_ccj_cleanup_sync():
         print("[STARTUP CLEANUP] CCJ/Western Circle cleanup complete")
     except Exception as e:
         print(f"[STARTUP CLEANUP] Failed: {e}")
-
-
-# CRITICAL: run CCJ cleanup BEFORE router imports so seeds re-init with clean data
-try:
-    _one_time_ccj_cleanup_sync()
-except Exception as _cleanup_err:
-    print(f"[STARTUP] Pre-router cleanup failed: {_cleanup_err}")
 
 from app.api.v1.router import router as v1_router
 
