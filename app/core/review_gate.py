@@ -116,7 +116,11 @@ class ReviewOutcome:
     refusal_reason: str | None
 
 
-def _build_review_prompt(plan: CodexTaskPlan, reviewer: BuildSeat) -> str:
+def _build_review_prompt(
+    plan: CodexTaskPlan,
+    reviewer: BuildSeat,
+    base_branch: str,
+) -> str:
     lines = [
         f"Tony-managed cross-review ({reviewer.value} reviewing)",
         "",
@@ -126,6 +130,11 @@ def _build_review_prompt(plan: CodexTaskPlan, reviewer: BuildSeat) -> str:
         "",
         "Review the implementer's diff for this task only.",
         "Check: correctness, safety boundaries, secret handling, tests.",
+        (
+            f"Diff under review: run `git diff {base_branch}...HEAD` "
+            "(read-only) to obtain the exact patch. Review the patch, "
+            "not just current file contents."
+        ),
         "",
         "Allowed scope:",
         *[f"- {item}" for item in plan.allowed_files_or_areas],
@@ -147,13 +156,18 @@ def _build_review_prompt(plan: CodexTaskPlan, reviewer: BuildSeat) -> str:
 
 def _reviewer_command_template(reviewer: BuildSeat, base_branch: str) -> str:
     if reviewer == BuildSeat.CODEX:
-        template = (
-            f'codex review --base {base_branch} "{{review_prompt}}"'
-        )
+        # codex-cli 0.143.0 rejects `[PROMPT]` when combined with `--base`
+        # (clap parser bug: "the argument '--base <BRANCH>' cannot be used
+        # with '[PROMPT]'"). We therefore emit --base only and rely on the
+        # default review body. The verdict-protocol prompt CANNOT be
+        # injected until a wrapper exists on the reviewer side, so a codex
+        # review that omits an explicit `VERDICT: SHIP` line correctly
+        # fails the gate closed via parse_review_verdict.
+        template = f"codex review --base {base_branch}"
     else:
         template = (
             'claude -p "{review_prompt}" '
-            '--allowedTools "Read,Grep,Glob" '
+            '--allowedTools "Read,Grep,Glob,Bash(git diff:*)" '
             "--permission-mode dontAsk "
             "--max-turns 20 "
             "--output-format json"
@@ -176,7 +190,7 @@ def build_cross_review_spec(
     reviewer = reviewer_for(impl)
     assert_two_seat_rule(impl, reviewer)
     branch = _clean_branch(base_branch)
-    prompt = _build_review_prompt(plan, reviewer)
+    prompt = _build_review_prompt(plan, reviewer, branch)
     template = _reviewer_command_template(reviewer, branch)
     return CrossReviewSpec(
         task_id=plan.task_id,
@@ -191,13 +205,24 @@ def build_cross_review_spec(
 
 
 def parse_review_verdict(raw_verdict_text: str | None) -> ReviewGateStatus:
-    """Map reviewer output to a gate status. Ambiguity fails closed."""
+    """Map reviewer output to a gate status. Ambiguity fails closed.
+
+    A line is a verdict only when its whitespace-collapsed, upper-cased
+    form equals a token exactly. Substring hits like "VERDICT: SHIPPING"
+    or "not VERDICT: SHIP" therefore do not count. If both tokens appear
+    on their own lines, or neither does, the gate fails closed.
+    """
     if not isinstance(raw_verdict_text, str) or not raw_verdict_text.strip():
         return ReviewGateStatus.REVIEW_FAILED
-    upper = raw_verdict_text.upper()
-    has_ship = SHIP_TOKEN in upper
-    has_do_not_ship = DO_NOT_SHIP_TOKEN in upper
-    if has_do_not_ship:
+    has_ship = False
+    has_do_not_ship = False
+    for line in raw_verdict_text.splitlines():
+        normalised = " ".join(line.split()).upper()
+        if normalised == SHIP_TOKEN:
+            has_ship = True
+        elif normalised == DO_NOT_SHIP_TOKEN:
+            has_do_not_ship = True
+    if has_ship and has_do_not_ship:
         return ReviewGateStatus.REVIEW_FAILED
     if has_ship:
         return ReviewGateStatus.REVIEW_PASSED
