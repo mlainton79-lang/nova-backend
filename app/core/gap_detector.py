@@ -158,8 +158,29 @@ async def detect_capability_gap(user_message: str) -> Optional[Dict]:
         "when did", "when is", "when was", "where did", "where is",
         "what's my", "what is my",
     )
-    if any(_m.startswith(p) for p in _RECALL_STARTS):
+    # --- Advice guard (2026-07-18): planning/advice/opinion questions are
+    # --- answered by chat, never a capability gap. The LLM classifier
+    # --- mislabelled "What should we do for Margot's first birthday?" as a
+    # --- build request the day the Gemini key came back to life; same
+    # --- deterministic short-circuit as the recall guard above.
+    _ADVICE_STARTS = (
+        "what should", "should we", "should i", "what shall", "shall we",
+        "ideas for", "any ideas", "give me ideas", "give me some ideas",
+        "how should", "what's the best way", "what is the best way",
+        "recommend", "any recommendations", "suggest", "any suggestions",
+        "what do you think", "thoughts on", "help me decide", "help me plan",
+        "what would you", "what can we do", "what could we do",
+    )
+    if any(_m.startswith(p) for p in _RECALL_STARTS + _ADVICE_STARTS):
         return None
+    # The classifier below is a direct Gemini call; honour the same
+    # operational disable switch as every routed provider.
+    try:
+        from app.core.model_router_smart import is_provider_skipped
+        if is_provider_skipped("gemini"):
+            return None
+    except Exception:
+        pass
 
     # Get what Tony already can do
     try:
@@ -194,7 +215,14 @@ Examples that are NOT new capabilities (Tony can already do):
 - "Write me a letter" → NO, chat is enough
 - "What's the weather?" → NO, web search
 - "Summarise this email" → NO, has Gmail + chat
-- Casual chat, questions, opinions, recommendations → NO
+- "What should we do for a birthday?" → NO, advice/planning is chat
+- "Ideas for the weekend?" → NO, recommendations are chat
+- "Help me plan Christmas" → NO, planning is chat
+- Casual chat, questions, opinions, advice, planning, recommendations → NO
+
+A gap requires BUILDING NEW CODE to PERFORM AN ACTION in an external system
+(post, pay, order, control, integrate). Answering, advising, planning,
+suggesting, and explaining are NEVER gaps. If in doubt: is_gap = false.
 
 Respond ONLY with valid JSON:
 {{
