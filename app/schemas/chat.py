@@ -33,3 +33,4 @@ class CouncilResponse(BaseModel):
     error: Optional[str] = None
     failures: Optional[dict] = None
     debug: Optional[dict] = None
+    council_health: Optional[dict] = None

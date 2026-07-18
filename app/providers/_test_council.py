@@ -73,6 +73,20 @@ class CouncilMembershipTests(unittest.TestCase):
         for name in DEFAULT_COUNCIL_MEMBERS:
             self.assertIn(name, CHAIR_PREFERENCE)
 
+    def test_xai_alias_normalises_to_grok(self):
+        from app.providers.council import _council_members
+
+        with mock.patch.dict(os.environ, {"COUNCIL_MEMBERS": "xai"}):
+            self.assertEqual(_council_members(), ["grok"])
+
+    def test_xai_and_grok_dedupe_to_single_grok_seat(self):
+        from app.providers.council import _council_members
+
+        with mock.patch.dict(os.environ, {"COUNCIL_MEMBERS": "xai,grok"}):
+            self.assertEqual(_council_members(), ["grok"])
+        with mock.patch.dict(os.environ, {"COUNCIL_MEMBERS": "grok,xai"}):
+            self.assertEqual(_council_members(), ["grok"])
+
 
 class CouncilGroundingTests(unittest.TestCase):
     def test_challenge_prompt_carries_grounding_and_chair_flag(self):

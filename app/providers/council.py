@@ -46,6 +46,13 @@ DEFAULT_COUNCIL_MEMBERS = ("claude", "openai", "gemini")
 # order takes the seat (chair_reason: first_healthy_in_preference_order).
 CHAIR_PREFERENCE = ["claude", "gemini", "groq", "mistral", "openrouter", "openai", "deepseek", "grok"]
 
+# Operator-facing aliases normalised to the canonical seat name before the
+# registry lookup. `grok` stays canonical everywhere (registry, chair
+# preference, health.dark) — `xai` is just the provider name used in
+# DISABLED_AI_PROVIDERS and elsewhere in the backend, so operators
+# configuring COUNCIL_MEMBERS with it must land on the same seat.
+_MEMBER_ALIASES = {"xai": "grok"}
+
 
 def _parse_member_list(value: str) -> list:
     members = []
@@ -53,6 +60,7 @@ def _parse_member_list(value: str) -> list:
         item = item.strip().lower()
         if not item:
             continue
+        item = _MEMBER_ALIASES.get(item, item)
         if item not in _ADAPTER_REGISTRY:
             print(f"[COUNCIL] ignoring unknown COUNCIL_MEMBERS entry: {item}")
             continue
