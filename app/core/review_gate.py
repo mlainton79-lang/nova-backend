@@ -156,7 +156,7 @@ def _build_review_prompt(
 
 def _reviewer_command_template(reviewer: BuildSeat, base_branch: str) -> str:
     if reviewer == BuildSeat.CODEX:
-        # codex-cli 0.143.0 rejects `[PROMPT]` when combined with `--base`
+        # codex-cli >=0.143.0 rejects `[PROMPT]` when combined with `--base`
         # (clap parser bug: "the argument '--base <BRANCH>' cannot be used
         # with '[PROMPT]'"). We therefore emit --base only and rely on the
         # default review body. The verdict-protocol prompt CANNOT be
