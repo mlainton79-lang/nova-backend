@@ -73,6 +73,50 @@ class ListEmailsNeedsReauthContractTests(unittest.TestCase):
         self.assertIn("dead@example.com", str(ctx.exception))
 
 
+class FetchPerAccountLiteralReauthTests(unittest.TestCase):
+    """Codex P2 on 1ac45d2: literal per-account inbox request must surface
+    Gmail-authoritative failures as an explicit unreadable-account block,
+    not swallow to None (which fell through to the cross-account digest)."""
+
+    def test_gmail_api_error_returns_explicit_unreadable_block(self):
+        import asyncio
+        from unittest import mock
+
+        from app.core import gmail_service
+
+        async def _raise(*_a, **_k):
+            raise gmail_service.GmailApiError(
+                401, "needs_reauth: token refresh returned no token for x@y.com"
+            )
+
+        with mock.patch.object(gmail_service, "get_all_accounts", return_value=["x@y.com"]), \
+             mock.patch.object(gmail_service, "list_emails", new=_raise):
+            block = asyncio.get_event_loop().run_until_complete(
+                gmail_service.fetch_per_account_literal("last 5 emails in x@y.com")
+            )
+        self.assertIsNotNone(block)
+        self.assertIn("[GMAIL: x@y.com]", block)
+        self.assertIn("ACCOUNT NOT READABLE", block)
+        self.assertIn("401", block)
+        self.assertIn("Never guess or invent", block)
+
+    def test_non_gmail_exception_still_falls_through_to_none(self):
+        import asyncio
+        from unittest import mock
+
+        from app.core import gmail_service
+
+        async def _timeout(*_a, **_k):
+            raise TimeoutError("wire timeout")
+
+        with mock.patch.object(gmail_service, "get_all_accounts", return_value=["x@y.com"]), \
+             mock.patch.object(gmail_service, "list_emails", new=_timeout):
+            result = asyncio.get_event_loop().run_until_complete(
+                gmail_service.fetch_per_account_literal("last 5 emails in x@y.com")
+            )
+        self.assertIsNone(result)
+
+
 class EndpointBlockContractTests(unittest.TestCase):
     """Source-level contracts, runnable even without fastapi installed."""
 

@@ -564,6 +564,21 @@ async def fetch_per_account_literal(message: str) -> Optional[str]:
             list_emails(match, query="", max_results=min(requested, 10), label="INBOX"),
             timeout=10.0,
         )
+    except GmailApiError as e:
+        # Codex P2 on 1ac45d2 (2026-07-19): Gmail-authoritative failures
+        # (dead refresh token, 4xx, 5xx from Google) must NOT swallow into
+        # None. If they did, the caller falls through to the cross-account
+        # digest and Matthew never learns the named account needs reauth.
+        # Return an explicit unreadable-account block instead so the model
+        # tells him plainly.
+        print(f"[GMAIL] Per-account literal fetch failed for {match}: "
+              f"GmailApiError {e.status_code}: {e.message}")
+        return (
+            f"[GMAIL: {match}]\n"
+            f"⚠️ ACCOUNT NOT READABLE: Gmail API {e.status_code}: {e.message}\n"
+            "Tell Matthew plainly that this account could not be read. "
+            "Never guess or invent what it might contain."
+        )
     except Exception as e:
         print(f"[GMAIL] Per-account literal fetch failed for {match}: {type(e).__name__}: {e}")
         return None
