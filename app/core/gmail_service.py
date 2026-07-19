@@ -250,7 +250,11 @@ def get_all_accounts() -> List[str]:
 async def list_emails(email: str, query: str = "", max_results: int = 20, label: str = "INBOX") -> list:
     token = await refresh_access_token(email)
     if not token:
-        return []
+        # A dead/absent refresh token must NOT look like an empty inbox.
+        # Returning [] here was the last silent-drop hole (2026-07-17: two
+        # accounts "not showing" in Tony's answers were actually this).
+        # Raise so every fan-out caller records a per-account error instead.
+        raise GmailApiError(401, f"needs_reauth: token refresh returned no token for {email}")
     async with httpx.AsyncClient(timeout=8.0) as client:
         params = {"maxResults": min(max_results, 10)}
         if label:
@@ -304,6 +308,40 @@ async def list_emails(email: str, query: str = "", max_results: int = 20, label:
             headers = {h["name"]: h["value"] for h in d.get("payload", {}).get("headers", [])}
             results.append({"id": msg["id"], "account": email, "subject": headers.get("Subject", "(no subject)"), "from": headers.get("From", ""), "to": headers.get("To", ""), "date": headers.get("Date", ""), "snippet": d.get("snippet", ""), "labels": d.get("labelIds", [])})
         return results
+
+def format_gmail_search_block(detailed: dict, limit: int = 8) -> str:
+    """Render search_all_accounts_detailed() output as the [GMAIL SEARCH]
+    prompt block, INCLUDING per-account failures.
+
+    Shared by the council and chat_stream endpoints so the two can't drift.
+    Three truths this block must always tell the model:
+      1. what was found,
+      2. which accounts could not be read (never silently dropped),
+      3. an explicit no-matches line when the search genuinely found nothing
+         (an absent block reads as "cannot see email at all", which is wrong
+         when we successfully searched and found zero).
+    """
+    results = detailed.get("results") or []
+    errors = detailed.get("errors") or []
+    accounts_checked = detailed.get("accounts_checked", 0)
+    lines = ["[GMAIL SEARCH]"]
+    if results:
+        for e in results[:limit]:
+            sender = e.get("from", "").split("<")[0].strip()
+            lines.append(f"• {sender} — {e.get('subject', '(no subject)')} ({e.get('date', '')[:16]})")
+            if e.get("snippet"):
+                lines.append(f"  {e['snippet'][:100]}")
+    else:
+        lines.append(f"No matching emails found across {accounts_checked} account(s) searched.")
+    if errors:
+        errs = "; ".join(f"{er.get('account')}: {er.get('error')}" for er in errors)
+        lines.append(f"⚠️ ACCOUNTS NOT READABLE this request: {errs}")
+        lines.append(
+            "Tell Matthew plainly which accounts could not be read. "
+            "Never guess or invent what those accounts might contain."
+        )
+    return "\n".join(lines)
+
 
 async def get_email_body(email: str, message_id: str) -> dict:
     token = await refresh_access_token(email)

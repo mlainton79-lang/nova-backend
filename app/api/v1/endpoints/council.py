@@ -77,22 +77,21 @@ async def _gather_council_context(req: ChatRequest) -> dict:
         if not any(k in msg_lower for k in email_kw):
             return ""
         try:
-            from app.core.gmail_service import get_morning_summary, search_all_accounts
+            from app.core.gmail_service import (
+                get_morning_summary,
+                search_all_accounts_detailed,
+                format_gmail_search_block,
+            )
             search_triggers = ["from ", "find", "search", "look for", "anything from",
                                "emails from", "show me", "look up"]
             if any(t in msg_lower for t in search_triggers):
-                results = await asyncio.wait_for(
-                    # N1.gmail-fix-A: 15s — search_all_accounts also fans out to 4 accounts
-                    search_all_accounts(req.message, max_per_account=8), timeout=15.0
+                detailed = await asyncio.wait_for(
+                    # N1.gmail-fix-A: 15s — fans out to 4 accounts
+                    search_all_accounts_detailed(req.message, max_per_account=8), timeout=15.0
                 )
-                if results:
-                    lines = ["[GMAIL SEARCH]"]
-                    for e in results[:8]:
-                        sender = e.get("from", "").split("<")[0].strip()
-                        lines.append(f"• {sender} — {e['subject']} ({e['date'][:16]})")
-                        if e.get("snippet"):
-                            lines.append(f"  {e['snippet'][:100]}")
-                    return "\n".join(lines)
+                # Always return the block: results, per-account failures, and
+                # explicit no-matches are all truths the model must see.
+                return format_gmail_search_block(detailed, limit=8)
             else:
                 # N1.gmail-fix-A: 15s timeout — get_morning_summary fans out to all
                 # connected accounts (4 in current production), each requiring an OAuth

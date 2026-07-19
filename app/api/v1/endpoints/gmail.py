@@ -57,8 +57,12 @@ async def gmail_accounts(_=Depends(verify_token)):
 @router.get("/gmail/emails")
 async def gmail_list(account: str = None, query: str = "", max_results: int = 20, label: str = "INBOX", _=Depends(verify_token)):
     if account:
-        emails = await list_emails(account, query=query, max_results=max_results, label=label)
-        errors = []
+        try:
+            emails = await list_emails(account, query=query, max_results=max_results, label=label)
+            errors = []
+        except Exception as e:
+            emails = []
+            errors = [{"account": account, "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__}]
         accounts_checked = 1
     else:
         detailed = await search_all_accounts_detailed(query=query or "is:unread", max_per_account=max_results)
