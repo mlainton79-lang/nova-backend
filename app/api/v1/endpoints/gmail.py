@@ -120,17 +120,23 @@ async def gmail_debug(scope=Depends(verify_read_token)):
     accounts = get_all_accounts()
     results = {}
     if scope == "diag":
+        conn = None
         try:
             conn = get_conn()
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT email, token_expiry, updated_at, "
-                "(refresh_token IS NOT NULL AND refresh_token != '') AS has_refresh "
-                "FROM gmail_accounts"
-            )
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+            try:
+                cur = conn.cursor()
+                try:
+                    cur.execute(
+                        "SELECT email, token_expiry, updated_at, "
+                        "(refresh_token IS NOT NULL AND refresh_token != '') AS has_refresh "
+                        "FROM gmail_accounts"
+                    )
+                    rows = cur.fetchall()
+                finally:
+                    cur.close()
+            finally:
+                conn.close()
+                conn = None
             for email, expiry, updated_at, has_refresh in rows:
                 results[email] = {
                     "status": "stored",
@@ -142,6 +148,13 @@ async def gmail_debug(scope=Depends(verify_read_token)):
                 if account not in results:
                     results[account] = {"status": "configured_but_no_row"}
         except Exception as e:
+            # Codex P3 (5c70ce4): connection is closed by the finally blocks
+            # above even on this path — no leak on diagnostic errors.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             results["_error"] = {"status": "exception", "error": str(e)}
         return {"accounts": results, "mode": "passive"}
     for account in accounts:
