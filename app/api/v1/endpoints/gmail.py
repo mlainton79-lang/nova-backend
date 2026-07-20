@@ -108,12 +108,42 @@ async def gmail_morning(_=Depends(verify_token)):
     return {"summary": summary}
 
 @router.get("/gmail/debug")
-async def gmail_debug(_=Depends(verify_read_token)):
-    """Test each account individually with a simple unread query"""
-    from app.core.gmail_service import refresh_access_token
+async def gmail_debug(scope=Depends(verify_read_token)):
+    """Test each account individually.
+
+    dev scope: active probe (refreshes tokens, calls Gmail API).
+    diag scope: PASSIVE ONLY — reports stored account/token state from the
+    database. No refresh, no Google call, no writes (Codex P2, f1b2f96).
+    """
+    from app.core.gmail_service import refresh_access_token, get_conn
     import httpx
     accounts = get_all_accounts()
     results = {}
+    if scope == "diag":
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT email, token_expiry, updated_at, "
+                "(refresh_token IS NOT NULL AND refresh_token != '') AS has_refresh "
+                "FROM gmail_accounts"
+            )
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            for email, expiry, updated_at, has_refresh in rows:
+                results[email] = {
+                    "status": "stored",
+                    "has_refresh_token": bool(has_refresh),
+                    "access_token_expiry": str(expiry) if expiry else None,
+                    "last_updated": str(updated_at) if updated_at else None,
+                }
+            for account in accounts:
+                if account not in results:
+                    results[account] = {"status": "configured_but_no_row"}
+        except Exception as e:
+            results["_error"] = {"status": "exception", "error": str(e)}
+        return {"accounts": results, "mode": "passive"}
     for account in accounts:
         try:
             token = await refresh_access_token(account)

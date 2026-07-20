@@ -78,11 +78,11 @@ class DiagTokenTests(unittest.TestCase):
                 verify_read_token(authorization=header)
             )
 
-    def test_dev_token_accepted(self):
-        self.assertIsNone(self._call("Bearer devtok"))
+    def test_dev_token_accepted_with_dev_scope(self):
+        self.assertEqual(self._call("Bearer devtok"), "dev")
 
-    def test_diag_token_accepted(self):
-        self.assertIsNone(self._call("Bearer diagtok"))
+    def test_diag_token_accepted_with_diag_scope(self):
+        self.assertEqual(self._call("Bearer diagtok"), "diag")
 
     def test_wrong_token_rejected(self):
         from fastapi import HTTPException
@@ -97,7 +97,15 @@ class DiagTokenTests(unittest.TestCase):
             self._call("Bearer diagtok", diag=None)
 
     def test_dev_token_still_works_when_diag_unset(self):
-        self.assertIsNone(self._call("Bearer devtok", diag=None))
+        self.assertEqual(self._call("Bearer devtok", diag=None), "dev")
+
+    def test_debug_handler_diag_branch_is_passive(self):
+        src = Path("app/api/v1/endpoints/gmail.py").read_text()
+        diag_branch = src.split('if scope == "diag":')[1].split("for account in accounts:")[0]
+        self.assertNotIn("refresh_access_token(", diag_branch)
+        self.assertNotIn("httpx", diag_branch)
+        self.assertNotIn("UPDATE", diag_branch)
+        self.assertIn("SELECT email, token_expiry", diag_branch)
 
     def test_debug_endpoint_uses_read_token_and_writes_do_not(self):
         src = Path("app/api/v1/endpoints/gmail.py").read_text()
