@@ -170,13 +170,8 @@ async def gather_state() -> Dict:
     # Upcoming family dates
     try:
         today = date.today()
-        dates = [
-            (date(today.year, 2, 26), "Georgina's birthday"),
-            (date(today.year, 3, 7), "Amelia's birthday"),
-            (date(today.year, 7, 20), "Margot's birthday"),
-            (date(today.year, 6, 4), "Dad's birthday"),
-            (date(today.year, 4, 2), "Anniversary of Dad's passing"),
-        ]
+        from app.core.family import family_dates
+        dates = family_dates(today.year)
         upcoming = []
         for d, name in dates:
             if d < today:

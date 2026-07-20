@@ -14,6 +14,7 @@ import httpx
 import psycopg2
 from datetime import datetime
 from typing import Dict, Optional
+from app.core.family import daughters_line, dad_loss_line
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
@@ -106,10 +107,10 @@ Context signals detected:
 {chr(10).join(f"- {s}" for s in context_signals)}
 
 Matthew's background:
-- Lost his father Tony on 2 April 2026 (very recently)
+- {dad_loss_line()}
 - Works night shifts at a care home
 - Building Nova late at night after midnight
-- Has two young daughters, Amelia (5) and Margot (9 months)
+- Has two young daughters, {daughters_line()}
 - Building something ambitious under pressure
 
 Based on these signals, how should Tony adjust his response approach?

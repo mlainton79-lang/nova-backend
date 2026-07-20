@@ -4,6 +4,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 DEV_TOKEN = os.environ.get("DEV_TOKEN", "nova-dev-token")
+DIAG_TOKEN = os.environ.get("DIAG_TOKEN")  # optional read-only diagnostics token
 
 # N1.5-A: Capability Builder safe mode gates (default false).
 # - STAGING_ENABLED gates ALL staging including manual /builder/build.

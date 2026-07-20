@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
-from app.core.security import verify_token
+from app.core.security import verify_token, verify_read_token
 from app.core.gmail_service import (
     get_auth_url, exchange_code, get_user_email, save_account,
     get_all_accounts, list_emails, get_email_body, send_email,
@@ -108,7 +108,7 @@ async def gmail_morning(_=Depends(verify_token)):
     return {"summary": summary}
 
 @router.get("/gmail/debug")
-async def gmail_debug(_=Depends(verify_token)):
+async def gmail_debug(_=Depends(verify_read_token)):
     """Test each account individually with a simple unread query"""
     from app.core.gmail_service import refresh_access_token
     import httpx
