@@ -172,5 +172,16 @@ class CouncilHealthEnvelopeTests(unittest.TestCase):
         self.assertEqual(health["dark"], [{"name": "claude", "error_class": "Unknown"}])
 
 
+
+
+class OpenAIAdapterParamContractTests(unittest.TestCase):
+    def test_adapter_uses_max_completion_tokens_not_max_tokens(self):
+        from pathlib import Path
+
+        src = Path("app/providers/openai_adapter.py").read_text()
+        self.assertIn('"max_completion_tokens"', src)
+        self.assertNotIn('"max_tokens"', src)
+
+
 if __name__ == "__main__":
     unittest.main()

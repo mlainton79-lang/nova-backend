@@ -28,7 +28,10 @@ class OpenAIAdapter(ProviderAdapter):
                 json={
                     "model": OPENAI_MODEL,
                     "messages": messages,
-                    "max_tokens": 4096
+                    # GPT-5.x rejects max_tokens with HTTP 400; the reasoning
+                    # family requires max_completion_tokens (seat was dark on
+                    # this exact 400 since the 5.x model bump — 20 Jul 2026).
+                    "max_completion_tokens": 4096
                 }
             )
             if response.status_code >= 400:
