@@ -136,6 +136,8 @@ from app.api.v1.endpoints import tony_capabilities
 router.include_router(tony_capabilities.router, tags=["tony_capabilities"])
 from app.api.v1.endpoints import mcp_readonly
 router.include_router(mcp_readonly.router, tags=["mcp_readonly"])
+from app.api.v1.endpoints import selfcheck as selfcheck_endpoint
+router.include_router(selfcheck_endpoint.router, tags=["selfcheck"])
 
 # ── Startup initialisations (one each, no duplicates) ──────────────────────
 try:

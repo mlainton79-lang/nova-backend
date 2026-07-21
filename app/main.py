@@ -347,6 +347,10 @@ async def startup_event():
         # Queue tonight's diary-write if not already scheduled
         from app.core.task_handlers import schedule_daily_diary
         schedule_daily_diary()
+        # Morning self-check: register handler + queue today's run (07:30)
+        from app.core.self_check import register_self_check_handler, schedule_todays_self_check
+        register_self_check_handler()
+        schedule_todays_self_check()
     except Exception as e:
         print(f"[STARTUP] Task queue setup failed: {e}")
         record_run_event(
