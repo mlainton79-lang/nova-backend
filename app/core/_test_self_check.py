@@ -91,11 +91,30 @@ class PassiveContractTests(unittest.TestCase):
 
 
 class SchedulingTests(unittest.TestCase):
-    def test_dedupe_skips_when_recent_task_exists(self):
+    def test_dedupe_skips_when_pending_task_exists(self):
         from app.core import self_check
 
-        with mock.patch.object(self_check, "_run_query", return_value=([(1,)], None)):
+        captured = {}
+
+        def spy(sql, params=None):
+            captured["sql"] = sql
+            return [(1,)], None
+
+        with mock.patch.object(self_check, "_run_query", spy):
             self.assertIsNone(self_check.schedule_todays_self_check())
+        # Dedupe must key on pending status + schedule slot, not creation age
+        self.assertIn("status IN ('queued', 'claimed', 'running')", captured["sql"])
+        self.assertIn("scheduled_for", captured["sql"])
+        self.assertNotIn("created_at > NOW() - INTERVAL '6 hours'", captured["sql"])
+
+    def test_task_counts_use_real_status_names(self):
+        from app.core import self_check
+
+        rows = [("done", 5), ("failed", 1), ("queued", 2), ("claimed", 1)]
+        with mock.patch.object(self_check, "_run_query", return_value=(rows, None)):
+            result = self_check.check_task_queue()
+        self.assertIn("5 done, 1 failed, 3 pending", result["detail"])
+        self.assertFalse(result["ok"])
 
     def test_schedules_future_run_when_none_queued(self):
         from app.core import self_check

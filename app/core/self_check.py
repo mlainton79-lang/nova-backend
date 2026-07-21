@@ -87,9 +87,15 @@ def check_task_queue() -> dict:
         return {"ok": False, "detail": err}
     counts = {status: n for status, n in rows}
     failed = counts.get("failed", 0)
-    done = counts.get("completed", 0)
-    queued = counts.get("queued", 0) + counts.get("running", 0)
-    detail = f"{done} done, {failed} failed, {queued} pending (24h)"
+    # Queue writes status='done' on success (Codex P2, review 2a939d6);
+    # count 'completed' too defensively in case of legacy rows.
+    done = counts.get("done", 0) + counts.get("completed", 0)
+    pending = (
+        counts.get("queued", 0)
+        + counts.get("claimed", 0)
+        + counts.get("running", 0)
+    )
+    detail = f"{done} done, {failed} failed, {pending} pending (24h)"
     return {"ok": failed == 0, "detail": detail}
 
 
@@ -214,10 +220,15 @@ def schedule_todays_self_check(hour: int = 7, minute: int = 30):
     created in the last 6 hours (startup runs on every deploy).
     """
     try:
+        # Dedupe on any still-pending self_check (Codex P2, review 2a939d6):
+        # a queued/claimed/running task with a future-or-imminent slot means
+        # today's run is already covered, however long ago it was created —
+        # a restart >6h after queueing must not double tomorrow's push.
         rows, err = _run_query(
             "SELECT COUNT(*) FROM tony_task_queue "
             "WHERE task_type = 'self_check' "
-            "  AND created_at > NOW() - INTERVAL '6 hours'"
+            "  AND status IN ('queued', 'claimed', 'running') "
+            "  AND scheduled_for > NOW() - INTERVAL '1 hour'"
         )
         if err is None and rows and rows[0][0] > 0:
             return None
