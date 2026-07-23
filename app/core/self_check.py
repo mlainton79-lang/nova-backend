@@ -210,7 +210,30 @@ async def deliver_self_check(task_id: int, payload: dict) -> dict:
         # delivery went — a failed push must not also kill the heartbeat.
         next_id = schedule_todays_self_check(require_future=True)
     except Exception as e:
+        # Codex P2 (review 1e02844): a silent chain-break is exactly the
+        # failure mode this patch was built to prevent. stdout rolls over
+        # on Railway, so persist to run_events too — an operator inspecting
+        # /api/v1/status hours later must still see it.
         print(f"[SELF_CHECK] chain scheduling failed: {type(e).__name__}: {e}")
+        try:
+            from app.observability import record_run_event, EventSeverity
+
+            record_run_event(
+                event_type="self_check_chain_scheduling_failed",
+                severity=EventSeverity.ERROR,
+                subsystem="self_check.chain",
+                message=(
+                    "Failed to queue tomorrow's self-check from delivery "
+                    "handler — the heartbeat may stop until the next deploy."
+                ),
+                error_class=type(e).__name__,
+                error_message=str(e)[:300],
+                metadata={"task_id": task_id},
+            )
+        except Exception as log_err:
+            # record_run_event itself must never raise, but the lazy import
+            # could fail (missing psycopg2 during migrations, etc.). Swallow.
+            print(f"[SELF_CHECK] chain observability record failed: {type(log_err).__name__}: {log_err}")
     return {"pushed": pushed, "title": title, "next_task_id": next_id}
 
 

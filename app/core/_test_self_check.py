@@ -183,7 +183,9 @@ class SchedulingTests(unittest.TestCase):
         self.assertEqual(result["next_task_id"], 99)
 
     def test_chain_scheduling_failure_does_not_break_delivery(self):
-        """A dead scheduler must not also kill the push. Chain error is caught."""
+        """A dead scheduler must not also kill the push. Chain error is caught
+        AND recorded to run_events so a silent chain-break is durably visible.
+        """
         from app.core import self_check
 
         async def run():
@@ -191,11 +193,19 @@ class SchedulingTests(unittest.TestCase):
                  mock.patch.object(self_check, "format_self_check", return_value="body"), \
                  mock.patch.object(self_check, "self_check_headline", return_value="ok"), \
                  mock.patch.object(self_check, "schedule_todays_self_check", side_effect=RuntimeError("boom")), \
+                 mock.patch("app.observability.record_run_event", return_value=17) as rec, \
                  mock.patch("app.core.task_queue.update_progress", lambda *a, **kw: None):
-                return await self_check.deliver_self_check(1, {})
+                result = await self_check.deliver_self_check(1, {})
+            return result, rec
 
-        result = asyncio.run(run())
+        result, rec = asyncio.run(run())
         self.assertIsNone(result["next_task_id"])
+        rec.assert_called_once()
+        kwargs = rec.call_args.kwargs
+        self.assertEqual(kwargs["event_type"], "self_check_chain_scheduling_failed")
+        self.assertEqual(kwargs["subsystem"], "self_check.chain")
+        self.assertEqual(kwargs["error_class"], "RuntimeError")
+        self.assertIn("boom", kwargs["error_message"])
 
 
 if __name__ == "__main__":
