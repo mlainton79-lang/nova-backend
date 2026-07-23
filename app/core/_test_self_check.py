@@ -104,7 +104,7 @@ class SchedulingTests(unittest.TestCase):
             self.assertIsNone(self_check.schedule_todays_self_check())
         # Dedupe must key on pending status + schedule slot, not creation age
         self.assertIn("status IN ('queued', 'claimed', 'running')", captured["sql"])
-        self.assertIn("scheduled_for", captured["sql"])
+        self.assertIn("scheduled_for > %s", captured["sql"])
         self.assertNotIn("created_at > NOW() - INTERVAL '6 hours'", captured["sql"])
 
     def test_task_counts_use_real_status_names(self):
@@ -134,6 +134,68 @@ class SchedulingTests(unittest.TestCase):
         self.assertEqual(queued["type"], "self_check")
         self.assertGreater(queued["delay"], 0)
         self.assertLessEqual(queued["delay"], 24 * 3600)
+
+    def test_handler_boundary_is_future_startup_boundary_is_past(self):
+        """The two callers apply opposite dedupe windows.
+
+        Startup (require_future=False) skips if anything pending is
+        newer than an hour ago — imminent or future. The handler
+        (require_future=True) must only skip if a STRICTLY future run
+        exists, otherwise its own still-running task would match and
+        the chain would silently break.
+        """
+        from datetime import datetime
+        from app.core import self_check
+
+        captured = {}
+
+        def spy(sql, params=None):
+            captured["params"] = params
+            # Return a dedupe hit so the function early-returns; we only
+            # care about the boundary that got passed into the query.
+            return [(1,)], None
+
+        with mock.patch.object(self_check, "_run_query", spy):
+            self_check.schedule_todays_self_check(require_future=True)
+        self.assertIsNotNone(captured.get("params"))
+        self.assertGreater(captured["params"][0], datetime.now())
+
+        captured.clear()
+        with mock.patch.object(self_check, "_run_query", spy):
+            self_check.schedule_todays_self_check()
+        self.assertLess(captured["params"][0], datetime.now())
+
+    def test_delivery_perpetuates_the_chain(self):
+        """The heartbeat: every successful delivery must queue tomorrow's run."""
+        from app.core import self_check
+
+        async def run():
+            with mock.patch.object(self_check, "gather_self_check", return_value=_status()), \
+                 mock.patch.object(self_check, "format_self_check", return_value="body"), \
+                 mock.patch.object(self_check, "self_check_headline", return_value="Nova self-check: all healthy"), \
+                 mock.patch.object(self_check, "schedule_todays_self_check", return_value=99) as sched, \
+                 mock.patch("app.core.task_queue.update_progress", lambda *a, **kw: None):
+                result = await self_check.deliver_self_check(1, {})
+            return result, sched
+
+        result, sched = asyncio.run(run())
+        sched.assert_called_once_with(require_future=True)
+        self.assertEqual(result["next_task_id"], 99)
+
+    def test_chain_scheduling_failure_does_not_break_delivery(self):
+        """A dead scheduler must not also kill the push. Chain error is caught."""
+        from app.core import self_check
+
+        async def run():
+            with mock.patch.object(self_check, "gather_self_check", return_value=_status()), \
+                 mock.patch.object(self_check, "format_self_check", return_value="body"), \
+                 mock.patch.object(self_check, "self_check_headline", return_value="ok"), \
+                 mock.patch.object(self_check, "schedule_todays_self_check", side_effect=RuntimeError("boom")), \
+                 mock.patch("app.core.task_queue.update_progress", lambda *a, **kw: None):
+                return await self_check.deliver_self_check(1, {})
+
+        result = asyncio.run(run())
+        self.assertIsNone(result["next_task_id"])
 
 
 if __name__ == "__main__":

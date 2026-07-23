@@ -204,7 +204,14 @@ async def deliver_self_check(task_id: int, payload: dict) -> dict:
         )
     except Exception as e:
         print(f"[SELF_CHECK] alert failed: {type(e).__name__}: {e}")
-    return {"pushed": pushed, "title": title}
+    next_id = None
+    try:
+        # Perpetuate the chain: queue tomorrow's run regardless of how
+        # delivery went — a failed push must not also kill the heartbeat.
+        next_id = schedule_todays_self_check(require_future=True)
+    except Exception as e:
+        print(f"[SELF_CHECK] chain scheduling failed: {type(e).__name__}: {e}")
+    return {"pushed": pushed, "title": title, "next_task_id": next_id}
 
 
 def register_self_check_handler():
@@ -213,22 +220,34 @@ def register_self_check_handler():
     register_handler("self_check", deliver_self_check)
 
 
-def schedule_todays_self_check(hour: int = 7, minute: int = 30):
-    """Queue today's self-check at hour:minute if not already queued.
+def schedule_todays_self_check(hour: int = 7, minute: int = 30,
+                               require_future: bool = False):
+    """Queue the next self-check at hour:minute if not already covered.
 
-    Mirrors scheduled_briefings' dedupe: skip if a self_check task was
-    created in the last 6 hours (startup runs on every deploy).
+    THE CHAIN (added 23 Jul 2026): startup scheduling alone proved
+    deploy-dependent — task #168 ran Wed 07:30 only because Monday's
+    deploys spawned it; Tuesday and Thursday had no task at all because
+    nobody deployed. The delivery handler therefore calls this with
+    require_future=True to queue tomorrow's run at the end of every run:
+    a self-perpetuating heartbeat. Startup scheduling remains as the
+    bootstrap and the backstop after queue wipes.
+
+    Dedupe (Codex P2, 2a939d6): skip if a pending self_check already
+    covers the window. Boundary differs by caller — at startup, any
+    pending run newer than an hour ago counts (imminent or future); from
+    the handler, only a strictly FUTURE run counts, because the handler's
+    own still-running task would otherwise match and skip the chain.
     """
     try:
-        # Dedupe on any still-pending self_check (Codex P2, review 2a939d6):
-        # a queued/claimed/running task with a future-or-imminent slot means
-        # today's run is already covered, however long ago it was created —
-        # a restart >6h after queueing must not double tomorrow's push.
+        boundary = datetime.now() + (
+            timedelta(hours=1) if require_future else timedelta(hours=-1)
+        )
         rows, err = _run_query(
             "SELECT COUNT(*) FROM tony_task_queue "
             "WHERE task_type = 'self_check' "
             "  AND status IN ('queued', 'claimed', 'running') "
-            "  AND scheduled_for > NOW() - INTERVAL '1 hour'"
+            "  AND scheduled_for > %s",
+            (boundary,),
         )
         if err is None and rows and rows[0][0] > 0:
             return None
